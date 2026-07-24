@@ -9,6 +9,7 @@ const PORT = process.env.PORT || 3000;
 // Enable Cross-Origin Resource Sharing & JSON Parsing
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.static(__dirname));
 
 // IN-MEMORY TRANSACTION DATABASE & BALANCE (Our Ledger)
