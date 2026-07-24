@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 100">
+  <defs>
+    <linearGradient id="vGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f58c14"/>
+      <stop offset="100%" stop-color="#e8b64c"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="100" fill="#0b1a38"/>
+  <g transform="translate(15, 10)">
+    <polygon points="40,5 75,25 75,65 40,85 5,65 5,25" fill="#0f2247" stroke="#1a3a6b" stroke-width="1" stroke-linejoin="round"/>
+    <path d="M 25,25 L 35,25 L 40,55 L 45,25 L 55,25 L 48,60 L 32,60 Z" fill="url(#vGrad)"/>
+  </g>
+  <text x="110" y="62" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="800" fill="#ffffff" letter-spacing="1">VALMONT</text>
+  <text x="295" y="62" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="800" fill="#f58c14" letter-spacing="1">PAY</text>
+</svg>
