@@ -21,7 +21,7 @@
     <div class="max-w-[1200px] mx-auto flex items-center justify-between">
       <div class="flex items-center gap-3">
         <!-- Logo block -->
-        <div class="h-10 w-10 bg-[#00c38c] rounded flex items-center justify-center text-white font-extrabold text-xl shadow-md">V</div>
+        <div class="h-10 w-10 bg-[#f68b1e] rounded flex items-center justify-center text-white font-extrabold text-xl shadow-md">V</div>
         <div>
           <h1 class="font-black text-[16px] uppercase tracking-wider leading-none">Valmont-Pay</h1>
           <span class="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest mt-0.5 block">Merchant Core Hub</span>
@@ -42,35 +42,35 @@
       
       <!-- Virtual Settled Wallet Balance -->
       <div class="bg-[#0b1a38] border border-[#142850] p-6 rounded-lg shadow-xl flex flex-col justify-between relative overflow-hidden">
-        <div class="absolute -right-8 -bottom-8 h-24 w-24 bg-[#00c38c]/5 rounded-full"></div>
+        <div class="absolute -right-8 -bottom-8 h-24 w-24 bg-[#f68b1e]/5 rounded-full"></div>
         <div>
           <span class="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest">Settled Wallet Balance</span>
-          <h2 class="text-[34px] font-black text-[#00c38c] mt-2" id="walletBalance">GH₵ 0.00</h2>
+          <h2 class="text-[34px] font-black text-[#f68b1e] mt-2" id="walletBalance">GH₵ 0.00</h2>
         </div>
         <div class="mt-4 flex gap-2">
-          <button onclick="alert('Settlement Request Logged: Your funds of GHS ' + currentBalance + ' are being swept to your GCB Bank corporate escrow account.');" class="bg-[#00c38c] hover:bg-emerald-500 text-white text-[11px] font-black uppercase py-2 px-4 rounded-[4px] transition tracking-wider shadow">Request Payout</button>
+          <button onclick="alert('Settlement Request Logged: Your funds of GHS ' + currentBalance + ' are being swept to your GCB Bank corporate escrow account.');" class="bg-[#f68b1e] hover:bg-orange-600 text-white text-[11px] font-black uppercase py-2 px-4 rounded-[4px] transition tracking-wider shadow">Request Payout</button>
         </div>
       </div>
 
       <!-- Quick Init Form (Interactive payment creation simulation!) -->
       <div class="bg-[#0b1a38] border border-[#142850] p-5 rounded-lg shadow-xl md:col-span-2">
-        <h3 class="font-extrabold text-[12px] uppercase text-[#00c38c] tracking-widest mb-4 border-b border-[#142850] pb-2">⚡ Quick Launch Payment Link Generator</h3>
+        <h3 class="font-extrabold text-[12px] uppercase text-[#f68b1e] tracking-widest mb-4 border-b border-[#142850] pb-2">⚡ Quick Launch Payment Link Generator</h3>
         <form onsubmit="initializePaymentLink(event);" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
           <div>
             <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Customer Email Address</label>
-            <input id="initEmail" type="email" placeholder="customer@email.com" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#00c38c]" required />
+            <input id="initEmail" type="email" placeholder="customer@email.com" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e]" required />
           </div>
           <div>
             <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Amount (GHS)</label>
-            <input id="initAmount" type="number" placeholder="450.00" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#00c38c]" required />
+            <input id="initAmount" type="number" placeholder="450.00" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e]" required />
           </div>
-          <button type="submit" class="bg-[#00c38c] hover:bg-emerald-500 text-white font-black text-[12px] uppercase py-3 rounded-[4px] transition tracking-wider shadow">
+          <button type="submit" class="bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-[12px] uppercase py-3 rounded-[4px] transition tracking-wider shadow">
             Generate link
           </button>
         </form>
         <!-- Initted link presentation -->
         <div id="initResult" class="mt-4 p-3 bg-[#050d24] border border-[#142850] rounded-[4px] text-[12px] hidden justify-between items-center gap-2">
-          <span class="font-medium text-gray-400 truncate">Payment Link: <a href="#" id="paymentLinkUrl" target="_blank" class="text-[#00c38c] font-bold underline hover:text-emerald-300">http://localhost:3000/...</a></span>
+          <span class="font-medium text-gray-400 truncate">Payment Link: <a href="#" id="paymentLinkUrl" target="_blank" class="text-[#f68b1e] font-bold underline hover:text-orange-300">http://localhost:3000/...</a></span>
           <button onclick="copyPaymentLink();" class="text-[10px] bg-[#142850] hover:bg-[#203c6d] text-white py-1 px-2 rounded font-black tracking-wider transition shrink-0">COPY</button>
         </div>
       </div>
@@ -80,7 +80,7 @@
     <!-- Live Transaction Ledger (List) -->
     <div class="bg-[#0b1a38] border border-[#142850] p-6 rounded-lg shadow-xl">
       <div class="flex justify-between items-center border-b border-[#142850] pb-3 mb-4">
-        <h3 class="font-extrabold text-[12px] uppercase text-[#00c38c] tracking-widest">📋 Real-Time Settlement Ledger</h3>
+        <h3 class="font-extrabold text-[12px] uppercase text-[#f68b1e] tracking-widest">📋 Real-Time Settlement Ledger</h3>
         <span class="text-[10px] text-gray-400 font-extrabold uppercase tracking-wider" id="ledgerCount">0 Transactions logged</span>
       </div>
 
@@ -123,7 +123,7 @@
 
             const ledgerRows = document.getElementById('ledgerRows');
             ledgerRows.innerHTML = res.data.transactions.map(t => {
-              const statusClass = t.status === 'SUCCESS' ? 'bg-emerald-950 text-emerald-400 border-emerald-900' : (t.status === 'PENDING' ? 'bg-amber-950 text-amber-400 border-amber-900' : 'bg-red-950 text-red-400 border-red-900');
+              const statusClass = t.status === 'SUCCESS' ? 'bg-orange-950/40 text-[#f68b1e] border-orange-900/30' : (t.status === 'PENDING' ? 'bg-amber-950 text-amber-400 border-amber-900' : 'bg-red-950 text-red-400 border-red-900');
               return `
                 <div class="grid grid-cols-5 gap-4 py-3.5 px-3 items-center border-b border-[#142850]/50 hover:bg-[#0d1e3d]/30 transition duration-150">
                   <span class="font-black text-gray-300">${t.reference}</span>

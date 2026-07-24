@@ -10,8 +10,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <style>
     body { font-family: 'Inter', sans-serif; background-color: #f1f1f2; }
-    .valmont-green { background-color: #00c38c; }
-    .valmont-green-text { color: #00c38c; }
+    .valmont-gold { background-color: #f68b1e; }
+    .valmont-gold-text { color: #f68b1e; }
   </style>
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
@@ -22,8 +22,8 @@
     <!-- Top Header -->
     <div class="bg-[#0b1a38] text-white p-4 flex items-center justify-between shrink-0">
       <div class="flex items-center gap-2">
-        <div class="h-2 w-2 rounded-full bg-[#00c38c] animate-pulse"></div>
-        <span class="font-extrabold text-[11px] uppercase tracking-widest text-[#00c38c]">Valmont-Pay Secured</span>
+        <div class="h-2 w-2 rounded-full bg-[#f68b1e] animate-pulse"></div>
+        <span class="font-extrabold text-[11px] uppercase tracking-widest text-[#f68b1e]">Valmont-Pay Secured</span>
       </div>
       <span class="text-[11px] text-gray-400 font-bold" id="checkoutRef">VP-------</span>
     </div>
@@ -44,7 +44,7 @@
 
         <!-- Channel Toggles -->
         <div class="flex border-b border-gray-100 text-center">
-          <button onclick="setChannel('momo');" id="tabMomo" class="flex-1 pb-2 text-[12px] font-black uppercase tracking-wider border-b-2 border-[#00c38c] text-[#00c38c] transition-all">Mobile Money</button>
+          <button onclick="setChannel('momo');" id="tabMomo" class="flex-1 pb-2 text-[12px] font-black uppercase tracking-wider border-b-2 border-[#f68b1e] text-[#f68b1e] transition-all">Mobile Money</button>
           <button onclick="setChannel('card');" id="tabCard" class="flex-1 pb-2 text-[12px] text-gray-400 font-bold uppercase tracking-wider hover:text-gray-700 transition-all">Credit/Debit Card</button>
         </div>
 
@@ -52,7 +52,7 @@
         <div id="momoForm" class="space-y-4">
           <div>
             <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Select Network *</label>
-            <select id="momoNetwork" class="w-full border p-3 rounded-[4px] text-[13px] outline-none font-bold bg-white focus:border-[#00c38c]">
+            <select id="momoNetwork" class="w-full border p-3 rounded-[4px] text-[13px] outline-none font-bold bg-white focus:border-[#f68b1e]">
               <option value="MTN">MTN Mobile Money</option>
               <option value="Telecel">Telecel Cash</option>
               <option value="AT">AirtelTigo Money</option>
@@ -60,7 +60,7 @@
           </div>
           <div>
             <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Mobile Money Number *</label>
-            <input id="momoNumber" type="tel" placeholder="054 245 1578" class="w-full border p-3.5 rounded-[4px] text-[15px] outline-none font-black tracking-wide focus:border-[#00c38c]" required />
+            <input id="momoNumber" type="tel" placeholder="054 245 1578" class="w-full border p-3.5 rounded-[4px] text-[15px] outline-none font-black tracking-wide focus:border-[#f68b1e]" required />
           </div>
         </div>
 
@@ -68,16 +68,16 @@
         <div id="cardForm" class="space-y-4 hidden">
           <div>
             <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Card Number *</label>
-            <input id="cardNumber" type="text" placeholder="4000 1234 5678 9010" class="w-full border p-3.5 rounded-[4px] text-[14px] outline-none font-semibold focus:border-[#00c38c]" />
+            <input id="cardNumber" type="text" placeholder="4000 1234 5678 9010" class="w-full border p-3.5 rounded-[4px] text-[14px] outline-none font-semibold focus:border-[#f68b1e]" />
           </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Expiry Date *</label>
-              <input id="cardExpiry" type="text" placeholder="12/28" class="w-full border p-3.5 rounded-[4px] text-[13px] outline-none font-semibold focus:border-[#00c38c]" />
+              <input id="cardExpiry" type="text" placeholder="12/28" class="w-full border p-3.5 rounded-[4px] text-[13px] outline-none font-semibold focus:border-[#f68b1e]" />
             </div>
             <div>
               <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">CVV *</label>
-              <input id="cardCVV" type="password" placeholder="123" class="w-full border p-3.5 rounded-[4px] text-[13px] outline-none font-semibold focus:border-[#00c38c]" />
+              <input id="cardCVV" type="password" placeholder="123" class="w-full border p-3.5 rounded-[4px] text-[13px] outline-none font-semibold focus:border-[#f68b1e]" />
             </div>
           </div>
         </div>
@@ -86,7 +86,7 @@
 
       <!-- Stage 2: Processing Overlay (USSD Pin Prompt simulation) -->
       <div id="processingStage" class="hidden text-center py-12 flex flex-col items-center justify-center space-y-6">
-        <div class="h-12 w-12 border-4 border-[#00c38c] border-t-transparent rounded-full animate-spin"></div>
+        <div class="h-12 w-12 border-4 border-[#f68b1e] border-t-transparent rounded-full animate-spin"></div>
         <div class="space-y-2">
           <h4 class="font-extrabold text-[16px] text-[#0b1a38] uppercase tracking-wider" id="processingTitle">Sending USSD Prompt...</h4>
           <p class="text-[12px] text-gray-500 font-medium leading-relaxed max-w-[280px] mx-auto" id="processingDesc">Please check your phone for the MTN MoMo authorization prompt. Enter your MoMo PIN to authorize this transaction.</p>
@@ -95,12 +95,12 @@
 
       <!-- Stage 3: Success Overlay -->
       <div id="successStage" class="hidden text-center py-12 flex flex-col items-center justify-center space-y-6">
-        <div class="h-16 w-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl font-black shadow-sm">✓</div>
+        <div class="h-16 w-16 bg-orange-50 text-[#f68b1e] rounded-full flex items-center justify-center text-3xl font-black shadow-sm">✓</div>
         <div class="space-y-2">
-          <h4 class="font-black text-[18px] text-emerald-600 uppercase tracking-wide">Transaction Successful</h4>
+          <h4 class="font-black text-[18px] text-[#f68b1e] uppercase tracking-wide">Transaction Successful</h4>
           <p class="text-[12px] text-gray-500 font-medium leading-relaxed max-w-[280px] mx-auto">Valmont Gadgets has been settled successfully. You will receive an invoice receipt shortly.</p>
         </div>
-        <button onclick="handleCallback();" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[12px] uppercase py-2.5 px-6 rounded-[4px] transition tracking-wider shadow">
+        <button onclick="handleCallback();" class="bg-[#f68b1e] hover:bg-orange-600 text-white font-bold text-[12px] uppercase py-2.5 px-6 rounded-[4px] transition tracking-wider shadow">
           Close Checkout
         </button>
       </div>
@@ -118,7 +118,7 @@
       </div>
 
       <!-- Main Pay Action Button (for Stage 1) -->
-      <button id="btnPay" onclick="submitPayment();" class="w-full bg-[#00c38c] hover:bg-emerald-500 text-white font-black text-[13px] tracking-widest uppercase py-4 rounded-[4px] transition shadow mt-6">
+      <button id="btnPay" onclick="submitPayment();" class="w-full bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-[13px] tracking-widest uppercase py-4 rounded-[4px] transition shadow mt-6">
         Pay GH₵ 0.00
       </button>
 
@@ -154,12 +154,12 @@
       const cardForm = document.getElementById('cardForm');
 
       if (channel === 'momo') {
-        tabMomo.className = "flex-1 pb-2 text-[12px] font-black uppercase tracking-wider border-b-2 border-[#00c38c] text-[#00c38c] transition-all";
+        tabMomo.className = "flex-1 pb-2 text-[12px] font-black uppercase tracking-wider border-b-2 border-[#f68b1e] text-[#f68b1e] transition-all";
         tabCard.className = "flex-1 pb-2 text-[12px] text-gray-400 font-bold uppercase tracking-wider hover:text-gray-700 transition-all";
         momoForm.classList.remove('hidden');
         cardForm.classList.add('hidden');
       } else {
-        tabCard.className = "flex-1 pb-2 text-[12px] font-black uppercase tracking-wider border-b-2 border-[#00c38c] text-[#00c38c] transition-all";
+        tabCard.className = "flex-1 pb-2 text-[12px] font-black uppercase tracking-wider border-b-2 border-[#f68b1e] text-[#f68b1e] transition-all";
         tabMomo.className = "flex-1 pb-2 text-[12px] text-gray-400 font-bold uppercase tracking-wider hover:text-gray-700 transition-all";
         cardForm.classList.remove('hidden');
         momoForm.classList.add('hidden');
