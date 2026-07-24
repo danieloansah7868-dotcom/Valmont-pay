@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Valmont-Pay — Merchant Dashboard Portal</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/favicon.svg">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,21 +19,8 @@
 <body class="min-h-screen flex flex-col justify-between">
 
   <!-- Header Navigation -->
-  <header class="bg-[#0b1a38] border-b border-[#142850] py-4 px-6 sticky top-0 z-40">
-    <div class="max-w-[1200px] mx-auto flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <!-- Logo block -->
-        <div class="h-10 w-10 bg-[#f68b1e] rounded flex items-center justify-center text-white font-extrabold text-xl shadow-md">V</div>
-        <div>
-          <h1 class="font-black text-[16px] uppercase tracking-wider leading-none">Valmont-Pay</h1>
-          <span class="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest mt-0.5 block">Merchant Core Hub</span>
-        </div>
-      </div>
-      <div class="flex items-center gap-4 text-[13px] font-semibold text-gray-400">
-        <span>Dealer Profile: <span class="text-white font-black">Valmont Gadgets</span></span>
-        <button onclick="location.reload();" class="bg-[#142850] hover:bg-[#203c6d] text-white py-1.5 px-3.5 rounded-[4px] text-[11px] font-extrabold transition">REFRESH</button>
-      </div>
-    </div>
+  <header style="background: #0b1a38; padding: 16px 24px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+    <img src="/logo.svg" alt="Valmont Pay" style="height: 40px;">
   </header>
 
   <!-- Main Content Layout -->
