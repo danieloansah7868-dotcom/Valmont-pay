@@ -141,6 +141,10 @@ app.get('/api/v1/merchant/dashboard', (req, res) => {
 });
 
 // Serve frontend web routes
+app.get('/', (req, res) => {
+  res.redirect('/dashboard.html');
+});
+
 app.get('/checkout', (req, res) => {
   res.sendFile(path.join(__dirname, 'checkout.html'));
 });
