@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Valmont-Pay - Quick Payment</title>
+  <title>Valmont-Pay — Quick Payment</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -35,7 +35,7 @@
       <div class="bg-gray-50 p-6 rounded-lg border border-gray-100 text-center">
         <span class="block text-xs text-gray-400 font-bold uppercase tracking-wider">Amount to Pay</span>
         <span class="block text-4xl font-black text-[#0b1a38] mt-2" id="displayAmount">GH₵ 0.00</span>
-        <span class="block text-sm text-gray-500 font-medium mt-2">Valmont Gadgets Ghana</span>
+        <span class="block text-sm text-gray-500 font-medium mt-2" id="merchant-name">Valmont-Pay</span>
       </div>
 
       <!-- Email Input -->
@@ -78,6 +78,14 @@
   </div>
 
   <script>
+    // Read merchant + amount from the URL (e.g. pay.html?amount=50&merchant=Valmont+Electricals)
+    const urlParams = new URLSearchParams(window.location.search);
+    const merchantName = urlParams.get('merchant') || 'Valmont-Pay';
+
+    // Show the dynamic merchant name and update the page title
+    document.getElementById('merchant-name').textContent = merchantName;
+    document.title = 'Pay ' + merchantName + ' — Valmont-Pay';
+
     let currentAmount = 0;
 
     function setAmount(amount) {
@@ -132,14 +140,19 @@
         body: JSON.stringify({
           email: email,
           amount: currentAmount,
-          callback_url: window.location.origin + '/dashboard.html'
+          merchant: merchantName,
+          callback_url: 'https://valmont-pay.vercel.app/checkout.html'
         })
       })
       .then(res => res.json())
       .then(data => {
         if (data.status && data.data.checkout_url) {
-          // Redirect to checkout page with transaction reference
-          window.location.href = data.data.checkout_url;
+          // Redirect to checkout page, carrying the merchant name through
+          const checkoutUrl = new URL(data.data.checkout_url, window.location.origin);
+          checkoutUrl.searchParams.set('amount', currentAmount);
+          checkoutUrl.searchParams.set('email', email);
+          checkoutUrl.searchParams.set('merchant', merchantName);
+          window.location.href = checkoutUrl.toString();
         } else {
           alert('Failed to initialize transaction. Please try again.');
         }
@@ -150,8 +163,13 @@
       });
     }
 
-    // Initialize
-    updateButtonText();
+    // Initialize (prefill amount from the URL when provided, e.g. ?amount=50)
+    const urlAmount = parseFloat(urlParams.get('amount'));
+    if (!isNaN(urlAmount) && urlAmount > 0) {
+      setAmount(urlAmount);
+    } else {
+      updateButtonText();
+    }
   </script>
 
 </body>

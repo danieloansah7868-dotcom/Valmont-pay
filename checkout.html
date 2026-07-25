@@ -37,7 +37,7 @@
         <!-- Transaction Amount details -->
         <div class="bg-gray-50 p-4 rounded-[4px] border border-gray-100 text-center">
           <span class="block text-[11px] text-gray-400 font-bold uppercase tracking-wider">Paying Merchant</span>
-          <span class="block text-[14px] text-gray-800 font-extrabold mt-0.5">Valmont Gadgets Ghana</span>
+          <span class="block text-[14px] text-gray-800 font-extrabold mt-0.5" id="merchant-name">Valmont-Pay</span>
           <span class="block text-[26px] font-black text-[#0b1a38] mt-1.5" id="checkoutAmount">GH₵ 0.00</span>
           <span class="block text-[11px] text-gray-500 font-medium mt-1" id="checkoutEmail">customer@email.com</span>
         </div>
@@ -98,7 +98,7 @@
         <div class="h-16 w-16 bg-orange-50 text-[#f68b1e] rounded-full flex items-center justify-center text-3xl font-black shadow-sm">✓</div>
         <div class="space-y-2">
           <h4 class="font-black text-[18px] text-[#f68b1e] uppercase tracking-wide">Transaction Successful</h4>
-          <p class="text-[12px] text-gray-500 font-medium leading-relaxed max-w-[280px] mx-auto">Valmont Gadgets has been settled successfully. You will receive an invoice receipt shortly.</p>
+          <p class="text-[12px] text-gray-500 font-medium leading-relaxed max-w-[280px] mx-auto" id="successMerchantDesc">Your payment has been settled successfully. You will receive an invoice receipt shortly.</p>
         </div>
         <button onclick="handleCallback();" class="bg-[#f68b1e] hover:bg-orange-600 text-white font-bold text-[12px] uppercase py-2.5 px-6 rounded-[4px] transition tracking-wider shadow">
           Close Checkout
@@ -138,6 +138,12 @@
     const reference = params.get('reference') || 'VP-' + Math.floor(100000 + Math.random() * 900000);
     const amount = parseFloat(params.get('amount') || '450.00');
     const email = params.get('email') || 'kofi.mensah@gmail.com';
+    const merchantName = params.get('merchant') || 'Valmont-Pay';
+
+    document.getElementById('merchant-name').textContent = merchantName;
+    document.getElementById('successMerchantDesc').textContent =
+      `Your payment to ${merchantName} has been settled successfully. You will receive an invoice receipt shortly.`;
+    document.title = 'Pay ' + merchantName + ' — Valmont-Pay';
 
     document.getElementById('checkoutRef').textContent = reference;
     document.getElementById('checkoutAmount').textContent = `GH₵ ${amount.toLocaleString()}`;
