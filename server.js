@@ -43,7 +43,7 @@ const TRANSACTIONS = [
 
 // API 1: Initialize Transaction
 app.post('/api/v1/transaction/initialize', (req, res) => {
-  const { email, amount, callback_url } = req.body;
+  const { email, amount, callback_url, merchant } = req.body;
   
   if (!email || !amount || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ status: false, message: 'Invalid transaction details.' });
@@ -56,7 +56,8 @@ app.post('/api/v1/transaction/initialize', (req, res) => {
     amount: parseFloat(amount),
     channel: 'PENDING',
     status: 'PENDING',
-    callback_url: callback_url || null,
+    merchant: merchant || 'Valmont-Pay',
+    callback_url: callback_url || 'https://valmont-pay.vercel.app/checkout.html',
     timestamp: new Date().toISOString()
   };
 
@@ -69,7 +70,10 @@ app.post('/api/v1/transaction/initialize', (req, res) => {
     message: 'Transaction initialized successfully',
     data: {
       reference,
-      checkout_url: `https://valmont-pay.vercel.app/checkout.html?reference=${reference}`
+      checkout_url: `https://valmont-pay.vercel.app/checkout.html?reference=${reference}` +
+        `&amount=${encodeURIComponent(newTransaction.amount)}` +
+        `&email=${encodeURIComponent(email)}` +
+        `&merchant=${encodeURIComponent(newTransaction.merchant)}`
     }
   });
 });
