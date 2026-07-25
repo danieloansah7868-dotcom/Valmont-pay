@@ -154,6 +154,14 @@ app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'dashboard.html'));
 });
 
+app.get('/pay', (req, res) => {
+  res.sendFile(path.join(__dirname, 'pay.html'));
+});
+
+app.get('/pay.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'pay.html'));
+});
+
 // Start the Payment Gateway server
 app.listen(PORT, () => {
   console.log(`\n======================================================`);
