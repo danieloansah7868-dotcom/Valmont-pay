@@ -139,6 +139,8 @@
     const amount = parseFloat(params.get('amount') || '450.00');
     const email = params.get('email') || 'kofi.mensah@gmail.com';
     const merchantName = params.get('merchant') || 'Valmont-Pay';
+    // Issue 3 fix: honor per-transaction callback_url (fall back to the merchant dashboard)
+    const callbackUrl = params.get('callback_url') || 'https://valmont-pay.vercel.app/dashboard.html';
 
     document.getElementById('merchant-name').textContent = merchantName;
     document.getElementById('successMerchantDesc').textContent =
@@ -240,8 +242,12 @@
     }
 
     function handleCallback() {
-      // Simulate redirection back to merchant callback URL
-      window.location.href = `https://valmont-pay.vercel.app/dashboard.html`; // Redirect back to merchant dashboard
+      // Redirect back to the merchant's callback URL (Issue 3 fix),
+      // appending the transaction reference so the merchant can verify.
+      const target = new URL(callbackUrl);
+      target.searchParams.set('reference', reference);
+      target.searchParams.set('status', 'success');
+      window.location.href = target.toString();
     }
   </script>
 </body>

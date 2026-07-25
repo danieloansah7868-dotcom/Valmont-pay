@@ -35,7 +35,7 @@
       <div class="bg-gray-50 p-6 rounded-lg border border-gray-100 text-center">
         <span class="block text-xs text-gray-400 font-bold uppercase tracking-wider">Amount to Pay</span>
         <span class="block text-4xl font-black text-[#0b1a38] mt-2" id="displayAmount">GH₵ 0.00</span>
-        <span class="block text-sm text-gray-500 font-medium mt-2" id="merchant-name">Valmont-Pay</span>
+        <span class="block text-sm text-gray-500 font-medium mt-2" id="merchant-display">Valmont-Pay</span>
       </div>
 
       <!-- Email Input -->
@@ -82,8 +82,8 @@
     const urlParams = new URLSearchParams(window.location.search);
     const merchantName = urlParams.get('merchant') || 'Valmont-Pay';
 
-    // Show the dynamic merchant name and update the page title
-    document.getElementById('merchant-name').textContent = merchantName;
+    // Show the dynamic merchant name and update the page title (Issue 1 fix)
+    document.getElementById('merchant-display').textContent = merchantName;
     document.title = 'Pay ' + merchantName + ' — Valmont-Pay';
 
     let currentAmount = 0;
@@ -99,19 +99,22 @@
       const btn = document.getElementById('btnProceed');
       if (currentAmount > 0) {
         btn.textContent = `Pay GH₵ ${currentAmount.toLocaleString()}`;
-        btn.disabled = false;
         btn.classList.remove('opacity-50', 'cursor-not-allowed');
       } else {
         btn.textContent = 'Proceed to Checkout';
-        btn.disabled = true;
         btn.classList.add('opacity-50', 'cursor-not-allowed');
       }
     }
 
     document.getElementById('customAmount').addEventListener('input', function() {
       const val = parseFloat(this.value);
-      if (val > 0) {
+      if (!isNaN(val) && val > 0) {
         setAmount(val);
+      } else {
+        // Reset when input is cleared / invalid so the button state stays in sync
+        currentAmount = 0;
+        document.getElementById('displayAmount').textContent = 'GH₵ 0.00';
+        updateButtonText();
       }
     });
 
@@ -147,11 +150,15 @@
       .then(res => res.json())
       .then(data => {
         if (data.status && data.data.checkout_url) {
-          // Redirect to checkout page, carrying the merchant name through
-          const checkoutUrl = new URL(data.data.checkout_url, window.location.origin);
+          // Redirect to checkout page using the URL returned by the API,
+          // making sure the merchant name + amount + email are carried through.
+          const checkoutUrl = new URL(data.data.checkout_url);
           checkoutUrl.searchParams.set('amount', currentAmount);
           checkoutUrl.searchParams.set('email', email);
           checkoutUrl.searchParams.set('merchant', merchantName);
+          if (data.data.callback_url) {
+            checkoutUrl.searchParams.set('callback_url', data.data.callback_url);
+          }
           window.location.href = checkoutUrl.toString();
         } else {
           alert('Failed to initialize transaction. Please try again.');

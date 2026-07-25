@@ -44,7 +44,7 @@
       <!-- Quick Init Form (Interactive payment creation simulation!) -->
       <div class="bg-[#0b1a38] border border-[#142850] p-5 rounded-lg shadow-xl md:col-span-2">
         <h3 class="font-extrabold text-[12px] uppercase text-[#f68b1e] tracking-widest mb-4 border-b border-[#142850] pb-2">⚡ Quick Launch Payment Link Generator</h3>
-        <form onsubmit="initializePaymentLink(event);" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+        <form onsubmit="initializePaymentLink(event);" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
           <div>
             <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Customer Email Address</label>
             <input id="initEmail" type="email" placeholder="customer@email.com" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e]" required />
@@ -52,6 +52,10 @@
           <div>
             <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Amount (GHS)</label>
             <input id="initAmount" type="number" placeholder="450.00" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e]" required />
+          </div>
+          <div>
+            <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Merchant Name</label>
+            <input id="initMerchant" type="text" placeholder="Valmont-Pay" value="Valmont Gadgets Ghana" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e]" />
           </div>
           <button type="submit" class="bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-[12px] uppercase py-3 rounded-[4px] transition tracking-wider shadow">
             Generate link
@@ -133,11 +137,12 @@
       event.preventDefault();
       const email = document.getElementById('initEmail').value.trim();
       const amount = parseFloat(document.getElementById('initAmount').value.trim());
+      const merchant = document.getElementById('initMerchant').value.trim() || 'Valmont-Pay';
 
       fetch('/api/v1/transaction/initialize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, amount })
+        body: JSON.stringify({ email, amount, merchant })
       })
       .then(res => res.json())
       .then(res => {
