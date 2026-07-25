@@ -20,6 +20,14 @@
       "dest": "/api/verify-payment.js"
     },
     {
+      "src": "/api/webhook",
+      "dest": "/api/webhook.js"
+    },
+    {
+      "src": "/api/transactions",
+      "dest": "/api/transactions.js"
+    },
+    {
       "src": "/(.*)",
       "dest": "server.js"
     }

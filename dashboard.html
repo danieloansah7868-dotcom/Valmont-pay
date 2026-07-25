@@ -17,9 +17,15 @@
   </style>
 </head>
 <body class="min-h-screen flex flex-col justify-between">
+  <script>
+    if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
+      window.location.href = '/admin-login.html';
+    }
+  </script>
 
   <!-- Header Navigation -->
   <header style="background: #0b1a38; padding: 16px 24px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+    <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" style="background:transparent;border:1px solid #f58c14;color:#f58c14;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700;float:right;">Logout</button>
     <img src="/logo.svg" alt="Valmont Pay" style="height: 40px;">
   </header>
 
@@ -201,7 +207,12 @@
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const payload = await res.json();
-        transactions = extractTransactions(payload);
+        transactions = extractTransactions(payload).map(t => ({
+          ...t,
+          customer: t.customer || t.customer_email || 'unknown@customer',
+          channel: t.channel || t.payment_method || 'N/A',
+          status: t.status || 'PENDING'
+        }));
 
         renderDashboard();
 

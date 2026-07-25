@@ -8,8 +8,9 @@
     "test": "node scripts/api-smoke-test.mjs && node scripts/dashboard-ledger-test.mjs"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "@supabase/supabase-js": "^2.110.8",
     "cors": "^2.8.5",
+    "express": "^4.19.2",
     "uuid": "^9.0.1"
   }
 }
