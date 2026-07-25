@@ -24,7 +24,7 @@ export default async function handler(req, res) {
         email: email,
         amount: amount * 100, // Paystack works in pesewas (kobo), so multiply by 100
         reference: reference,
-        callback_url: `${process.env.VERCEL_URL || 'http://localhost:3000'}/payment-success`
+        callback_url: 'https://valmont-pay.vercel.app/checkout.html'
       })
     });
 
