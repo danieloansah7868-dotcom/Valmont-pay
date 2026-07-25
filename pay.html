@@ -34,8 +34,8 @@
       <!-- Amount Display -->
       <div class="bg-gray-50 p-6 rounded-lg border border-gray-100 text-center">
         <span class="block text-xs text-gray-400 font-bold uppercase tracking-wider">Amount to Pay</span>
-        <span class="block text-4xl font-black text-[#0b1a38] mt-2" id="displayAmount">GH₵ 0.00</span>
-        <span class="block text-sm text-gray-500 font-medium mt-2" id="merchant-display">Valmont-Pay</span>
+        <span class="block text-4xl font-black text-[#0b1a38] mt-2" id="amount-display">GH₵ 0.00</span>
+        <span class="block text-sm text-gray-500 font-medium mt-2" id="merchant-name">Valmont-Pay</span>
       </div>
 
       <!-- Email Input -->
@@ -78,27 +78,37 @@
   </div>
 
   <script>
-    // Read merchant + amount from the URL (e.g. pay.html?amount=50&merchant=Valmont+Electricals)
+    // ---------------------------------------------------------------
+    // Issue 1 + 2: merchant name AND amount are read from the URL.
+    // e.g. pay.html?amount=50&merchant=Valmont+Electricals
+    // There is NO hardcoded merchant or amount default anywhere below.
+    // ---------------------------------------------------------------
     const urlParams = new URLSearchParams(window.location.search);
-    const merchantName = urlParams.get('merchant') || 'Valmont-Pay';
+    const merchant = urlParams.get('merchant') || 'Valmont-Pay';
+    let amount = parseFloat(urlParams.get('amount')) || 0;
 
     // Show the dynamic merchant name and update the page title (Issue 1 fix)
-    document.getElementById('merchant-display').textContent = merchantName;
-    document.title = 'Pay ' + merchantName + ' — Valmont-Pay';
+    document.getElementById('merchant-name').textContent = merchant;
+    document.title = 'Pay ' + merchant + ' \u2014 Valmont-Pay';
 
-    let currentAmount = 0;
-
-    function setAmount(amount) {
-      currentAmount = amount;
-      document.getElementById('displayAmount').textContent = `GH₵ ${amount.toLocaleString()}`;
-      document.getElementById('customAmount').value = amount;
+    // Render the amount that is currently selected (Issue 2 fix)
+    function renderAmount() {
+      document.getElementById('amount-display').textContent = 'GH\u20b5 ' + amount.toFixed(2);
       updateButtonText();
+    }
+
+    // Called by the GH\u20b5 50 / 100 / 200 quick-select buttons.
+    // Updates the shared `amount` variable that is later sent to the API.
+    function setAmount(value) {
+      amount = parseFloat(value) || 0;
+      document.getElementById('customAmount').value = amount > 0 ? amount : '';
+      renderAmount();
     }
 
     function updateButtonText() {
       const btn = document.getElementById('btnProceed');
-      if (currentAmount > 0) {
-        btn.textContent = `Pay GH₵ ${currentAmount.toLocaleString()}`;
+      if (amount > 0) {
+        btn.textContent = 'Pay GH\u20b5 ' + amount.toFixed(2);
         btn.classList.remove('opacity-50', 'cursor-not-allowed');
       } else {
         btn.textContent = 'Proceed to Checkout';
@@ -106,21 +116,16 @@
       }
     }
 
-    document.getElementById('customAmount').addEventListener('input', function() {
+    document.getElementById('customAmount').addEventListener('input', function () {
       const val = parseFloat(this.value);
-      if (!isNaN(val) && val > 0) {
-        setAmount(val);
-      } else {
-        // Reset when input is cleared / invalid so the button state stays in sync
-        currentAmount = 0;
-        document.getElementById('displayAmount').textContent = 'GH₵ 0.00';
-        updateButtonText();
-      }
+      // Reset to 0 when the input is cleared / invalid so state stays in sync
+      amount = !isNaN(val) && val > 0 ? val : 0;
+      renderAmount();
     });
 
     function proceedToCheckout() {
       const email = document.getElementById('customerEmail').value.trim();
-      
+
       if (!email) {
         alert('Please enter your email address.');
         return;
@@ -131,52 +136,55 @@
         return;
       }
 
-      if (currentAmount <= 0) {
+      if (amount <= 0) {
         alert('Please select or enter an amount.');
         return;
       }
 
-      // Initialize transaction via API
+      const btn = document.getElementById('btnProceed');
+      btn.disabled = true;
+      btn.textContent = 'Processing\u2026';
+
+      // Initialize transaction via API, sending the CORRECT amount (Issue 2 fix)
       fetch('/api/v1/transaction/initialize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: email,
-          amount: currentAmount,
-          merchant: merchantName,
-          callback_url: 'https://valmont-pay.vercel.app/checkout.html'
+          amount: amount,
+          merchant: merchant,
+          callback_url: window.location.origin + '/checkout.html'
         })
       })
-      .then(res => res.json())
-      .then(data => {
-        if (data.status && data.data.checkout_url) {
-          // Redirect to checkout page using the URL returned by the API,
-          // making sure the merchant name + amount + email are carried through.
-          const checkoutUrl = new URL(data.data.checkout_url);
-          checkoutUrl.searchParams.set('amount', currentAmount);
-          checkoutUrl.searchParams.set('email', email);
-          checkoutUrl.searchParams.set('merchant', merchantName);
-          if (data.data.callback_url) {
-            checkoutUrl.searchParams.set('callback_url', data.data.callback_url);
+        .then(res => res.json())
+        .then(data => {
+          if (data.status && data.data && data.data.checkout_url) {
+            // Redirect to checkout, carrying the reference, the real amount,
+            // the email and the merchant name through the query string.
+            const checkoutUrl = new URL(data.data.checkout_url, window.location.origin);
+            checkoutUrl.searchParams.set('amount', amount);
+            checkoutUrl.searchParams.set('email', email);
+            checkoutUrl.searchParams.set('merchant', merchant);
+            if (data.data.callback_url) {
+              checkoutUrl.searchParams.set('callback_url', data.data.callback_url);
+            }
+            window.location.href = checkoutUrl.toString();
+          } else {
+            btn.disabled = false;
+            updateButtonText();
+            alert(data.message || 'Failed to initialize transaction. Please try again.');
           }
-          window.location.href = checkoutUrl.toString();
-        } else {
-          alert('Failed to initialize transaction. Please try again.');
-        }
-      })
-      .catch(err => {
-        console.error('Error:', err);
-        alert('Connection error. Please check your network.');
-      });
+        })
+        .catch(err => {
+          console.error('Error:', err);
+          btn.disabled = false;
+          updateButtonText();
+          alert('Connection error. Please check your network.');
+        });
     }
 
-    // Initialize (prefill amount from the URL when provided, e.g. ?amount=50)
-    const urlAmount = parseFloat(urlParams.get('amount'));
-    if (!isNaN(urlAmount) && urlAmount > 0) {
-      setAmount(urlAmount);
-    } else {
-      updateButtonText();
-    }
+    // Initialize the display from the URL amount (0.00 when not provided)
+    renderAmount();
   </script>
 
 </body>
