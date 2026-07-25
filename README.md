@@ -19,6 +19,62 @@ Your gateway prototype contains the following master-built systems:
 
 ---
 
+## 🔗 Dynamic Merchant & Amount (Query Parameters)
+
+Both `pay.html` and `checkout.html` are fully dynamic — nothing is hardcoded.
+
+| Page | Example URL | Reads |
+|---|---|---|
+| `pay.html` | `pay.html?amount=50&merchant=Valmont+Electricals` | `merchant`, `amount` |
+| `checkout.html` | `checkout.html?reference=VP-123456&merchant=Valmont+Electricals&amount=50&email=buyer@example.com` | `reference`, `merchant`, `amount`, `email`, `callback_url` |
+
+```javascript
+const urlParams = new URLSearchParams(window.location.search);
+const merchant = urlParams.get('merchant') || 'Valmont-Pay';
+const amount = parseFloat(urlParams.get('amount')) || 0;
+
+document.getElementById('merchant-name').textContent = merchant;
+document.getElementById('amount-display').textContent = 'GH₵ ' + amount.toFixed(2);
+```
+
+If `merchant` is absent it falls back to `Valmont-Pay`; if `amount` is absent it falls back to `0.00`
+(never a hardcoded figure). In the dashboard, the **Merchant Name** field starts empty so you can type
+any merchant name you like.
+
+---
+
+## 💳 Paystack Integration
+
+Set your secret key before starting the server (copy `.env.example` to `.env`):
+
+```bash
+export PAYSTACK_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxx
+```
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/api/initialize-payment` | POST | Initializes a Paystack transaction. Forwards your `reference` and converts the amount to **pesewas (x100)**. |
+| `/api/verify-payment?reference=VP-123456` | GET | Verifies a transaction with Paystack and returns the raw payload plus a flattened `summary`. |
+
+```bash
+curl -X POST http://localhost:3000/api/initialize-payment \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"buyer@example.com","amount":50,"merchant":"Valmont Electricals"}'
+
+curl "http://localhost:3000/api/verify-payment?reference=VP-123456"
+```
+
+> **Amounts:** Paystack works in the smallest currency unit, so `GH₵ 50` is sent as `5000`.
+> The conversion (with correct rounding) lives in `lib/paystack.js` and is applied in one place only.
+
+Run the offline test suite (stubs the network, no secret key needed):
+
+```bash
+npm test
+```
+
+---
+
 ## 🚀 How to Launch Your Gateway Locally (Try it in 2 Steps!)
 
 You can run your own payment gateway live on your machine right now inside the workspace terminal!

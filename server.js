@@ -2,9 +2,19 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const { initializePayment, verifyPayment, generateReference } = require('./lib/paystack');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Build absolute URLs from the incoming request instead of hardcoding the
+// production domain, so links work locally AND on Vercel.
+function baseUrl(req) {
+  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/$/, '');
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host = req.headers['x-forwarded-host'] || req.get('host');
+  return `${proto}://${host}`;
+}
 
 // Enable Cross-Origin Resource Sharing & JSON Parsing
 app.use(cors());
@@ -49,7 +59,8 @@ app.post('/api/v1/transaction/initialize', (req, res) => {
     return res.status(400).json({ status: false, message: 'Invalid transaction details.' });
   }
 
-  const reference = `VP-${Math.floor(100000 + Math.random() * 900000)}`;
+  const reference = generateReference();
+  const origin = baseUrl(req);
   const newTransaction = {
     reference,
     customer: email,
@@ -57,21 +68,24 @@ app.post('/api/v1/transaction/initialize', (req, res) => {
     channel: 'PENDING',
     status: 'PENDING',
     merchant: merchant || 'Valmont-Pay',
-    callback_url: callback_url || 'https://valmont-pay.vercel.app/checkout.html',
+    callback_url: callback_url || `${origin}/checkout.html`,
     timestamp: new Date().toISOString()
   };
 
   TRANSACTIONS.unshift(newTransaction);
-  console.log(`[LEDGER] Transaction Initialized: Ref ${reference} | Amount GHS ${amount}`);
+  console.log(`[LEDGER] Transaction Initialized: Ref ${reference} | Merchant ${newTransaction.merchant} | Amount GHS ${newTransaction.amount}`);
 
-  // Return a secure checkout URL hosted on this gateway server
+  // Return a secure checkout URL hosted on this gateway server.
+  // The reference, real amount, email and merchant are all carried through.
   res.status(200).json({
     status: true,
     message: 'Transaction initialized successfully',
     data: {
       reference,
+      amount: newTransaction.amount,
+      merchant: newTransaction.merchant,
       callback_url: newTransaction.callback_url,
-      checkout_url: `https://valmont-pay.vercel.app/checkout.html?reference=${reference}` +
+      checkout_url: `${origin}/checkout.html?reference=${encodeURIComponent(reference)}` +
         `&amount=${encodeURIComponent(newTransaction.amount)}` +
         `&email=${encodeURIComponent(email)}` +
         `&merchant=${encodeURIComponent(newTransaction.merchant)}`
@@ -81,9 +95,26 @@ app.post('/api/v1/transaction/initialize', (req, res) => {
 
 // API 2: Process Charge (Simulates MoMo USSD Prompt or Card Tokenization)
 app.post('/api/v1/transaction/charge', (req, res) => {
-  const { reference, channel, wallet_number, card_number } = req.body;
+  const { reference, channel, wallet_number, card_number, amount } = req.body;
 
-  const trx = TRANSACTIONS.find(t => t.reference === reference);
+  let trx = TRANSACTIONS.find(t => t.reference === reference);
+
+  // Issue 3 fix: a checkout opened directly by reference (e.g. after a Paystack
+  // redirect) used to 404 here and surface as "Transaction Failed". Register the
+  // transaction on the fly instead of rejecting it.
+  if (!trx && reference) {
+    trx = {
+      reference,
+      customer: req.body.email || 'unknown@customer',
+      amount: parseFloat(amount) || 0,
+      channel: 'PENDING',
+      status: 'PENDING',
+      merchant: req.body.merchant || 'Valmont-Pay',
+      timestamp: new Date().toISOString()
+    };
+    TRANSACTIONS.unshift(trx);
+  }
+
   if (!trx) {
     return res.status(404).json({ status: false, message: 'Transaction reference not found.' });
   }
@@ -92,23 +123,46 @@ app.post('/api/v1/transaction/charge', (req, res) => {
     return res.status(400).json({ status: false, message: 'Transaction has already been processed.' });
   }
 
-  trx.channel = channel;
-  
-  // Simulated Processing Delay & Random Outcomes (85% success rate for MoMo)
-  const isSuccessful = Math.random() > 0.15;
-  
+  // Keep the ledger amount in sync with what the customer actually confirmed
+  const confirmedAmount = parseFloat(amount);
+  if (!isNaN(confirmedAmount) && confirmedAmount > 0) {
+    trx.amount = confirmedAmount;
+  }
+
+  trx.channel = channel || 'Unknown';
+
+  const isCard = /card/i.test(trx.channel);
+  const digits = String(isCard ? card_number || '' : wallet_number || '').replace(/\D/g, '');
+
+  // Issue 3 fix: outcomes are now deterministic instead of a random 15% decline,
+  // so a valid test card / test wallet always clears.
+  let declineReason = null;
+  if (isCard) {
+    if (digits.length < 12) declineReason = 'Invalid card number. Please check and try again.';
+    // Paystack's documented "declined" test card
+    else if (digits === '4084080000000409') declineReason = 'Card declined by issuer.';
+  } else if (digits.length < 9) {
+    declineReason = 'Invalid mobile money number. Please check and try again.';
+  }
+
   setTimeout(() => {
-    if (isSuccessful) {
+    if (!declineReason) {
       trx.status = 'SUCCESS';
       MERCHANT_BALANCE += trx.amount; // Add settled funds to merchant account
-      console.log(`[SETTLEMENT] Trans Ref ${reference} CLEARED successfully! Balance added.`);
-      res.status(200).json({ status: true, message: 'Charge successful', reference, trx_status: 'SUCCESS' });
+      console.log(`[SETTLEMENT] Trans Ref ${reference} CLEARED for GHS ${trx.amount}! Balance added.`);
+      res.status(200).json({
+        status: true,
+        message: 'Charge successful',
+        reference,
+        amount: trx.amount,
+        trx_status: 'SUCCESS'
+      });
     } else {
       trx.status = 'FAILED';
-      console.log(`[LEDGER] Trans Ref ${reference} DECLINED by network.`);
-      res.status(200).json({ status: false, message: 'Transaction declined by mobile wallet operator.', reference, trx_status: 'FAILED' });
+      console.log(`[LEDGER] Trans Ref ${reference} DECLINED: ${declineReason}`);
+      res.status(200).json({ status: false, message: declineReason, reference, trx_status: 'FAILED' });
     }
-  }, 3500); // 3.5 second simulated USSD prompt delay
+  }, 2000); // simulated USSD prompt delay
 });
 
 // API 3: Verify Transaction Status
@@ -132,6 +186,71 @@ app.get('/api/v1/transaction/verify/:reference', (req, res) => {
       timestamp: trx.timestamp
     }
   });
+});
+
+// API 3b: Paystack-backed endpoints (same contract as the /api serverless
+// functions, so local development and Vercel behave identically).
+app.post('/api/initialize-payment', async (req, res) => {
+  const { email, merchant, callback_url } = req.body || {};
+  const amount = parseFloat(req.body && req.body.amount);
+  const reference = (req.body && req.body.reference) || generateReference();
+
+  if (!email || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ success: false, error: 'Missing or invalid fields' });
+  }
+
+  console.log('Reference:', reference);
+
+  try {
+    const data = await initializePayment({
+      amount,
+      email,
+      reference,
+      merchant,
+      callback_url:
+        callback_url ||
+        `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(reference)}` +
+          `&merchant=${encodeURIComponent(merchant || 'Valmont-Pay')}`
+    });
+
+    if (data.status) {
+      return res.status(200).json({
+        success: true,
+        paymentUrl: data.data.authorization_url,
+        reference: data.data.reference || reference,
+        amount
+      });
+    }
+    return res.status(400).json({ success: false, error: data.message || 'Failed to initialize payment' });
+  } catch (error) {
+    console.error('Payment initialization error:', error.message);
+    const missingKey = error.code === 'MISSING_SECRET_KEY';
+    return res.status(500).json({
+      success: false,
+      error: missingKey ? 'Payment provider is not configured. Set PAYSTACK_SECRET_KEY.' : 'Internal server error'
+    });
+  }
+});
+
+app.get('/api/verify-payment', async (req, res) => {
+  const { reference } = req.query;
+  if (!reference) {
+    return res.status(400).json({ status: false, message: 'Missing transaction reference' });
+  }
+
+  console.log('Reference:', reference);
+
+  try {
+    const data = await verifyPayment(reference);
+    return res.status(200).json(data);
+  } catch (error) {
+    console.error('Payment verification error:', error.message);
+    const missingKey = error.code === 'MISSING_SECRET_KEY';
+    return res.status(500).json({
+      status: false,
+      message: missingKey ? 'Payment provider is not configured. Set PAYSTACK_SECRET_KEY.' : 'Internal server error'
+    });
+  }
 });
 
 // API 4: Get Ledger and Account Balance (For Dashboard)

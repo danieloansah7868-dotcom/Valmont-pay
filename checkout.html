@@ -38,7 +38,7 @@
         <div class="bg-gray-50 p-4 rounded-[4px] border border-gray-100 text-center">
           <span class="block text-[11px] text-gray-400 font-bold uppercase tracking-wider">Paying Merchant</span>
           <span class="block text-[14px] text-gray-800 font-extrabold mt-0.5" id="merchant-name">Valmont-Pay</span>
-          <span class="block text-[26px] font-black text-[#0b1a38] mt-1.5" id="checkoutAmount">GH₵ 0.00</span>
+          <span class="block text-[26px] font-black text-[#0b1a38] mt-1.5" id="amount-display">GH₵ 0.00</span>
           <span class="block text-[11px] text-gray-500 font-medium mt-1" id="checkoutEmail">customer@email.com</span>
         </div>
 
@@ -133,24 +133,28 @@
   </div>
 
   <script>
-    // Extract query parameters
-    const params = new URLSearchParams(window.location.search);
-    const reference = params.get('reference') || 'VP-' + Math.floor(100000 + Math.random() * 900000);
-    const amount = parseFloat(params.get('amount') || '450.00');
-    const email = params.get('email') || 'kofi.mensah@gmail.com';
-    const merchantName = params.get('merchant') || 'Valmont-Pay';
+    // ---------------------------------------------------------------
+    // Issue 1 + 2: reference, merchant AND amount all come from the URL.
+    // e.g. checkout.html?reference=VP-123456&merchant=Valmont+Electricals&amount=50
+    // The old hardcoded fallback amount has been removed.
+    // ---------------------------------------------------------------
+    const urlParams = new URLSearchParams(window.location.search);
+    const reference = urlParams.get('reference') || 'VP-' + Math.floor(100000 + Math.random() * 900000);
+    const merchant = urlParams.get('merchant') || 'Valmont-Pay';
+    const amount = parseFloat(urlParams.get('amount')) || 0;
+    const email = urlParams.get('email') || '';
     // Issue 3 fix: honor per-transaction callback_url (fall back to the merchant dashboard)
-    const callbackUrl = params.get('callback_url') || 'https://valmont-pay.vercel.app/dashboard.html';
+    const callbackUrl = urlParams.get('callback_url') || (window.location.origin + '/dashboard.html');
 
-    document.getElementById('merchant-name').textContent = merchantName;
+    document.getElementById('merchant-name').textContent = merchant;
     document.getElementById('successMerchantDesc').textContent =
-      `Your payment to ${merchantName} has been settled successfully. You will receive an invoice receipt shortly.`;
-    document.title = 'Pay ' + merchantName + ' — Valmont-Pay';
+      `Your payment to ${merchant} has been settled successfully. You will receive an invoice receipt shortly.`;
+    document.title = 'Pay ' + merchant + ' — Valmont-Pay';
 
     document.getElementById('checkoutRef').textContent = reference;
-    document.getElementById('checkoutAmount').textContent = `GH₵ ${amount.toLocaleString()}`;
-    document.getElementById('checkoutEmail').textContent = email;
-    document.getElementById('btnPay').textContent = `Pay GH₵ ${amount.toLocaleString()}`;
+    document.getElementById('amount-display').textContent = 'GH₵ ' + amount.toFixed(2);
+    document.getElementById('checkoutEmail').textContent = email || 'No email provided';
+    document.getElementById('btnPay').textContent = 'Pay GH₵ ' + amount.toFixed(2);
 
     let currentChannel = 'momo';
 
@@ -214,6 +218,11 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           reference,
+          // Forward the real amount/merchant/email so the gateway charges
+          // exactly what the customer was shown (Issue 2 + 3 fix).
+          amount,
+          merchant,
+          email,
           channel: currentChannel === 'momo' ? `Momo (${document.getElementById('momoNetwork').value})` : 'Card',
           wallet_number: document.getElementById('momoNumber').value,
           card_number: document.getElementById('cardNumber').value

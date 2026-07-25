@@ -4,7 +4,8 @@
   "description": "Minimal Viable Product (MVP) Payment Gateway API & Dashboard",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node scripts/api-smoke-test.mjs"
   },
   "dependencies": {
     "express": "^4.19.2",
