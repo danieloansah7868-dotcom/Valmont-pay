@@ -69,7 +69,7 @@ app.post('/api/v1/transaction/initialize', (req, res) => {
     message: 'Transaction initialized successfully',
     data: {
       reference,
-      checkout_url: `http://localhost:${PORT}/checkout.html?reference=${reference}`
+      checkout_url: `https://valmont-pay.vercel.app/checkout.html?reference=${reference}`
     }
   });
 });
