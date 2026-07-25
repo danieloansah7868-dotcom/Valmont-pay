@@ -14,6 +14,8 @@ Your gateway prototype contains the following master-built systems:
     *   `POST /api/v1/transaction/charge`: Simulates USSD PIN push notifications and clears settled funds directly into the merchant's escrow wallet balance.
     *   `GET /api/v1/transaction/verify/:ref`: Validates transaction clearance status.
     *   `GET /api/v1/merchant/dashboard`: Fetches active ledger arrays and settles wallet balances.
+    *   `GET /api/transactions`: The canonical ledger feed the dashboard reads. Returns the live transactions array plus the derived balance.
+    *   `POST /api/webhook`: Paystack webhook receiver (HMAC SHA512 signature verified). This is how real payments land on the ledger.
 3.  **`checkout.html` (Secured Checkout Widget)**: A responsive popup widget styled in deep navy and bright emerald green. Features forms to collect **Mobile Money Number** (MTN, Telecel, AT) or **Card details**, communicates with the API, and displays loading spinners for simulated USSD PIN authorization prompts!
 4.  **`dashboard.html` (Merchant Analytics Portal)**: A high-end dark analytics board displaying virtual wallet balances, a **Live Settlement Ledger**, and an **interactive Checkout Link Generator**!
 
@@ -64,10 +66,46 @@ curl -X POST http://localhost:3000/api/initialize-payment \
 curl "http://localhost:3000/api/verify-payment?reference=VP-123456"
 ```
 
+### Webhook (real payments -> dashboard)
+
+Point your Paystack dashboard webhook URL at `https://<your-domain>/api/webhook`.
+The handler verifies the `x-paystack-signature` header (HMAC SHA512 of the raw body
+using `PAYSTACK_SECRET_KEY`), converts pesewas back to GH₵ and upserts the transaction
+onto the ledger, so replayed events never double-count.
+
 > **Amounts:** Paystack works in the smallest currency unit, so `GH₵ 50` is sent as `5000`.
 > The conversion (with correct rounding) lives in `lib/paystack.js` and is applied in one place only.
 
 Run the offline test suite (stubs the network, no secret key needed):
+
+```bash
+npm test
+```
+
+---
+
+## 📒 The Transaction Ledger (no test data)
+
+The ledger lives in `lib/ledger.js` and **starts completely empty** — there are no
+seeded demo rows and no fake starting balance anywhere in the codebase.
+
+* **Balance is derived, never stored.** It is always recomputed as the sum of every
+  `SUCCESS` transaction, so it can never drift out of sync with the rows on screen.
+  An empty ledger therefore shows exactly `GH₵ 0.00`.
+* **`PENDING` and `FAILED` transactions are logged but never counted** toward the balance.
+* **The dashboard renders an empty state** — *"No transactions yet. Real payments will
+  appear here."* — until a real payment arrives, then polls `/api/transactions`
+  every 10s (and on tab focus) so new payments show up without a refresh.
+* **Writers:** `POST /api/v1/transaction/charge`, `GET /api/verify-payment` and
+  `POST /api/webhook` all funnel through the same ledger via `upsertTransaction()`,
+  which is idempotent by reference.
+
+> **Persistence:** the ledger is process memory, so it resets on restart (and is
+> per-instance on serverless). `/api/transactions` and `/api/webhook` are deliberately
+> routed to `server.js` in `vercel.json` so the reader and writer share one instance.
+> Swap the store in `lib/ledger.js` for Postgres/Redis when you need durable records.
+
+Run the ledger test suite (starts empty, real payment appears, signatures verified):
 
 ```bash
 npm test

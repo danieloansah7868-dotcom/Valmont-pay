@@ -3,6 +3,8 @@ const cors = require('cors');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { initializePayment, verifyPayment, generateReference } = require('./lib/paystack');
+const ledger = require('./lib/ledger');
+const { handleWebhookEvent, toLedgerRecord } = require('./lib/webhook');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -18,38 +20,18 @@ function baseUrl(req) {
 
 // Enable Cross-Origin Resource Sharing & JSON Parsing
 app.use(cors());
-app.use(express.json());
+// Keep the raw body around so the Paystack webhook signature (an HMAC over the
+// exact bytes Paystack sent) can be verified.
+app.use(express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf ? buf.toString('utf8') : ''; }
+}));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.static(__dirname));
 
-// IN-MEMORY TRANSACTION DATABASE & BALANCE (Our Ledger)
-let MERCHANT_BALANCE = 12450.00; // Starting virtual balance in GHS
-const TRANSACTIONS = [
-  {
-    reference: 'VP-849201',
-    customer: 'kofi.mensah@gmail.com',
-    amount: 4500.00,
-    channel: 'Mobile Money (MTN)',
-    status: 'SUCCESS',
-    timestamp: new Date(Date.now() - 24 * 3600 * 1000).toISOString() // 1 day ago
-  },
-  {
-    reference: 'VP-582910',
-    customer: 'ama.gh@yahoo.com',
-    amount: 1250.00,
-    channel: 'Mobile Money (Telecel)',
-    status: 'SUCCESS',
-    timestamp: new Date(Date.now() - 6 * 3600 * 1000).toISOString() // 6 hours ago
-  },
-  {
-    reference: 'VP-128491',
-    customer: 'abena.boateng@outlook.com',
-    amount: 6700.00,
-    channel: 'Credit/Debit Card',
-    status: 'FAILED',
-    timestamp: new Date(Date.now() - 2 * 3600 * 1000).toISOString() // 2 hours ago
-  }
-];
+// LIVE TRANSACTION LEDGER (shared in-memory store, see lib/ledger.js)
+// It starts EMPTY — no seeded demo rows, no fake starting balance. The
+// settled balance is always derived by summing SUCCESSFUL transactions.
+const TRANSACTIONS = ledger.TRANSACTIONS;
 
 // API 1: Initialize Transaction
 app.post('/api/v1/transaction/initialize', (req, res) => {
@@ -61,18 +43,15 @@ app.post('/api/v1/transaction/initialize', (req, res) => {
 
   const reference = generateReference();
   const origin = baseUrl(req);
-  const newTransaction = {
+  const newTransaction = ledger.addTransaction({
     reference,
     customer: email,
     amount: parseFloat(amount),
     channel: 'PENDING',
     status: 'PENDING',
     merchant: merchant || 'Valmont-Pay',
-    callback_url: callback_url || `${origin}/checkout.html`,
-    timestamp: new Date().toISOString()
-  };
-
-  TRANSACTIONS.unshift(newTransaction);
+    callback_url: callback_url || `${origin}/checkout.html`
+  });
   console.log(`[LEDGER] Transaction Initialized: Ref ${reference} | Merchant ${newTransaction.merchant} | Amount GHS ${newTransaction.amount}`);
 
   // Return a secure checkout URL hosted on this gateway server.
@@ -103,16 +82,14 @@ app.post('/api/v1/transaction/charge', (req, res) => {
   // redirect) used to 404 here and surface as "Transaction Failed". Register the
   // transaction on the fly instead of rejecting it.
   if (!trx && reference) {
-    trx = {
+    trx = ledger.addTransaction({
       reference,
       customer: req.body.email || 'unknown@customer',
       amount: parseFloat(amount) || 0,
       channel: 'PENDING',
       status: 'PENDING',
-      merchant: req.body.merchant || 'Valmont-Pay',
-      timestamp: new Date().toISOString()
-    };
-    TRANSACTIONS.unshift(trx);
+      merchant: req.body.merchant || 'Valmont-Pay'
+    });
   }
 
   if (!trx) {
@@ -148,8 +125,9 @@ app.post('/api/v1/transaction/charge', (req, res) => {
   setTimeout(() => {
     if (!declineReason) {
       trx.status = 'SUCCESS';
-      MERCHANT_BALANCE += trx.amount; // Add settled funds to merchant account
-      console.log(`[SETTLEMENT] Trans Ref ${reference} CLEARED for GHS ${trx.amount}! Balance added.`);
+      // The balance is derived from the ledger (sum of SUCCESS rows), so
+      // flipping the status above is all it takes to settle the funds.
+      console.log(`[SETTLEMENT] Trans Ref ${reference} CLEARED for GHS ${trx.amount}! New balance GHS ${ledger.getBalance()}.`);
       res.status(200).json({
         status: true,
         message: 'Charge successful',
@@ -242,6 +220,14 @@ app.get('/api/verify-payment', async (req, res) => {
 
   try {
     const data = await verifyPayment(reference);
+
+    // A verified Paystack transaction is a REAL payment - record it on the
+    // ledger so the dashboard reflects it even if the webhook is delayed or
+    // has not been configured yet. upsert keeps this idempotent.
+    if (data && data.status && data.data && data.data.reference) {
+      ledger.upsertTransaction(toLedgerRecord('charge.verified', data.data));
+    }
+
     return res.status(200).json(data);
   } catch (error) {
     console.error('Payment verification error:', error.message);
@@ -255,14 +241,27 @@ app.get('/api/verify-payment', async (req, res) => {
 
 // API 4: Get Ledger and Account Balance (For Dashboard)
 app.get('/api/v1/merchant/dashboard', (req, res) => {
+  res.status(200).json({ status: true, data: ledger.getLedgerSnapshot() });
+});
+
+// API 5: Canonical transactions endpoint used by the dashboard.
+// Returns the live ledger array (empty until real payments come in) plus the
+// balance derived from the SUCCESSFUL transactions in it.
+app.get('/api/transactions', (req, res) => {
+  const snapshot = ledger.getLedgerSnapshot();
   res.status(200).json({
+    success: true,
     status: true,
-    data: {
-      balance: MERCHANT_BALANCE,
-      currency: 'GHS',
-      transactions: TRANSACTIONS
-    }
+    ...snapshot,
+    data: snapshot.transactions
   });
+});
+
+// API 6: Paystack webhook — the source of truth for real payments.
+// Point your Paystack dashboard webhook URL at https://<your-domain>/api/webhook
+app.post('/api/webhook', (req, res) => {
+  const result = handleWebhookEvent(req.body, req.headers['x-paystack-signature'], req.rawBody);
+  return res.status(result.statusCode).json(result.body);
 });
 
 // Serve frontend web routes
