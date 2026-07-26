@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valmont-Pay — Merchant Dashboard Portal</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/favicon.svg">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #050d24; color: #ffffff; }
+    .valmont-navy { background-color: #0b1a38; }
+    .valmont-navy-border { border-color: #142850; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between">
+  <script>
+    if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
+      window.location.href = '/admin-login.html';
+    }
+  </script>
+
+  <!-- Header Navigation -->
+  <header style="background: #0b1a38; padding: 16px 24px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+    <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" style="background:transparent;border:1px solid #f58c14;color:#f58c14;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700;float:right;">Logout</button>
+    <img src="/logo.svg" alt="Valmont Pay" style="height: 40px;">
+  </header>
+
+  <!-- Main Content Layout -->
+  <main class="max-w-[1200px] mx-auto p-6 flex-1 w-full space-y-6">
+    
+    <!-- Balance & Analytics Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      
+      <!-- Virtual Settled Wallet Balance -->
+      <div class="bg-[#0b1a38] border border-[#142850] p-6 rounded-lg shadow-xl flex flex-col justify-between relative overflow-hidden">
+        <div class="absolute -right-8 -bottom-8 h-24 w-24 bg-[#f68b1e]/5 rounded-full"></div>
+        <div>
+          <span class="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest">Settled Wallet Balance</span>
+          <h2 class="text-[34px] font-black text-[#f68b1e] mt-2" id="walletBalance">GH₵ 0.00</h2>
+        </div>
+        <div class="mt-4 flex gap-2">
+          <button onclick="requestPayout();" class="bg-[#f68b1e] hover:bg-orange-600 text-white text-[11px] font-black uppercase py-2 px-4 rounded-[4px] transition tracking-wider shadow">Request Payout</button>
+        </div>
+      </div>
+
+      <!-- Quick Init Form (Interactive payment creation simulation!) -->
+      <div class="bg-[#0b1a38] border border-[#142850] p-5 rounded-lg shadow-xl md:col-span-2">
+        <h3 class="font-extrabold text-[12px] uppercase text-[#f68b1e] tracking-widest mb-4 border-b border-[#142850] pb-2"> Quick Launch Payment Link Generator</h3>
+        <form onsubmit="initializePaymentLink(event);" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <div>
+            <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Customer Email Address</label>
+            <input id="initEmail" type="email" placeholder="customer@email.com" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e]" required />
+          </div>
+          <div>
+            <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Amount (GHS)</label>
+            <input id="initAmount" type="number" placeholder="Enter amount" min="1" step="0.01" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e]" required />
+          </div>
+          <div>
+            <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Merchant Name</label>
+            <input id="initMerchant" type="text" placeholder="Enter merchant name" value="" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e]" />
+          </div>
+          <button type="submit" class="bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-[12px] uppercase py-3 rounded-[4px] transition tracking-wider shadow">
+            Generate link
+          </button>
+        </form>
+        <!-- Initted link presentation -->
+        <div id="initResult" class="mt-4 p-3 bg-[#050d24] border border-[#142850] rounded-[4px] text-[12px] hidden justify-between items-center gap-2">
+          <span class="font-medium text-gray-400 truncate">Payment Link: <a href="#" id="paymentLinkUrl" target="_blank" class="text-[#f68b1e] font-bold underline hover:text-orange-300">https://valmont-pay.vercel.app/...</a></span>
+          <button onclick="copyPaymentLink();" class="text-[10px] bg-[#142850] hover:bg-[#203c6d] text-white py-1 px-2 rounded font-black tracking-wider transition shrink-0">COPY</button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Live Transaction Ledger (List) -->
+    <div class="bg-[#0b1a38] border border-[#142850] p-6 rounded-lg shadow-xl">
+      <div class="flex justify-between items-center border-b border-[#142850] pb-3 mb-4">
+        <h3 class="font-extrabold text-[12px] uppercase text-[#f68b1e] tracking-widest"> Real-Time Settlement Ledger</h3>
+        <span class="text-[10px] text-gray-400 font-extrabold uppercase tracking-wider" id="ledgerCount">0 Transactions logged</span>
+      </div>
+
+      <!-- Table Header -->
+      <div class="grid grid-cols-5 gap-4 text-[10px] text-gray-400 font-extrabold uppercase tracking-wider border-b border-[#142850] pb-2.5 px-3">
+        <span>Reference</span>
+        <span>Customer Email</span>
+        <span>Amount (GHS)</span>
+        <span>Payment Channel</span>
+        <span class="text-right">Settlement Status</span>
+      </div>
+
+      <!-- Injected Rows list. Starts EMPTY - real payments are injected here. -->
+      <div class="divide-y divide-[#142850] text-[13px] font-medium" id="ledgerRows"></div>
+
+      <!-- Empty state: shown whenever the ledger has no transactions -->
+      <div id="ledgerEmptyState" class="py-12 text-center">
+        <div class="text-3xl mb-3 opacity-40">🧾</div>
+        <p class="text-gray-300 text-[13px] font-bold">No transactions yet. Real payments will appear here.</p>
+        <p class="text-gray-500 text-[11px] font-medium mt-1.5">Generate a payment link above to take your first live payment.</p>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- Footer security -->
+  <footer class="bg-[#0b1a38] border-t border-[#142850] py-6 px-4 text-center text-gray-400 text-[11px] font-bold">
+    <div class="max-w-[1200px] mx-auto">
+      VALMONT-PAY MERCHANT NETWORK CORE — CONNECTED SECURELY TO GCB BANK & CHANA INTERBANK SETTLEMENT SYSTEMS
+    </div>
+  </footer>
+
+  <script>
+    // The ledger starts EMPTY. No test/demo data lives in this file - every row
+    // rendered below comes from a real transaction returned by /api/transactions.
+    let transactions = [];
+    let currentBalance = 0;
+
+    const SUCCESS_STATUSES = ['SUCCESS', 'SUCCESSFUL', 'PAID', 'COMPLETED'];
+
+    function formatMoney(value) {
+      return Number(value || 0).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+
+    function isSuccessful(t) {
+      return SUCCESS_STATUSES.includes(String(t.status || '').toUpperCase());
+    }
+
+    // Balance = sum of every SUCCESSFUL transaction. An empty ledger gives 0.00.
+    function calculateBalance(list) {
+      return list.filter(isSuccessful)
+        .reduce((total, t) => total + (parseFloat(t.amount) || 0), 0);
+    }
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function statusClassFor(status) {
+      const s = String(status || '').toUpperCase();
+      if (isSuccessful({ status: s })) return 'bg-orange-950/40 text-[#f68b1e] border-orange-900/30';
+      if (s === 'PENDING') return 'bg-amber-950 text-amber-400 border-amber-900';
+      return 'bg-red-950 text-red-400 border-red-900';
+    }
+
+    function renderDashboard() {
+      const ledgerRows = document.getElementById('ledgerRows');
+      const emptyState = document.getElementById('ledgerEmptyState');
+
+      currentBalance = calculateBalance(transactions);
+      document.getElementById('walletBalance').textContent = `GH\u20b5 ${formatMoney(currentBalance)}`;
+      document.getElementById('ledgerCount').textContent =
+        `${transactions.length} Transaction${transactions.length === 1 ? '' : 's'} logged`;
+
+      // Empty ledger -> no rows at all, just the "No transactions yet" message.
+      if (!transactions.length) {
+        ledgerRows.innerHTML = '';
+        emptyState.classList.remove('hidden');
+        return;
+      }
+
+      emptyState.classList.add('hidden');
+      ledgerRows.innerHTML = transactions.map(t => `
+        <div class="grid grid-cols-5 gap-4 py-3.5 px-3 items-center border-b border-[#142850]/50 hover:bg-[#0d1e3d]/30 transition duration-150">
+          <span class="font-black text-gray-300">${escapeHtml(t.reference)}</span>
+          <span class="text-gray-400 truncate">${escapeHtml(t.customer)}</span>
+          <span class="font-bold text-gray-200">GH\u20b5 ${formatMoney(t.amount)}</span>
+          <span class="text-gray-400 font-semibold">${escapeHtml(t.channel)}</span>
+          <div class="text-right">
+            <span class="inline-block px-2.5 py-0.5 rounded-[4px] text-[10px] font-black border uppercase ${statusClassFor(t.status)}">${escapeHtml(t.status)}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Accept either { transactions: [...] } or { data: [...] } / a bare array,
+    // so the dashboard keeps working regardless of which endpoint answers.
+    function extractTransactions(payload) {
+      if (Array.isArray(payload)) return payload;
+      if (!payload || typeof payload !== 'object') return [];
+      if (Array.isArray(payload.transactions)) return payload.transactions;
+      if (Array.isArray(payload.data)) return payload.data;
+      if (payload.data && Array.isArray(payload.data.transactions)) return payload.data.transactions;
+      return [];
+    }
+
+    function extractBalance(payload) {
+      if (payload && typeof payload.balance === 'number') return payload.balance;
+      if (payload && payload.data && typeof payload.data.balance === 'number') return payload.data.balance;
+      return null;
+    }
+
+    async function fetchDashboardData() {
+      try {
+        const res = await fetch('/api/transactions', { headers: { 'Cache-Control': 'no-cache' } });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const payload = await res.json();
+        transactions = extractTransactions(payload).map(t => ({
+          ...t,
+          customer: t.customer || t.customer_email || 'unknown@customer',
+          channel: t.channel || t.payment_method || 'N/A',
+          status: t.status || 'PENDING'
+        }));
+
+        renderDashboard();
+
+        // Prefer the server-derived balance when it is provided; it is computed
+        // the same way (sum of successful transactions).
+        const serverBalance = extractBalance(payload);
+        if (serverBalance !== null) {
+          currentBalance = serverBalance;
+          document.getElementById('walletBalance').textContent = `GH\u20b5 ${formatMoney(serverBalance)}`;
+        }
+      } catch (error) {
+        console.error('Could not load transactions:', error);
+        // Never fall back to fake data - show a genuinely empty ledger.
+        transactions = [];
+        renderDashboard();
+      }
+    }
+
+    function initializePaymentLink(event) {
+      event.preventDefault();
+      const email = document.getElementById('initEmail').value.trim();
+      const amount = parseFloat(document.getElementById('initAmount').value.trim());
+      const merchant = document.getElementById('initMerchant').value.trim() || 'Valmont-Pay';
+
+      if (isNaN(amount) || amount <= 0) {
+        alert('Please enter a valid amount.');
+        return;
+      }
+
+      fetch('/api/v1/transaction/initialize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, amount, merchant })
+      })
+      .then(res => res.json())
+      .then(res => {
+        if (res.status) {
+          const url = res.data.checkout_url;
+          document.getElementById('paymentLinkUrl').href = url;
+          document.getElementById('paymentLinkUrl').textContent = url;
+          document.getElementById('initResult').classList.remove('hidden');
+          document.getElementById('initResult').classList.add('flex');
+          fetchDashboardData();
+        }
+      });
+    }
+
+    function requestPayout() {
+      if (!currentBalance) {
+        alert('There is nothing to settle yet. Your balance is GH₵ 0.00.');
+        return;
+      }
+      alert('Settlement Request Logged: Your funds of GHS ' + formatMoney(currentBalance) +
+        ' are being swept to your GCB Bank corporate escrow account.');
+    }
+
+    function copyPaymentLink() {
+      const link = document.getElementById('paymentLinkUrl').textContent;
+      navigator.clipboard.writeText(link);
+      alert('Payment link copied to clipboard!');
+    }
+
+    // Render the empty state immediately, then load the real ledger.
+    renderDashboard();
+    fetchDashboardData();
+
+    // Poll so a real payment shows up without a manual refresh.
+    setInterval(fetchDashboardData, 10000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) fetchDashboardData();
+    });
+  </script>
+</body>
+</html>

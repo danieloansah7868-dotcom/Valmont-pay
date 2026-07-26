@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Login — Valmont-Pay</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0b1a38;
+      color: #ffffff;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .login-card {
+      background: #112240;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 40px;
+      max-width: 400px;
+      width: 100%;
+    }
+    .logo { text-align: center; margin-bottom: 32px; }
+    .logo h1 { font-size: 28px; font-weight: 800; }
+    .logo h1 span { color: #f58c14; }
+    .form-group { margin-bottom: 20px; }
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #a0aec0;
+      margin-bottom: 8px;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 14px 16px;
+      background: #0b1a38;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 8px;
+      color: #ffffff;
+      font-size: 15px;
+      outline: none;
+    }
+    .form-group input:focus { border-color: #f58c14; }
+    .login-button {
+      width: 100%;
+      padding: 16px;
+      background: #f58c14;
+      color: #0b1a38;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .login-button:hover { background: #e8b64c; }
+    .error-message {
+      background: rgba(231, 76, 60, 0.15);
+      border: 1px solid #e74c3c;
+      color: #e74c3c;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      margin-bottom: 16px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="logo">
+      <h1>VALMONT<span>PAY</span></h1>
+    </div>
+    <div class="error-message" id="error-message"></div>
+    <form id="login-form">
+      <div class="form-group">
+        <label>Email Address</label>
+<input type="email" id="email" required placeholder="Enter email">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="password" required placeholder="Enter password">
+      </div>
+      <button type="submit" class="login-button">Sign In</button>
+    </form>
+  </div>
+
+  <script>
+   const ADMIN_EMAIL = 'support@valmontpay.com';
+const ADMIN_PASSWORD = 'REDACTED-PASSWORD';
+
+    document.getElementById('login-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const errorMessage = document.getElementById('error-message');
+
+     if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD) {
+        sessionStorage.setItem('adminLoggedIn', 'true');
+        window.location.href = '/dashboard.html';
+      } else {
+        errorMessage.textContent = 'Invalid email or password';
+        errorMessage.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>
