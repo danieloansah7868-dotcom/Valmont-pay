@@ -102,7 +102,7 @@ const ADMIN_PASSWORD = 'OldGrandpa@126';
       const password = document.getElementById('password').value;
       const errorMessage = document.getElementById('error-message');
 
-      if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+     if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD) {
         sessionStorage.setItem('adminLoggedIn', 'true');
         window.location.href = '/dashboard.html';
       } else {
