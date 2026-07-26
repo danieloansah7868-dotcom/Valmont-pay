@@ -280,6 +280,13 @@ app.get('/dashboard', (req, res) => {
 app.get('/pay', (req, res) => {
   res.sendFile(path.join(__dirname, 'pay.html'));
 });
+app.get('/admin-login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'admin-login.html'));
+});
+
+app.get('/admin-login.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'admin-login.html'));
+});
 
 app.get('/pay.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'pay.html'));
