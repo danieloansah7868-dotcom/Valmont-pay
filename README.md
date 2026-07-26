@@ -53,6 +53,14 @@ Set your secret key before starting the server (copy `.env.example` to `.env`):
 export PAYSTACK_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxx
 ```
 
+For the admin dashboard login (`admin-login.html`), credentials are read from environment variables
+at runtime (via `/config/admin.js`) — none are stored in source:
+
+```bash
+export ADMIN_EMAIL=support@valmontpay.com
+export ADMIN_PASSWORD=your-strong-password
+```
+
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/api/initialize-payment` | POST | Initializes a Paystack transaction. Forwards your `reference` and converts the amount to **pesewas (x100)**. |

@@ -92,15 +92,24 @@
     </form>
   </div>
 
+  <!-- Admin credentials are NOT stored in source. They come from the ADMIN_EMAIL and
+       ADMIN_PASSWORD environment variables, injected at runtime via /config/admin.js. -->
+  <script src="/config/admin.js"></script>
   <script>
-   const ADMIN_EMAIL = 'support@valmontpay.com';
-const ADMIN_PASSWORD = 'REDACTED-PASSWORD';
+   const ADMIN_EMAIL = (window.ADMIN_CONFIG && window.ADMIN_CONFIG.email) || 'support@valmontpay.com';
+   const ADMIN_PASSWORD = (window.ADMIN_CONFIG && window.ADMIN_CONFIG.password) || '';
 
     document.getElementById('login-form').addEventListener('submit', (e) => {
       e.preventDefault();
       const email = document.getElementById('email').value;
       const password = document.getElementById('password').value;
       const errorMessage = document.getElementById('error-message');
+
+      if (!ADMIN_PASSWORD) {
+        errorMessage.textContent = 'Admin login is not configured yet. Contact support.';
+        errorMessage.style.display = 'block';
+        return;
+      }
 
      if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD) {
         sessionStorage.setItem('adminLoggedIn', 'true');

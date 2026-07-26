@@ -280,6 +280,17 @@ app.get('/dashboard', (req, res) => {
 app.get('/pay', (req, res) => {
   res.sendFile(path.join(__dirname, 'pay.html'));
 });
+// Runtime config for admin-login.html: credentials come from the ADMIN_EMAIL and
+// ADMIN_PASSWORD environment variables so no secrets live in the source tree.
+app.get('/config/admin.js', (req, res) => {
+  const config = {
+    email: process.env.ADMIN_EMAIL || 'support@valmontpay.com',
+    password: process.env.ADMIN_PASSWORD || ''
+  };
+  res.set('Cache-Control', 'no-store');
+  res.type('application/javascript').send(`window.ADMIN_CONFIG = ${JSON.stringify(config)};`);
+});
+
 app.get('/admin-login', (req, res) => {
   res.sendFile(path.join(__dirname, 'admin-login.html'));
 });

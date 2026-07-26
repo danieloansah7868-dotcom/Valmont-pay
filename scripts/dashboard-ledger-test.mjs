@@ -148,7 +148,7 @@ check(snapshot.balance === 0, 'a PENDING payment leaves the balance at 0');
 const charge = await post('/api/v1/transaction/charge', {
   reference,
   channel: 'Mobile Money (MTN)',
-  wallet_number: '0244123456',
+  wallet_number: '0000000000',
   amount: 75.5
 });
 check(charge.trx_status === 'SUCCESS', 'a valid charge clears');
