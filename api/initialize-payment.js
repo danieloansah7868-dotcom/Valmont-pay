@@ -2,6 +2,14 @@ import paystack from '../lib/paystack.js';
 
 const { initializePayment, generateReference } = paystack;
 
+// Build absolute URLs from the incoming request
+function baseUrl(req) {
+  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/$/, '');
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host = req.headers['x-forwarded-host'] || req.get('host');
+  return `${proto}://${host}`;
+}
+
 export default async function handler(req, res) {
   // Only allow POST requests
   if (req.method !== 'POST') {
@@ -47,7 +55,7 @@ export default async function handler(req, res) {
     });
 
     if (data.status) {
-      // Success - return the payment URL
+      // Success - return the payment URL with all necessary params for checkout
       return res.status(200).json({
         success: true,
         paymentUrl: data.data.authorization_url,
@@ -55,7 +63,19 @@ export default async function handler(req, res) {
         // Echo back the reference Paystack accepted so the client can verify it later
         reference: data.data.reference || reference,
         amount,
-        merchant: merchant || 'Valmont-Pay'
+        merchant: merchant || 'Valmont-Pay',
+        // Include checkout_url with all params so the client has everything it needs
+        data: {
+          reference: data.data.reference || reference,
+          amount,
+          merchant: merchant || 'Valmont-Pay',
+          callback_url: data.data.reference
+            ? `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(data.data.reference)}&amount=${encodeURIComponent(amount)}&email=${encodeURIComponent(email)}&merchant=${encodeURIComponent(merchant || 'Valmont-Pay')}`
+            : null,
+          checkout_url: data.data.reference
+            ? `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(data.data.reference)}&amount=${encodeURIComponent(amount)}&email=${encodeURIComponent(email)}&merchant=${encodeURIComponent(merchant || 'Valmont-Pay')}`
+            : data.data.authorization_url
+        }
       });
     }
 
