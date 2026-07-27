@@ -6,6 +6,17 @@ const { initializePayment, verifyPayment, generateReference } = require('./lib/p
 const ledger = require('./lib/ledger');
 const { handleWebhookEvent, toLedgerRecord } = require('./lib/webhook');
 
+// Supabase client for persisting test transactions
+let supabase = null;
+try {
+  const { createClient } = require('@supabase/supabase-js');
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+  }
+} catch (e) {
+  console.log('[SUPABASE] Not configured, test transactions will only be stored in memory');
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -122,12 +133,36 @@ app.post('/api/v1/transaction/charge', (req, res) => {
     declineReason = 'Invalid mobile money number. Please check and try again.';
   }
 
-  setTimeout(() => {
+  // Helper to persist transaction to Supabase (for dashboard visibility)
+  async function persistToSupabase(transactionData) {
+    if (!supabase) return;
+    try {
+      await supabase
+        .from('transactions')
+        .upsert({
+          reference: transactionData.reference,
+          customer_email: transactionData.customer,
+          amount: transactionData.amount,
+          payment_method: transactionData.channel,
+          status: transactionData.status,
+          merchant_name: transactionData.merchant,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'reference' });
+    } catch (err) {
+      console.error('[SUPABASE] Failed to persist transaction:', err.message);
+    }
+  }
+
+  setTimeout(async () => {
     if (!declineReason) {
       trx.status = 'SUCCESS';
       // The balance is derived from the ledger (sum of SUCCESS rows), so
       // flipping the status above is all it takes to settle the funds.
       console.log(`[SETTLEMENT] Trans Ref ${reference} CLEARED for GHS ${trx.amount}! New balance GHS ${ledger.getBalance()}.`);
+      
+      // Persist to Supabase so dashboard can see test transactions
+      await persistToSupabase(trx);
+      
       res.status(200).json({
         status: true,
         message: 'Charge successful',
@@ -138,6 +173,10 @@ app.post('/api/v1/transaction/charge', (req, res) => {
     } else {
       trx.status = 'FAILED';
       console.log(`[LEDGER] Trans Ref ${reference} DECLINED: ${declineReason}`);
+      
+      // Also persist failed transactions for record
+      await persistToSupabase(trx);
+      
       res.status(200).json({ status: false, message: declineReason, reference, trx_status: 'FAILED' });
     }
   }, 2000); // simulated USSD prompt delay
