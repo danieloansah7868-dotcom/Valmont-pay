@@ -9,9 +9,37 @@
 import crypto from 'node:crypto';
 import supabaseModule from '../lib/supabase.js';
 import transactionStore from '../lib/transaction-store.js';
+import webhookLog from '../lib/webhook-log.js';
 
 const { getSupabaseClient, supabaseConfigState } = supabaseModule;
 const { saveTransaction } = transactionStore;
+const { recordWebhookHit, completeWebhookHit } = webhookLog;
+
+/**
+ * Every log line from one request carries the same short id, so a single
+ * delivery can be followed end-to-end in the Vercel runtime logs even when
+ * several webhooks arrive at once.
+ */
+function newRequestId() {
+  return `wh_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/** Structured, greppable log line. Every step of the handler emits one. */
+function step(requestId, stage, message, data) {
+  const prefix = `[WEBHOOK ${requestId}] ${stage} — ${message}`;
+  if (data === undefined) console.log(prefix);
+  else console.log(prefix, typeof data === 'string' ? data : JSON.stringify(data, null, 2));
+}
+
+/** Same as step(), but for failures — always includes the full stack trace. */
+function failure(requestId, stage, message, error) {
+  console.error(`[WEBHOOK ${requestId}] ${stage} — ✗ ${message}`);
+  if (error) {
+    console.error(`[WEBHOOK ${requestId}] ${stage} — error name:`, error.name || 'unknown');
+    console.error(`[WEBHOOK ${requestId}] ${stage} — error message:`, error.message || String(error));
+    console.error(`[WEBHOOK ${requestId}] ${stage} — stack trace:\n`, error.stack || '(no stack available)');
+  }
+}
 
 /**
  * The secret Paystack signs webhooks with.
@@ -54,20 +82,77 @@ function getHeader(req, name) {
  * req.body, while production Vercel requests use the request stream.
  */
 async function readRawBody(req) {
-  if (Buffer.isBuffer(req.rawBody)) return req.rawBody;
-  if (typeof req.rawBody === 'string') return Buffer.from(req.rawBody, 'utf8');
-  if (Buffer.isBuffer(req.body)) return req.body;
-  if (typeof req.body === 'string') return Buffer.from(req.body, 'utf8');
+  return (await readRawBodyWithSource(req)).body;
+}
+
+/**
+ * Read the body AND report where it came from.
+ *
+ * `source` matters enormously when debugging a signature failure:
+ *
+ *   'stream'      — the untouched bytes Paystack sent. Signature MUST verify.
+ *   'raw-*'       — an adapter (our Express app) captured the exact bytes. Fine.
+ *   'reserialized'— something already parsed the JSON, so all we can do is
+ *                   JSON.stringify() it again. Key ORDER is preserved by V8 but
+ *                   WHITESPACE IS NOT, so if Paystack sent pretty-printed JSON
+ *                   the HMAC will not match no matter how correct the secret is.
+ *                   Seeing this source in the logs means the platform parsed the
+ *                   body despite `config.api.bodyParser = false`.
+ */
+async function readRawBodyWithSource(req) {
+  if (Buffer.isBuffer(req.rawBody)) return { body: req.rawBody, source: 'raw-buffer' };
+  if (typeof req.rawBody === 'string') return { body: Buffer.from(req.rawBody, 'utf8'), source: 'raw-string' };
+  if (Buffer.isBuffer(req.body)) return { body: req.body, source: 'body-buffer' };
+  if (typeof req.body === 'string') return { body: Buffer.from(req.body, 'utf8'), source: 'body-string' };
 
   if (req.body && typeof req.body === 'object') {
-    return Buffer.from(JSON.stringify(req.body), 'utf8');
+    return { body: Buffer.from(JSON.stringify(req.body), 'utf8'), source: 'reserialized' };
+  }
+
+  if (typeof req[Symbol.asyncIterator] !== 'function') {
+    return { body: Buffer.alloc(0), source: 'unavailable' };
   }
 
   const chunks = [];
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  return Buffer.concat(chunks);
+  return { body: Buffer.concat(chunks), source: 'stream' };
+}
+
+/**
+ * When the body had to be re-serialized we no longer hold Paystack's exact
+ * bytes, so try the handful of encodings a JSON producer realistically emits.
+ * If one of them matches, the payload IS authentic and we accept it rather than
+ * dropping a real payment over a whitespace difference.
+ *
+ * @returns {{valid:boolean, matchedVariant:(string|null), body:Buffer}}
+ */
+function verifyWithVariants(rawBody, signature, secret, parsedBody) {
+  if (verifySignature(rawBody, signature, secret)) {
+    return { valid: true, matchedVariant: 'exact', body: rawBody };
+  }
+
+  if (!parsedBody || typeof parsedBody !== 'object') {
+    return { valid: false, matchedVariant: null, body: rawBody };
+  }
+
+  const variants = [
+    ['compact', JSON.stringify(parsedBody)],
+    ['indent-2', JSON.stringify(parsedBody, null, 2)],
+    ['indent-4', JSON.stringify(parsedBody, null, 4)],
+    ['indent-tab', JSON.stringify(parsedBody, null, '\t')]
+  ];
+
+  for (const [name, text] of variants) {
+    const candidate = Buffer.from(text, 'utf8');
+    if (candidate.equals(rawBody)) continue;
+    if (verifySignature(candidate, signature, secret)) {
+      return { valid: true, matchedVariant: name, body: candidate };
+    }
+  }
+
+  return { valid: false, matchedVariant: null, body: rawBody };
 }
 
 /** Verify an HMAC SHA-512 signature without timing-sensitive string compares. */
@@ -160,132 +245,359 @@ function configurationState() {
  */
 export function createWebhookHandler({ supabaseClient } = {}) {
   return async function webhookHandler(req, res) {
+    const requestId = newRequestId();
+    const startedAt = Date.now();
+    let logEntry = null;
+
+    // ---------------------------------------------------------------- STEP 1
+    // A request arrived. Log this BEFORE anything can possibly throw, so the
+    // runtime log proves whether Paystack reached us at all.
+    console.log('════════════════════════════════════════════════════════');
+    step(requestId, 'STEP 1/9 RECEIVED', `${req.method} ${req.url || '/api/webhook'}`, {
+      method: req.method,
+      url: req.url || null,
+      timestamp: new Date().toISOString(),
+      remoteAddress:
+        getHeader(req, 'x-forwarded-for') ||
+        (req.socket && req.socket.remoteAddress) ||
+        null
+    });
+
     if (req.method !== 'POST') {
+      step(requestId, 'STEP 1/9 RECEIVED', `✗ rejected non-POST method: ${req.method}`);
+      recordWebhookHit({
+        endpoint: '/api/webhook',
+        method: req.method,
+        headers: req.headers,
+        body: '',
+        outcome: 'method-not-allowed',
+        statusCode: 405
+      });
       res.setHeader('Allow', 'POST');
+      console.log('════════════════════════════════════════════════════════');
       return res.status(405).json({ success: false, error: 'Method not allowed' });
     }
 
-    console.log('[WEBHOOK] POST request received', {
-      contentType: getHeader(req, 'content-type') || null,
-      userAgent: getHeader(req, 'user-agent') || null
-    });
+    /** Log the verdict, close out the ring-buffer entry, and respond. */
+    const finish = (statusCode, body, outcome, extra) => {
+      const durationMs = Date.now() - startedAt;
+      step(requestId, 'STEP 9/9 RESPONSE', `→ HTTP ${statusCode} (${outcome}) in ${durationMs}ms`, body);
+      completeWebhookHit(logEntry, {
+        outcome,
+        statusCode,
+        durationMs,
+        detail: { ...(logEntry && logEntry.detail), ...(extra || {}) }
+      });
+      console.log('════════════════════════════════════════════════════════');
+      return res.status(statusCode).json(body);
+    };
 
     try {
-      const rawBody = await readRawBody(req);
-      const rawBodyText = rawBody.toString('utf8');
-      console.log('[WEBHOOK] Request body:', rawBodyText);
-
-      const envState = configurationState();
-      console.log('[WEBHOOK] Environment configuration:', envState);
-
-      const signature = getHeader(req, 'x-paystack-signature');
-      const signatureIsValid = verifySignature(rawBody, signature, getWebhookSecret());
-      console.log('[WEBHOOK] Signature verification result:', {
-        valid: signatureIsValid,
-        signaturePresent: Boolean(signature),
-        secretConfigured: envState.webhookSecretConfigured,
-        secretSource: envState.webhookSecretSource
+      // -------------------------------------------------------------- STEP 2
+      // Headers. Paystack sends x-paystack-signature and a Paystack user-agent;
+      // their absence is itself a strong diagnostic signal.
+      const headers = req.headers || {};
+      step(requestId, 'STEP 2/9 HEADERS', 'full request headers', headers);
+      step(requestId, 'STEP 2/9 HEADERS', 'headers of interest', {
+        'content-type': getHeader(req, 'content-type') || null,
+        'content-length': getHeader(req, 'content-length') || null,
+        'user-agent': getHeader(req, 'user-agent') || null,
+        'x-paystack-signature': getHeader(req, 'x-paystack-signature') ? 'present' : 'MISSING',
+        'x-forwarded-for': getHeader(req, 'x-forwarded-for') || null,
+        host: getHeader(req, 'host') || null
       });
 
-      if (!envState.webhookSecretConfigured) {
-        console.error(
-          '[WEBHOOK] Error: no signing secret configured (set WEBHOOK_SECRET or PAYSTACK_SECRET_KEY)'
+      // -------------------------------------------------------------- STEP 3
+      // Raw body — the exact bytes the signature is computed over.
+      let rawBody;
+      let bodySource;
+      try {
+        const read = await readRawBodyWithSource(req);
+        rawBody = read.body;
+        bodySource = read.source;
+      } catch (error) {
+        failure(requestId, 'STEP 3/9 BODY', 'could not read the raw request body', error);
+        logEntry = recordWebhookHit({
+          endpoint: '/api/webhook',
+          method: req.method,
+          headers,
+          body: '',
+          outcome: 'body-read-failed'
+        });
+        return finish(
+          400,
+          { success: false, error: 'Could not read request body', message: error.message },
+          'body-read-failed'
         );
-        return res.status(500).json({
-          success: false,
-          error:
-            'Webhook is not configured: set WEBHOOK_SECRET (or PAYSTACK_SECRET_KEY, which Paystack signs with)'
+      }
+
+      const rawBodyText = rawBody.toString('utf8');
+      step(requestId, 'STEP 3/9 BODY', `read ${rawBody.length} raw byte(s) via "${bodySource}"`, {
+        bytes: rawBody.length,
+        source: bodySource,
+        contentLengthHeader: getHeader(req, 'content-length') || null,
+        empty: rawBody.length === 0
+      });
+      step(requestId, 'STEP 3/9 BODY', 'raw body', rawBodyText || '(empty)');
+
+      if (bodySource === 'reserialized') {
+        console.warn(
+          `[WEBHOOK ${requestId}] STEP 3/9 BODY — ⚠ the body was ALREADY PARSED before this handler ran, so these are ` +
+            're-serialized bytes, not Paystack\'s originals. If the content-length header above does not match the byte ' +
+            'count, the signature cannot match exactly and will be checked against re-encoding variants instead.'
+        );
+      }
+
+      if (rawBody.length === 0) {
+        failure(
+          requestId,
+          'STEP 3/9 BODY',
+          'the request body is EMPTY. Paystack never sends an empty webhook body — this is either a connectivity ' +
+            'probe, or a proxy/middleware consumed the body before the handler ran.'
+        );
+      }
+
+      logEntry = recordWebhookHit({
+        endpoint: '/api/webhook',
+        method: req.method,
+        headers,
+        body: rawBodyText,
+        outcome: 'processing'
+      });
+
+      // -------------------------------------------------------------- STEP 4
+      // Environment. A missing secret or missing Supabase config explains a
+      // silent failure far more often than anything in the payload does.
+      const envState = configurationState();
+      step(requestId, 'STEP 4/9 ENV', 'environment configuration', envState);
+
+      if (!envState.webhookSecretConfigured) {
+        failure(
+          requestId,
+          'STEP 4/9 ENV',
+          'no signing secret configured — set WEBHOOK_SECRET or PAYSTACK_SECRET_KEY in Vercel and redeploy'
+        );
+        return finish(
+          500,
+          {
+            success: false,
+            error:
+              'Webhook is not configured: set WEBHOOK_SECRET (or PAYSTACK_SECRET_KEY, which Paystack signs with)'
+          },
+          'missing-signing-secret'
+        );
+      }
+
+      // -------------------------------------------------------------- STEP 5
+      // Signature verification.
+      const signature = getHeader(req, 'x-paystack-signature');
+      const secret = getWebhookSecret();
+      const expectedSignature = crypto.createHmac('sha512', secret).update(rawBody).digest('hex');
+
+      // When the body arrived pre-parsed we may be hashing re-serialized bytes,
+      // so also try the common JSON encodings before rejecting a real payment.
+      let parsedForVariants = null;
+      if (bodySource === 'reserialized') {
+        try {
+          parsedForVariants = JSON.parse(rawBodyText);
+        } catch (_) {
+          parsedForVariants = null;
+        }
+      }
+
+      const verification = verifyWithVariants(rawBody, signature, secret, parsedForVariants);
+      const signatureIsValid = verification.valid;
+
+      if (verification.valid && verification.matchedVariant && verification.matchedVariant !== 'exact') {
+        console.warn(
+          `[WEBHOOK ${requestId}] STEP 5/9 SIGNATURE — ⚠ matched only after re-encoding the body as ` +
+            `"${verification.matchedVariant}". The payload is authentic, but the platform is parsing the body before ` +
+            'this function runs. Signature checking is therefore fragile here.'
+        );
+      }
+
+      step(requestId, 'STEP 5/9 SIGNATURE', `verification result: ${signatureIsValid ? '✓ VALID' : '✗ INVALID'}`, {
+        valid: signatureIsValid,
+        matchedVariant: verification.matchedVariant,
+        bodySource,
+        signaturePresent: Boolean(signature),
+        signatureLength: signature ? String(signature).length : 0,
+        // Comparing the first/last few characters is enough to tell "wrong
+        // secret" (totally different) from "wrong bytes hashed" — and it never
+        // reveals the secret itself.
+        receivedSignaturePreview: signature
+          ? `${String(signature).slice(0, 10)}…${String(signature).slice(-6)}`
+          : null,
+        expectedSignaturePreview: `${expectedSignature.slice(0, 10)}…${expectedSignature.slice(-6)}`,
+        secretSource: envState.webhookSecretSource,
+        secretLength: secret.length,
+        hashedByteCount: rawBody.length
+      });
+
+      if (!signatureIsValid) {
+        failure(
+          requestId,
+          'STEP 5/9 SIGNATURE',
+          signature
+            ? 'signature mismatch. Either the signing secret differs from the Paystack key that sent this event ' +
+                '(check WEBHOOK_SECRET vs PAYSTACK_SECRET_KEY, and Test vs Live mode), or the body was modified in transit.'
+            : 'no x-paystack-signature header was sent. A real Paystack webhook always includes one — this request ' +
+                'probably did not come from Paystack.'
+        );
+        return finish(400, { success: false, error: 'Invalid webhook signature' }, 'invalid-signature', {
+          signaturePresent: Boolean(signature)
         });
       }
 
-      if (!signatureIsValid) {
-        console.error('[WEBHOOK] Error: webhook signature verification failed');
-        return res.status(400).json({ success: false, error: 'Invalid webhook signature' });
-      }
-
+      // -------------------------------------------------------------- STEP 6
+      // Parse and validate the payload.
       let payload;
       try {
         payload = JSON.parse(rawBodyText);
       } catch (error) {
-        console.error('[WEBHOOK] Error parsing request body:', error);
-        return res.status(400).json({ success: false, error: 'Invalid JSON request body' });
+        failure(requestId, 'STEP 6/9 PAYLOAD', 'request body is not valid JSON', error);
+        return finish(400, { success: false, error: 'Invalid JSON request body' }, 'invalid-json');
       }
 
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-        console.error('[WEBHOOK] Error: request body is not a JSON object');
-        return res.status(400).json({ success: false, error: 'Invalid webhook payload' });
+        failure(requestId, 'STEP 6/9 PAYLOAD', 'request body parsed but is not a JSON object');
+        return finish(400, { success: false, error: 'Invalid webhook payload' }, 'invalid-payload');
       }
 
       const { event: eventName, data } = payload;
+      step(requestId, 'STEP 6/9 PAYLOAD', `event = ${eventName || '(none)'}`, {
+        event: eventName || null,
+        reference: (data && data.reference) || null,
+        amountSubunits: (data && data.amount) || null,
+        channel: (data && data.channel) || null,
+        status: (data && data.status) || null,
+        customerEmail: (data && ((data.customer && data.customer.email) || data.email)) || null
+      });
+
+      completeWebhookHit(logEntry, {
+        event: eventName || null,
+        reference: (data && data.reference) || null
+      });
+
+      // Paystack POSTs EVERY event type to the one webhook URL, so unknown
+      // events must be acknowledged with 200 — a non-2xx makes Paystack retry
+      // and eventually disable the endpoint.
       if (!['charge.success', 'charge.failed'].includes(eventName)) {
-        console.log('[WEBHOOK] Ignoring unsupported event:', eventName || 'unknown');
-        return res.status(200).json({
-          success: true,
-          received: true,
-          ignored: true,
-          event: eventName || null
-        });
+        step(
+          requestId,
+          'STEP 6/9 PAYLOAD',
+          `event "${eventName || 'unknown'}" is not handled — acknowledging with 200 so Paystack does not retry`
+        );
+        return finish(
+          200,
+          { success: true, received: true, ignored: true, event: eventName || null },
+          'ignored-event'
+        );
       }
 
       if (!data || typeof data !== 'object' || !data.reference) {
-        console.error('[WEBHOOK] Error: payload is missing transaction data/reference');
-        return res.status(400).json({
-          success: false,
-          error: 'Webhook payload is missing transaction data or reference'
-        });
+        failure(requestId, 'STEP 6/9 PAYLOAD', 'payload is missing data.reference');
+        return finish(
+          400,
+          { success: false, error: 'Webhook payload is missing transaction data or reference' },
+          'missing-reference'
+        );
       }
 
+      // -------------------------------------------------------------- STEP 7
+      // Map the Paystack payload onto our database columns.
       let transaction;
       try {
         transaction = transactionFromEvent(eventName, data);
+        step(requestId, 'STEP 7/9 MAP', 'mapped Paystack event to a transactions row', transaction);
       } catch (error) {
-        console.error('[WEBHOOK] Error mapping transaction:', error);
-        return res.status(400).json({ success: false, error: error.message });
+        failure(requestId, 'STEP 7/9 MAP', 'could not map the payload to a transaction row', error);
+        return finish(400, { success: false, error: error.message }, 'mapping-failed');
       }
 
+      // -------------------------------------------------------------- STEP 8
+      // Persist to Supabase.
       if (!envState.supabaseUrlConfigured || !envState.supabaseKeyConfigured) {
-        console.error('[WEBHOOK] Error: Supabase environment variables are not configured');
-        return res.status(500).json({
-          success: false,
-          error: 'Supabase is not configured: SUPABASE_URL and a Supabase key are required'
-        });
+        failure(
+          requestId,
+          'STEP 8/9 SUPABASE',
+          'Supabase environment variables are missing — the signature verified but there is nowhere to save the row. ' +
+            'Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel and redeploy.'
+        );
+        return finish(
+          500,
+          {
+            success: false,
+            error: 'Supabase is not configured: SUPABASE_URL and a Supabase key are required'
+          },
+          'supabase-not-configured'
+        );
       }
 
       const client = supabaseClient || getSupabaseClient();
       if (!client) {
-        console.error('[WEBHOOK] Error: Supabase client could not be initialized');
-        return res.status(500).json({
-          success: false,
-          error: 'Supabase client is not available'
-        });
+        failure(requestId, 'STEP 8/9 SUPABASE', 'Supabase client could not be initialized');
+        return finish(500, { success: false, error: 'Supabase client is not available' }, 'supabase-client-missing');
       }
+
+      step(requestId, 'STEP 8/9 SUPABASE', `upserting ${transaction.reference} into "transactions" (onConflict: reference)`, {
+        credentialType: envState.supabaseCredentialType
+      });
 
       // Same shared writer the dashboard checkout uses, so the webhook and the
       // checkout can never write different column shapes. Upserting by
       // reference also makes Paystack's retries idempotent.
-      const persistence = await saveTransaction(transaction, {
-        client,
-        context: 'WEBHOOK'
+      let persistence;
+      try {
+        persistence = await saveTransaction(transaction, { client, context: `WEBHOOK ${requestId}` });
+      } catch (error) {
+        failure(requestId, 'STEP 8/9 SUPABASE', 'the Supabase write threw an exception', error);
+        return finish(
+          500,
+          { success: false, error: 'Failed to save transaction', message: error.message },
+          'supabase-exception'
+        );
+      }
+
+      step(requestId, 'STEP 8/9 SUPABASE', `insert result: ${persistence.ok ? '✓ SAVED' : '✗ REJECTED'}`, {
+        ok: persistence.ok,
+        skipped: persistence.skipped,
+        reason: persistence.reason,
+        returnedRow: persistence.data || null,
+        error: persistence.error || null
       });
 
       if (!persistence.ok) {
-        console.error('[WEBHOOK] Supabase write error:', persistence.error);
-        return res.status(500).json({
-          success: false,
-          error: 'Failed to save transaction',
-          message: persistence.reason
-        });
+        failure(
+          requestId,
+          'STEP 8/9 SUPABASE',
+          `Supabase rejected the write: ${persistence.reason}. Common causes: Row Level Security blocking the anon ` +
+            'key (use SUPABASE_SERVICE_ROLE_KEY), a column that does not exist, or a type mismatch.'
+        );
+        return finish(
+          500,
+          { success: false, error: 'Failed to save transaction', message: persistence.reason },
+          'supabase-write-failed',
+          { supabaseError: persistence.error || null }
+        );
       }
 
-      console.log('[WEBHOOK] Transaction saved successfully:', transaction.reference);
-      return res.status(200).json({
-        success: true,
-        received: true,
-        reference: transaction.reference,
-        transaction: persistence.data || transaction
-      });
+      // -------------------------------------------------------------- STEP 9
+      step(requestId, 'STEP 8/9 SUPABASE', `✓ transaction ${transaction.reference} is now in the database`);
+      return finish(
+        200,
+        {
+          success: true,
+          received: true,
+          reference: transaction.reference,
+          transaction: persistence.data || transaction
+        },
+        'saved'
+      );
     } catch (error) {
-      console.error('[WEBHOOK] Unhandled error:', error);
+      failure(requestId, 'UNHANDLED', 'an unexpected error escaped the handler', error);
+      completeWebhookHit(logEntry, { outcome: 'unhandled-error', statusCode: 500 });
+      console.log('════════════════════════════════════════════════════════');
       return res.status(500).json({
         success: false,
         error: 'Internal webhook error',

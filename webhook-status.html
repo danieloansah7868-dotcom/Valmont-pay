@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valmont-Pay — Webhook Diagnostics</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #050d24;
+      --panel: #0b1a38;
+      --border: #142850;
+      --orange: #f68b1e;
+      --green: #1fbf75;
+      --amber: #e0a11b;
+      --red: #e5484d;
+      --muted: #8b9ab5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: #fff;
+      margin: 0;
+      min-height: 100vh;
+    }
+    header {
+      background: var(--panel);
+      padding: 16px 24px;
+      border-bottom: 1px solid rgba(255,255,255,.1);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    header img { height: 36px; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 22px; font-weight: 900; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .panel h2 {
+      font-size: 11px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+      color: var(--orange);
+      margin: 0 0 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .btn {
+      background: var(--orange);
+      color: #fff;
+      border: none;
+      padding: 9px 16px;
+      border-radius: 5px;
+      font-weight: 800;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      cursor: pointer;
+      transition: filter .15s;
+    }
+    .btn:hover { filter: brightness(1.12); }
+    .btn.ghost { background: transparent; border: 1px solid var(--orange); color: var(--orange); }
+    .btn:disabled { opacity: .5; cursor: progress; }
+    .verdict {
+      display: flex; align-items: center; gap: 14px;
+      padding: 16px; border-radius: 8px; margin-bottom: 20px;
+      border: 1px solid var(--border); background: var(--panel);
+    }
+    .verdict .dot { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; }
+    .verdict strong { display: block; font-size: 15px; }
+    .verdict span { color: var(--muted); font-size: 12.5px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+    .kv {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 12px;
+    }
+    .kv .k {
+      font-size: 9.5px; text-transform: uppercase; letter-spacing: .1em;
+      color: var(--muted); font-weight: 800; display: block; margin-bottom: 6px;
+    }
+    .kv .v { font-size: 13px; font-weight: 700; word-break: break-all; }
+    .kv .note { font-size: 11px; color: var(--muted); margin-top: 5px; font-weight: 400; line-height: 1.45; }
+    .pill {
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: 9.5px; font-weight: 900; text-transform: uppercase; letter-spacing: .07em;
+    }
+    .pill.pass { background: rgba(31,191,117,.15); color: var(--green); border: 1px solid rgba(31,191,117,.35); }
+    .pill.warn { background: rgba(224,161,27,.15); color: var(--amber); border: 1px solid rgba(224,161,27,.35); }
+    .pill.fail { background: rgba(229,72,77,.15); color: var(--red); border: 1px solid rgba(229,72,77,.35); }
+    .pill.unknown { background: rgba(139,154,181,.15); color: var(--muted); border: 1px solid rgba(139,154,181,.3); }
+    .check {
+      display: flex; gap: 12px; padding: 13px 0;
+      border-bottom: 1px solid rgba(20,40,80,.55);
+    }
+    .check:last-child { border-bottom: none; }
+    .check .body { flex: 1; min-width: 0; }
+    .check .label { font-size: 13.5px; font-weight: 700; margin-bottom: 4px; }
+    .check .detail { font-size: 12px; color: #c3cede; line-height: 1.55; }
+    .check .fix {
+      font-size: 12px; color: var(--amber); line-height: 1.55;
+      margin-top: 6px; padding-left: 10px; border-left: 2px solid rgba(224,161,27,.45);
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th {
+      text-align: left; font-size: 9.5px; text-transform: uppercase; letter-spacing: .1em;
+      color: var(--muted); padding: 8px; border-bottom: 1px solid var(--border);
+    }
+    td { padding: 9px 8px; border-bottom: 1px solid rgba(20,40,80,.5); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    code, pre {
+      font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+      font-size: 11.5px;
+    }
+    pre {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      padding: 12px; overflow: auto; max-height: 260px; color: #b9d4ff; margin: 0;
+    }
+    .empty { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+    details { margin-top: 10px; }
+    summary { cursor: pointer; font-size: 12px; color: var(--orange); font-weight: 700; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .foot { color: var(--muted); font-size: 11px; text-align: center; padding: 0 24px 28px; }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="/logo.svg" alt="Valmont Pay">
+    <div class="row">
+      <button class="btn ghost" id="testBtn">Send test POST</button>
+      <button class="btn" id="refreshBtn">Refresh</button>
+    </div>
+  </header>
+
+  <main>
+    <h1>Webhook Diagnostics</h1>
+    <p class="sub" id="generatedAt">Loading diagnostics…</p>
+
+    <div class="verdict" id="verdict">
+      <div class="dot" style="background: var(--muted)"></div>
+      <div><strong>Checking…</strong><span>Contacting /api/webhook-status</span></div>
+    </div>
+
+    <section class="panel">
+      <h2>Current webhook configuration</h2>
+      <div class="grid" id="configGrid"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Configuration checklist</h2>
+      <div id="checks"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Environment variables (status only — values are never exposed)</h2>
+      <div class="grid" id="envGrid"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Last 10 Paystack transactions vs. our database</h2>
+      <p class="empty" id="deliveriesNote"></p>
+      <div id="deliveries"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Inbound requests seen by this server instance</h2>
+      <p class="empty" id="hitsNote"></p>
+      <div id="hits"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Test result</h2>
+      <p class="empty" id="testNote">Press “Send test POST” to POST a sample payload to /api/test-webhook and confirm this deployment can receive POST requests at all.</p>
+      <pre id="testOutput" hidden></pre>
+    </section>
+  </main>
+
+  <p class="foot">Valmont-Pay · diagnostics are read-only and never display secret values.</p>
+
+  <script>
+    const $ = id => document.getElementById(id);
+
+    function esc(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function pill(status) {
+      const label = { pass: 'PASS', warn: 'WARN', fail: 'FAIL', unknown: 'UNKNOWN' }[status] || 'UNKNOWN';
+      return `<span class="pill ${esc(status || 'unknown')}">${label}</span>`;
+    }
+
+    function yesNo(value) {
+      if (value === true) return '<span class="pill pass">SET</span>';
+      if (value === false) return '<span class="pill fail">MISSING</span>';
+      return '<span class="pill unknown">UNKNOWN</span>';
+    }
+
+    function card(key, valueHtml, note) {
+      return `<div class="kv">
+        <span class="k">${esc(key)}</span>
+        <div class="v">${valueHtml}</div>
+        ${note ? `<div class="note">${esc(note)}</div>` : ''}
+      </div>`;
+    }
+
+    function renderVerdict(data) {
+      const summary = data.summary || {};
+      const failed = summary.failures || 0;
+      const warned = summary.warnings || 0;
+      const colour = failed ? 'var(--red)' : warned ? 'var(--amber)' : 'var(--green)';
+      const title = failed
+        ? `${failed} blocking issue${failed === 1 ? '' : 's'} found`
+        : warned
+          ? `Configuration is usable, with ${warned} warning${warned === 1 ? '' : 's'}`
+          : 'Configuration looks correct';
+      const detail = failed
+        ? summary.blockingIssues.join(' · ')
+        : 'Signature verification and database writes should both work. If events still do not arrive, the problem is on the Paystack side (wrong URL, or the URL saved under the other mode).';
+
+      $('verdict').innerHTML = `
+        <div class="dot" style="background:${colour}"></div>
+        <div><strong>${esc(title)}</strong><span>${esc(detail)}</span></div>`;
+    }
+
+    function renderConfig(data) {
+      const cfg = data.webhookConfiguration || {};
+      const dep = data.deployment || {};
+      const mode = cfg.paystackMode;
+      const modeHtml = mode === 'test'
+        ? '<span class="pill warn">TEST MODE</span>'
+        : mode === 'live'
+          ? '<span class="pill pass">LIVE MODE</span>'
+          : '<span class="pill unknown">' + esc(mode || 'unknown') + '</span>';
+
+      $('configGrid').innerHTML = [
+        card('Webhook URL to save in Paystack', `<code>${esc(cfg.canonicalUrl)}</code>`,
+          'Paste this exactly — no trailing slash, https only.'),
+        card('This deployment answers at', cfg.liveUrl ? `<code>${esc(cfg.liveUrl)}</code>` : '—',
+          cfg.liveUrl === cfg.canonicalUrl
+            ? 'Matches the canonical URL.'
+            : 'Differs from the canonical URL — a preview deployment will not receive production webhooks.'),
+        card('Paystack key mode', modeHtml,
+          'Test and Live mode have separate webhook URLs and separate secret keys in the Paystack dashboard.'),
+        card('Signing secret source', `<code>${esc(cfg.signingSecretSource || 'none')}</code>`,
+          'Paystack signs with your secret key, so PAYSTACK_SECRET_KEY is the correct source.'),
+        card('Signature scheme', `<code>${esc(cfg.signatureHeader)}</code>`, esc(cfg.signatureAlgorithm)),
+        card('Handled events', (cfg.handledEvents || []).map(e => `<code>${esc(e)}</code>`).join(' '),
+          'All other events are acknowledged with 200 so Paystack does not retry or disable the endpoint.'),
+        card('Test endpoint', `<code>${esc(cfg.testEndpointUrl)}</code>`,
+          'Accepts any POST, logs everything, always returns 200.'),
+        card('Environment', `${esc(dep.vercelEnv || 'local')}${dep.commit ? ' · ' + esc(dep.commit) : ''}`,
+          `Node ${dep.nodeVersion || '?'}${dep.vercelRegion ? ' · ' + dep.vercelRegion : ''}`)
+      ].join('');
+    }
+
+    function renderChecks(data) {
+      $('checks').innerHTML = (data.checks || []).map(check => `
+        <div class="check">
+          <div>${pill(check.status)}</div>
+          <div class="body">
+            <div class="label">${esc(check.label)}</div>
+            <div class="detail">${esc(check.detail)}</div>
+            ${check.fix ? `<div class="fix"><strong>Fix:</strong> ${esc(check.fix)}</div>` : ''}
+            ${check.fingerprints ? `<details><summary>Secret fingerprints (SHA-256, truncated)</summary>
+              <pre>${esc(JSON.stringify(check.fingerprints, null, 2))}</pre></details>` : ''}
+          </div>
+        </div>`).join('');
+    }
+
+    function renderEnv(data) {
+      const env = data.environment || {};
+      $('envGrid').innerHTML = Object.entries(env).map(([name, info]) => {
+        const bits = [];
+        if (info.length) bits.push(`length ${info.length}`);
+        if (info.prefix) bits.push(`starts ${info.prefix}`);
+        if (info.fingerprint) bits.push(`fp ${info.fingerprint}`);
+        if (info.host) bits.push(info.host);
+        if (info.value) bits.push(info.value);
+        if (info.mode) bits.push(`mode ${info.mode}`);
+        return card(name, yesNo(info.configured), [bits.join(' · '), info.note].filter(Boolean).join(' — '));
+      }).join('');
+    }
+
+    function renderDeliveries(data) {
+      const info = data.paystackDeliveries || {};
+      if (!info.available) {
+        $('deliveriesNote').textContent =
+          'Paystack does not expose webhook delivery logs over its API, so this panel lists recent Paystack ' +
+          'transactions instead and flags any that never reached our database. ' + (info.reason || '');
+        $('deliveries').innerHTML = '';
+        return;
+      }
+
+      $('deliveriesNote').textContent =
+        `Paystack does not expose webhook delivery logs over its API, so these are the ${info.count} most recent ` +
+        'Paystack transactions, each checked against our transactions table. A successful charge marked MISSING is ' +
+        'proof the webhook did not land.' + (info.lookupError ? ' Lookup warning: ' + info.lookupError : '');
+
+      if (!info.deliveries.length) {
+        $('deliveries').innerHTML = '<p class="empty">Paystack has no transactions on this key yet.</p>';
+        return;
+      }
+
+      const verdictPill = verdict => ({
+        delivered: '<span class="pill pass">SAVED</span>',
+        missing: '<span class="pill fail">MISSING</span>',
+        'not-expected': '<span class="pill unknown">N/A</span>'
+      }[verdict] || '<span class="pill unknown">UNKNOWN</span>');
+
+      $('deliveries').innerHTML = `<table>
+        <thead><tr>
+          <th>Reference</th><th>Paystack</th><th>Amount</th><th>Channel</th><th>When</th><th>In our DB</th>
+        </tr></thead>
+        <tbody>${info.deliveries.map(d => `<tr>
+          <td><code>${esc(d.reference)}</code></td>
+          <td>${esc(d.paystackStatus || '—')}</td>
+          <td>${d.amount == null ? '—' : esc(d.currency + ' ' + d.amount.toFixed(2))}</td>
+          <td>${esc(d.channel || '—')}</td>
+          <td>${esc((d.paidAt || d.createdAt || '').replace('T', ' ').slice(0, 19) || '—')}</td>
+          <td>${verdictPill(d.webhookVerdict)}</td>
+        </tr>`).join('')}</tbody></table>`;
+    }
+
+    function renderHits(data) {
+      const info = data.recentInboundRequests || {};
+      $('hitsNote').textContent = info.note || '';
+
+      if (!info.hits || !info.hits.length) {
+        $('hits').innerHTML = '<p class="empty">No webhook request has reached this instance yet. ' +
+          'Serverless instances are recycled constantly, so this is inconclusive on its own — ' +
+          'cross-check against the Vercel runtime logs.</p>';
+        return;
+      }
+
+      $('hits').innerHTML = info.hits.map(hit => `
+        <details>
+          <summary>${esc(hit.receivedAt)} · ${esc(hit.method)} ${esc(hit.endpoint)} · ${esc(hit.outcome || 'unknown')} ${hit.statusCode ? '· HTTP ' + esc(hit.statusCode) : ''}</summary>
+          <pre>${esc(JSON.stringify(hit, null, 2))}</pre>
+        </details>`).join('');
+    }
+
+    async function load() {
+      $('refreshBtn').disabled = true;
+      try {
+        const res = await fetch('/api/webhook-status', { headers: { 'Cache-Control': 'no-cache' } });
+        const data = await res.json();
+        if (!data || data.success === false) throw new Error(data && data.message ? data.message : 'Diagnostics failed');
+
+        $('generatedAt').textContent = 'Generated ' + new Date(data.generatedAt).toLocaleString() +
+          ' · ' + (data.deployment && data.deployment.origin ? data.deployment.origin : 'unknown origin');
+
+        renderVerdict(data);
+        renderConfig(data);
+        renderChecks(data);
+        renderEnv(data);
+        renderDeliveries(data);
+        renderHits(data);
+      } catch (error) {
+        $('verdict').innerHTML = `<div class="dot" style="background:var(--red)"></div>
+          <div><strong>Could not load diagnostics</strong><span>${esc(error.message)}</span></div>`;
+      } finally {
+        $('refreshBtn').disabled = false;
+      }
+    }
+
+    async function sendTest() {
+      const btn = $('testBtn');
+      btn.disabled = true;
+      $('testNote').textContent = 'Posting to /api/test-webhook…';
+      $('testOutput').hidden = true;
+
+      const payload = {
+        event: 'charge.success',
+        sentBy: 'webhook-status.html',
+        sentAt: new Date().toISOString(),
+        data: { reference: 'VP-BROWSER-TEST-' + Date.now().toString(36).toUpperCase(), amount: 5000 }
+      };
+
+      try {
+        const res = await fetch('/api/test-webhook', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const text = await res.text();
+        $('testNote').textContent = res.ok
+          ? `✓ HTTP ${res.status} — this deployment CAN receive POST requests. If Paystack still sends nothing, the problem is the URL or mode saved in the Paystack dashboard.`
+          : `✗ HTTP ${res.status} — the endpoint rejected the POST. Check the routing in vercel.json.`;
+        $('testOutput').textContent = text;
+        $('testOutput').hidden = false;
+        load();
+      } catch (error) {
+        $('testNote').textContent = '✗ Request failed: ' + error.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    $('refreshBtn').addEventListener('click', load);
+    $('testBtn').addEventListener('click', sendTest);
+    load();
+    setInterval(load, 30000);
+  </script>
+</body>
+</html>

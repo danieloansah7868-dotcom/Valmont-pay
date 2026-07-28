@@ -133,6 +133,105 @@ dashboard checkout uses.
 > **Amounts:** Paystack works in the smallest currency unit, so `GH₵ 50` is sent as `5000`.
 > The conversion (with correct rounding) lives in `lib/paystack.js` and is applied in one place only.
 
+---
+
+## 🔍 Debugging: "the webhook isn't receiving events"
+
+Three tools, meant to be used in this order. Each one eliminates a different
+layer, so you always learn *where* the chain breaks instead of guessing.
+
+### 1. `/webhook-status.html` — start here
+
+A diagnostic page that answers, without exposing a single secret value:
+
+* **Current webhook configuration** — the exact URL to paste into Paystack, the
+  URL this deployment actually answers at, the signing-secret source, and
+  whether the key is **Test** (`sk_test_…`) or **Live** (`sk_live_…`).
+* **Configuration checklist** — every common misconfiguration as pass / warn /
+  fail *with the fix*, including "is `WEBHOOK_SECRET` the same as
+  `PAYSTACK_SECRET_KEY`?" (compared via SHA-256 fingerprints, never values).
+* **Environment variable status** — set / missing, length, prefix and
+  fingerprint only. The offline test asserts that no secret value can ever
+  appear in the response.
+* **Last 10 Paystack transactions vs. our database.** Paystack does **not**
+  expose webhook delivery logs over its API, so the page does the honest
+  equivalent: it lists recent Paystack transactions and flags any successful
+  charge that never reached the `transactions` table. A row marked **MISSING**
+  is proof the webhook did not land.
+* **Inbound requests seen by this instance** — with full headers and bodies.
+
+JSON version: `GET /api/webhook-status` (add `?paystack=0` to skip the outbound
+Paystack call).
+
+### 2. `/api/test-webhook` — can a POST reach us at all?
+
+The dumbest possible receiver: no signature check, no database, no validation,
+**always 200**. It logs the full headers and body and can never be the thing
+that fails, so a failure here means the request never arrived.
+
+```bash
+curl -i -X POST https://valmont-pay.vercel.app/api/test-webhook \
+  -H 'Content-Type: application/json' \
+  -d '{"event":"charge.success","data":{"reference":"TEST-1"}}'
+```
+
+`200` here but nothing in `/api/webhook` ⇒ the network path is fine and the
+problem is **Paystack's configuration** (wrong URL, or saved under the other
+mode), not the code.
+
+### 3. `/api/webhook` logs — nine numbered steps
+
+Every delivery is tagged with a short request id (`wh_abc123`) so one webhook
+can be followed end-to-end in the Vercel runtime logs even when several arrive
+at once:
+
+| Step | Logs |
+|---|---|
+| 1 RECEIVED | method, URL, timestamp, caller IP |
+| 2 HEADERS | every header, then the ones that matter |
+| 3 BODY | byte count, **where the bytes came from**, and the raw body |
+| 4 ENV | which secrets and Supabase credentials are present |
+| 5 SIGNATURE | valid/invalid, plus received vs expected signature previews |
+| 6 PAYLOAD | event name, reference, amount, channel, customer |
+| 7 MAP | the exact row about to be written |
+| 8 SUPABASE | the upsert result, or the rejection reason |
+| 9 RESPONSE | status code, outcome label and duration |
+
+Errors log `error.name`, `error.message` and the **full stack trace**.
+
+Step 3 also detects a subtle platform bug: if the body arrives **already
+parsed**, the raw bytes are gone and the HMAC is computed over re-serialized
+JSON, which fails on whitespace alone. When that happens the handler warns
+loudly and retries verification against the common JSON encodings, so an
+authentic payment is not dropped over formatting.
+
+### Checklist that actually matters
+
+| Question | Answer |
+|---|---|
+| Should `WEBHOOK_SECRET` equal `PAYSTACK_SECRET_KEY`? | **Leave `WEBHOOK_SECRET` unset.** Paystack signs with the secret key. If it *is* set and differs, every event is rejected with `400`. |
+| Webhook URL | Exactly `https://valmont-pay.vercel.app/api/webhook` — https, no trailing slash. Preview deployment URLs never receive production webhooks. |
+| Test vs Live mode | Each mode has its **own** webhook URL field and its **own** secret key. An `sk_test_` deployment only ever receives Test Mode events. |
+| `charge.success` / `charge.failed` | Paystack has no per-event subscription UI — it POSTs **every** event to your one URL. This handler processes those two and returns `200 (ignored)` for the rest, so Paystack never retries or disables the endpoint. |
+
+### "Send test webhook" from Paystack
+
+Paystack's dashboard does not offer a generic "send test webhook" button. The
+supported way to fire a **real, correctly signed** event is to complete a test
+payment in Test Mode (card `4084 0840 8408 4081`, any future expiry, CVV `408`),
+which triggers a genuine `charge.success`. Paystack also exposes per-transaction
+delivery attempts under **Transactions → (a transaction) → Webhook**, where
+failed deliveries can be **retried**.
+
+For a signed request without involving Paystack:
+
+```bash
+BODY='{"event":"charge.success","data":{"reference":"VP-MANUAL-1","amount":5000,"channel":"card","customer":{"email":"t@example.com"}}}'
+SIG=$(node -e "console.log(require('crypto').createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(process.argv[1]).digest('hex'))" "$BODY")
+curl -i -X POST https://valmont-pay.vercel.app/api/webhook \
+  -H 'Content-Type: application/json' -H "x-paystack-signature: $SIG" -d "$BODY"
+```
+
 Run the offline test suite (stubs the network, no secret key needed):
 
 ```bash

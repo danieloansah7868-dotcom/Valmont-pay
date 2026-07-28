@@ -7,6 +7,8 @@ const ledger = require('./lib/ledger');
 const { handleWebhookEvent, toLedgerRecord } = require('./lib/webhook');
 const { isSupabaseConfigured, supabaseConfigState, getSupabaseClient } = require('./lib/supabase');
 const transactionStore = require('./lib/transaction-store');
+const webhookLog = require('./lib/webhook-log');
+const webhookDiagnostics = require('./lib/webhook-diagnostics');
 
 // Vercel runs the dashboard checkout (POST /api/v1/transaction/charge) in a
 // serverless function whose memory disappears between requests, so a payment
@@ -468,7 +470,54 @@ app.get('/api/health', (req, res) => {
 // API 6: Paystack webhook — the source of truth for real payments.
 // Point your Paystack dashboard webhook URL at https://<your-domain>/api/webhook
 app.post('/api/webhook', async (req, res) => {
-  const result = handleWebhookEvent(req.body, req.headers['x-paystack-signature'], req.rawBody);
+  const requestId = `wh_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const startedAt = Date.now();
+  const rawBody = typeof req.rawBody === 'string' ? req.rawBody : JSON.stringify(req.body || {});
+  const signature = req.headers['x-paystack-signature'];
+
+  console.log('========================================');
+  console.log(`[WEBHOOK ${requestId}] STEP 1/6 RECEIVED — POST ${req.originalUrl} at ${new Date().toISOString()}`);
+  console.log(`[WEBHOOK ${requestId}] STEP 2/6 HEADERS —`, JSON.stringify(req.headers, null, 2));
+  console.log(`[WEBHOOK ${requestId}] STEP 3/6 BODY — ${Buffer.byteLength(rawBody, 'utf8')} byte(s):`, rawBody || '(empty)');
+  console.log(`[WEBHOOK ${requestId}] STEP 4/6 ENV —`, JSON.stringify({
+    signingSecretConfigured: Boolean(process.env.WEBHOOK_SECRET || process.env.PAYSTACK_SECRET_KEY),
+    signingSecretSource: process.env.WEBHOOK_SECRET ? 'WEBHOOK_SECRET'
+      : process.env.PAYSTACK_SECRET_KEY ? 'PAYSTACK_SECRET_KEY' : null,
+    supabase: supabaseConfigState()
+  }, null, 2));
+
+  const logEntry = webhookLog.recordWebhookHit({
+    endpoint: '/api/webhook',
+    method: req.method,
+    headers: req.headers,
+    body: rawBody,
+    event: req.body && req.body.event ? String(req.body.event) : null,
+    reference: req.body && req.body.data && req.body.data.reference ? String(req.body.data.reference) : null,
+    outcome: 'processing'
+  });
+
+  let result;
+  try {
+    result = handleWebhookEvent(req.body, signature, req.rawBody);
+  } catch (error) {
+    console.error(`[WEBHOOK ${requestId}] UNHANDLED — ✗ handler threw:`, error.message);
+    console.error(`[WEBHOOK ${requestId}] UNHANDLED — stack trace:\n`, error.stack);
+    webhookLog.completeWebhookHit(logEntry, { outcome: 'unhandled-error', statusCode: 500 });
+    console.log('========================================');
+    return res.status(500).json({ status: false, message: 'Internal webhook error', error: error.message });
+  }
+
+  const signatureAccepted = result.statusCode !== 401;
+  console.log(`[WEBHOOK ${requestId}] STEP 5/6 SIGNATURE — ${signatureAccepted ? '✓ accepted' : '✗ REJECTED'}`, JSON.stringify({
+    signaturePresent: Boolean(signature),
+    signatureLength: signature ? String(signature).length : 0,
+    handlerStatus: result.statusCode
+  }, null, 2));
+
+  if (!signatureAccepted) {
+    console.error(`[WEBHOOK ${requestId}] STEP 5/6 SIGNATURE — ✗ signature mismatch. Check that WEBHOOK_SECRET (if set) equals PAYSTACK_SECRET_KEY, and that the key mode (test/live) matches the Paystack dashboard mode that sent this event.`);
+  }
+
 
   // CRITICAL FIX: also persist the webhook event to Supabase so the dashboard
   // can display it. Without this, webhook events only go to the in-memory
@@ -489,15 +538,112 @@ app.post('/api/webhook', async (req, res) => {
         },
         { client, context: 'WEBHOOK' }
       );
-      if (persistence.ok) {
-        console.log(`[WEBHOOK] Persisted to Supabase: ${record.reference}`);
-      } else {
-        console.error(`[WEBHOOK] Failed to persist to Supabase: ${record.reference}`, persistence.reason);
+      console.log(`[WEBHOOK ${requestId}] STEP 6/6 SUPABASE — insert result: ${persistence.ok ? '✓ SAVED' : '✗ REJECTED'}`, JSON.stringify({
+        ok: persistence.ok,
+        reason: persistence.reason,
+        returnedRow: persistence.data || null,
+        error: persistence.error || null
+      }, null, 2));
+
+      if (!persistence.ok) {
+        console.error(`[WEBHOOK ${requestId}] STEP 6/6 SUPABASE — ✗ Supabase rejected ${record.reference}: ${persistence.reason}. Common causes: Row Level Security blocking the anon key (use SUPABASE_SERVICE_ROLE_KEY), a missing column, or a type mismatch.`);
       }
     }
+  } else if (result.statusCode === 200) {
+    console.log(`[WEBHOOK ${requestId}] STEP 6/6 SUPABASE — skipped (no transaction to save, or Supabase is not configured)`);
   }
 
+  console.log(`[WEBHOOK ${requestId}] RESPONSE — → HTTP ${result.statusCode} in ${Date.now() - startedAt}ms`, JSON.stringify(result.body, null, 2));
+  webhookLog.completeWebhookHit(logEntry, {
+    statusCode: result.statusCode,
+    outcome: result.statusCode === 200 ? 'saved' : result.statusCode === 401 ? 'invalid-signature' : 'rejected',
+    durationMs: Date.now() - startedAt
+  });
+  console.log('========================================');
+
   return res.status(result.statusCode).json(result.body);
+});
+
+// API 6a-i: /api/test-webhook — the dumbest possible POST receiver.
+// No signature check, no database, no validation: it exists purely to prove
+// that an HTTP POST from the outside world can reach this deployment.
+app.all('/api/test-webhook', (req, res) => {
+  const receivedAt = new Date().toISOString();
+
+  console.log('========================================');
+  console.log(`[TEST-WEBHOOK] ${req.method} request received at ${receivedAt}`);
+  console.log('[TEST-WEBHOOK] URL:', req.originalUrl);
+  console.log('[TEST-WEBHOOK] Headers:', JSON.stringify(req.headers, null, 2));
+
+  if (req.method === 'GET') {
+    console.log('[TEST-WEBHOOK] GET probe — endpoint is reachable');
+    console.log('========================================');
+    return res.status(200).json({
+      success: true,
+      message: 'Test webhook endpoint is alive. POST here to log a request body.',
+      method: 'GET',
+      receivedAt
+    });
+  }
+
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'GET, POST');
+    console.log('[TEST-WEBHOOK] Rejected method:', req.method);
+    console.log('========================================');
+    return res.status(405).json({ success: false, error: 'Method not allowed', method: req.method });
+  }
+
+  const rawBody = typeof req.rawBody === 'string' ? req.rawBody : JSON.stringify(req.body || {});
+  console.log('[TEST-WEBHOOK] Body bytes:', Buffer.byteLength(rawBody, 'utf8'));
+  console.log('[TEST-WEBHOOK] Raw body:', rawBody || '(empty)');
+  console.log('[TEST-WEBHOOK] Parsed body:', JSON.stringify(req.body || null, null, 2));
+  console.log('[TEST-WEBHOOK] x-paystack-signature present:', Boolean(req.headers['x-paystack-signature']));
+  console.log('========================================');
+
+  webhookLog.recordWebhookHit({
+    endpoint: '/api/test-webhook',
+    method: req.method,
+    headers: req.headers,
+    body: rawBody,
+    event: req.body && req.body.event ? String(req.body.event) : null,
+    reference: req.body && req.body.data && req.body.data.reference ? String(req.body.data.reference) : null,
+    outcome: 'test-endpoint-ok',
+    statusCode: 200
+  });
+
+  // ALWAYS 200 — this endpoint must never be the thing that fails.
+  return res.status(200).json({
+    success: true,
+    received: true,
+    message: 'Test webhook received. Check the server logs for the full dump.',
+    receivedAt,
+    method: req.method,
+    signaturePresent: Boolean(req.headers['x-paystack-signature']),
+    bodyBytes: Buffer.byteLength(rawBody, 'utf8'),
+    body: req.body ?? null,
+    headers: req.headers
+  });
+});
+
+// API 6a-ii: /api/webhook-status — JSON behind /webhook-status.html.
+// Reports configuration, env-var STATUS (never values), the misconfiguration
+// checklist, observed inbound requests, and recent Paystack transactions
+// cross-referenced against our own table.
+app.get('/api/webhook-status', async (req, res) => {
+  try {
+    const payload = await webhookDiagnostics.buildDiagnostics(req, {
+      includePaystack: req.query.paystack !== '0'
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.status(200).json(payload);
+  } catch (error) {
+    console.error('[WEBHOOK-STATUS] Failed to build diagnostics:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to build webhook diagnostics',
+      message: error.message
+    });
+  }
 });
 
 // API 6b: Webhook diagnostic endpoint — GET/POST /api/webhook-debug
@@ -695,6 +841,11 @@ app.get('/admin-login.html', (req, res) => {
 
 app.get('/pay.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'pay.html'));
+});
+
+// Webhook diagnostic page (also reachable as /webhook-status.html via static).
+app.get('/webhook-status', (req, res) => {
+  res.sendFile(path.join(__dirname, 'webhook-status.html'));
 });
 
 // Start the Payment Gateway server
