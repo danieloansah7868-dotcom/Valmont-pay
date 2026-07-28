@@ -5,8 +5,12 @@ const { initializePayment, generateReference } = paystack;
 // Build absolute URLs from the incoming request
 function baseUrl(req) {
   if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/$/, '');
-  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
-  const host = req.headers['x-forwarded-host'] || req.get('host');
+  const headers = req.headers || {};
+  const proto = headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host =
+    headers['x-forwarded-host'] ||
+    (typeof req.get === 'function' ? req.get('host') : null) ||
+    'localhost:3000';
   return `${proto}://${host}`;
 }
 
