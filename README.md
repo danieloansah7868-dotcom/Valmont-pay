@@ -77,9 +77,12 @@ curl "http://localhost:3000/api/verify-payment?reference=VP-123456"
 ### Webhook (real payments -> dashboard)
 
 Point your Paystack dashboard webhook URL at `https://<your-domain>/api/webhook`.
-The handler verifies the `x-paystack-signature` header (HMAC SHA512 of the raw body
-using `PAYSTACK_SECRET_KEY`), converts pesewas back to GH₵ and upserts the transaction
-onto the ledger, so replayed events never double-count.
+Set `WEBHOOK_SECRET` in Vercel to the secret Paystack uses to sign webhook requests
+(for Paystack this is normally the same value as `PAYSTACK_SECRET_KEY`). The handler
+verifies the `x-paystack-signature` header against the exact raw request body, converts
+pesewas back to GH₵, and inserts the transaction into Supabase. Configure `SUPABASE_URL`
+and preferably `SUPABASE_SERVICE_ROLE_KEY`; `SUPABASE_ANON_KEY` is supported only when
+the `transactions` table has suitable Row Level Security insert/select policies.
 
 > **Amounts:** Paystack works in the smallest currency unit, so `GH₵ 50` is sent as `5000`.
 > The conversion (with correct rounding) lives in `lib/paystack.js` and is applied in one place only.
