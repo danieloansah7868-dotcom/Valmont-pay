@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valmont-Pay — Merchant Settings</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  </style>
+</head>
+<body class="bg-[#0b1a38] text-gray-100 min-h-screen">
+
+  <header class="border-b border-white/10 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="h-3 w-3 rounded-full bg-[#f68b1e]"></div>
+      <span class="font-extrabold text-sm uppercase tracking-widest text-[#f68b1e]">Valmont-Pay</span>
+      <span class="text-xs text-gray-400 font-bold">Merchant Settings</span>
+    </div>
+    <div class="flex items-center gap-3">
+      <span id="merchant-label" class="text-xs text-gray-400 font-semibold"></span>
+      <button id="btn-signout" class="hidden text-xs font-bold text-gray-400 hover:text-white uppercase">Sign out</button>
+    </div>
+  </header>
+
+  <!-- Sign in ---------------------------------------------------------- -->
+  <section id="view-auth" class="max-w-md mx-auto mt-20 px-6">
+    <h1 class="text-2xl font-black">Sign in</h1>
+    <p class="text-sm text-gray-400 mt-2">
+      Paste a secret key. It is sent as <code class="text-[#f68b1e]">Authorization: Bearer</code>
+      and kept in this tab's <code class="text-[#f68b1e]">sessionStorage</code> only &mdash; never written to a cookie
+      or a URL.
+    </p>
+    <input id="input-key" type="password" placeholder="sk_test_… or sk_live_…" autocomplete="off"
+           class="mono w-full mt-6 bg-white/5 border-2 border-white/10 focus:border-[#f68b1e] outline-none p-4 rounded-lg text-sm" />
+    <button id="btn-signin" class="w-full mt-4 bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-lg">
+      Sign in
+    </button>
+    <p id="auth-error" class="text-sm text-red-400 font-semibold mt-4 hidden"></p>
+    <p class="text-xs text-gray-500 mt-8 leading-relaxed">
+      Your keys are printed in the server log the first time the gateway boots, and can be pinned with the
+      <code>VALMONTPAY_TEST_SECRET_KEY</code> / <code>VALMONTPAY_LIVE_SECRET_KEY</code> environment variables.
+    </p>
+  </section>
+
+  <!-- Dashboard -------------------------------------------------------- -->
+  <main id="view-main" class="hidden max-w-6xl mx-auto px-6 py-10 space-y-10">
+
+    <!-- API keys -->
+    <section>
+      <h2 class="text-lg font-black mb-1">API keys</h2>
+      <p class="text-xs text-gray-400 mb-4">
+        Public keys are browser-safe. Secret keys authorise <code>initialize</code> and <code>verify</code>,
+        and sign your webhooks &mdash; keep them server-side only.
+      </p>
+      <div class="grid md:grid-cols-2 gap-4" id="keys-grid"></div>
+      <button id="btn-reveal" class="mt-4 text-xs font-bold text-[#f68b1e] uppercase tracking-wider">Reveal secret keys</button>
+    </section>
+
+    <!-- Webhook URL -->
+    <section class="bg-white/5 border border-white/10 rounded-xl p-6">
+      <h2 class="text-lg font-black mb-1">Webhook endpoint</h2>
+      <p class="text-xs text-gray-400 mb-4">
+        Every terminal state (<code>charge.success</code>, <code>charge.failed</code>,
+        <code>refund.processed</code>) is POSTed here, signed with
+        <code class="text-[#f68b1e]">x-valmontpay-signature</code>
+        (HMAC-SHA512 hex over the raw body, keyed with your secret key). Retried with exponential
+        backoff for ~24h until you return a 2xx. Live URLs must be HTTPS.
+      </p>
+      <div class="flex flex-col sm:flex-row gap-3">
+        <input id="input-webhook" type="url" placeholder="https://valmontelectricals.com/api/valmontpay/webhook"
+               class="mono flex-1 bg-white/5 border-2 border-white/10 focus:border-[#f68b1e] outline-none p-3 rounded-lg text-sm" />
+        <button id="btn-save-webhook" class="bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-xs uppercase tracking-widest px-6 py-3 rounded-lg">Save</button>
+        <button id="btn-clear-webhook" class="border border-white/20 hover:border-white/40 text-gray-300 font-bold text-xs uppercase tracking-widest px-4 py-3 rounded-lg">Disable</button>
+      </div>
+      <p id="webhook-status" class="text-xs font-semibold mt-3"></p>
+    </section>
+
+    <!-- Deliveries -->
+    <section>
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-lg font-black">Webhook deliveries</h2>
+          <p class="text-xs text-gray-400">
+            A replay re-sends the identical body with the same <code>x-valmontpay-event-id</code>,
+            so your handler sees one logical event no matter how many attempts it takes.
+          </p>
+        </div>
+        <button id="btn-refresh" class="text-xs font-bold text-[#f68b1e] uppercase tracking-wider">Refresh</button>
+      </div>
+      <div id="delivery-summary" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4"></div>
+      <div id="deliveries" class="space-y-3"></div>
+    </section>
+
+    <!-- Payments -->
+    <section>
+      <h2 class="text-lg font-black mb-4">Recent payments</h2>
+      <div class="overflow-x-auto border border-white/10 rounded-xl">
+        <table class="w-full text-sm">
+          <thead class="bg-white/5 text-[10px] uppercase tracking-wider text-gray-400">
+            <tr>
+              <th class="text-left p-3 font-black">Reference</th>
+              <th class="text-left p-3 font-black">Amount</th>
+              <th class="text-left p-3 font-black">Status</th>
+              <th class="text-left p-3 font-black">Channel</th>
+              <th class="text-left p-3 font-black">Source</th>
+              <th class="text-left p-3 font-black">Created</th>
+            </tr>
+          </thead>
+          <tbody id="payments-body" class="divide-y divide-white/5"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const STORAGE_KEY = 'valmontpay.secret_key';
+    let secretKey = sessionStorage.getItem(STORAGE_KEY) || '';
+    let mode = 'test';
+
+    /** Every dashboard call is authorised with the operator's secret key. */
+    async function api(path, options = {}) {
+      const response = await fetch('/api' + path, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + secretKey,
+          ...(options.headers || {})
+        }
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        signOut('That key was rejected.');
+        throw new Error('unauthorized');
+      }
+      return { ok: response.ok, payload };
+    }
+
+    function signOut(message) {
+      secretKey = '';
+      sessionStorage.removeItem(STORAGE_KEY);
+      $('view-main').classList.add('hidden');
+      $('view-auth').classList.remove('hidden');
+      $('btn-signout').classList.add('hidden');
+      $('merchant-label').textContent = '';
+      if (message) {
+        $('auth-error').textContent = message;
+        $('auth-error').classList.remove('hidden');
+      }
+    }
+
+    async function signIn(key) {
+      secretKey = key.trim();
+      $('auth-error').classList.add('hidden');
+      if (!/^sk_(test|live)_/.test(secretKey)) {
+        $('auth-error').textContent = 'That does not look like a secret key (sk_test_… or sk_live_…).';
+        $('auth-error').classList.remove('hidden');
+        return;
+      }
+      let result;
+      try {
+        result = await api('/merchant/keys');
+      } catch (_) { return; }
+      if (!result.ok) { signOut('That key was rejected.'); return; }
+
+      sessionStorage.setItem(STORAGE_KEY, secretKey);
+      mode = result.payload.data.authenticated_mode;
+      $('view-auth').classList.add('hidden');
+      $('view-main').classList.remove('hidden');
+      $('btn-signout').classList.remove('hidden');
+      $('merchant-label').textContent = result.payload.data.name + ' · ' + mode.toUpperCase() + ' MODE';
+      renderKeys(result.payload.data);
+      await Promise.all([loadWebhook(), loadDeliveries(), loadPayments()]);
+    }
+
+    function renderKeys(data) {
+      const card = (label, pair, active) => `
+        <div class="bg-white/5 border ${active ? 'border-[#f68b1e]/50' : 'border-white/10'} rounded-xl p-5">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-black uppercase tracking-wider ${active ? 'text-[#f68b1e]' : 'text-gray-400'}">${label}</span>
+            ${active ? '<span class="text-[10px] font-black bg-[#f68b1e] text-[#0b1a38] px-2 py-0.5 rounded">SIGNED IN</span>' : ''}
+          </div>
+          <div class="space-y-3">
+            <div>
+              <div class="text-[10px] uppercase font-black text-gray-500 mb-1">Public key · browser-safe</div>
+              <div class="mono text-xs break-all bg-black/30 p-2 rounded">${pair.public_key}</div>
+            </div>
+            <div>
+              <div class="text-[10px] uppercase font-black text-gray-500 mb-1">Secret key · server only</div>
+              <div class="mono text-xs break-all bg-black/30 p-2 rounded text-[#f68b1e]">${pair.secret_key || pair.secret_key_preview}</div>
+            </div>
+          </div>
+        </div>`;
+      $('keys-grid').innerHTML =
+        card('Test', data.keys.test, mode === 'test') + card('Live', data.keys.live, mode === 'live');
+    }
+
+    $('btn-reveal').addEventListener('click', async () => {
+      const result = await api('/merchant/keys?reveal=1');
+      if (result.ok) renderKeys(result.payload.data);
+    });
+
+    async function loadWebhook() {
+      const result = await api('/merchant/webhook');
+      if (!result.ok) return;
+      const hook = result.payload.data.webhooks[mode] || {};
+      $('input-webhook').value = hook.url || '';
+      setWebhookStatus(
+        hook.url ? 'Active for ' + mode + ' mode' + (hook.updated_at ? ' · updated ' + new Date(hook.updated_at).toLocaleString() : '') : 'No webhook URL set — deliveries are recorded but not sent.',
+        hook.url ? 'text-emerald-400' : 'text-amber-400'
+      );
+    }
+
+    function setWebhookStatus(text, className) {
+      const el = $('webhook-status');
+      el.className = 'text-xs font-semibold mt-3 ' + className;
+      el.textContent = text;
+    }
+
+    async function saveWebhook(url) {
+      const result = await api('/merchant/webhook', {
+        method: 'PUT',
+        body: JSON.stringify({ mode, url })
+      });
+      if (!result.ok) {
+        setWebhookStatus(result.payload.message || 'Could not save that URL.', 'text-red-400');
+        return;
+      }
+      await loadWebhook();
+      await loadDeliveries();
+    }
+
+    $('btn-save-webhook').addEventListener('click', () => saveWebhook($('input-webhook').value.trim()));
+    $('btn-clear-webhook').addEventListener('click', () => { $('input-webhook').value = ''; saveWebhook(null); });
+
+    const STATE_STYLES = {
+      delivered: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+      pending: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+      failed: 'bg-red-500/15 text-red-300 border-red-500/30',
+      disabled: 'bg-gray-500/15 text-gray-400 border-gray-500/30'
+    };
+
+    async function loadDeliveries() {
+      const result = await api('/merchant/deliveries?mode=' + mode);
+      if (!result.ok) return;
+      const { data, summary } = result.payload;
+
+      $('delivery-summary').innerHTML = [
+        ['Delivered', summary.delivered, 'text-emerald-400'],
+        ['Pending', summary.pending, 'text-amber-400'],
+        ['Failed', summary.failed, 'text-red-400'],
+        ['Not sent', summary.disabled, 'text-gray-400']
+      ].map(([label, value, color]) => `
+        <div class="bg-white/5 border border-white/10 rounded-lg p-3">
+          <div class="text-[10px] uppercase font-black text-gray-500">${label}</div>
+          <div class="text-2xl font-black ${color}">${value}</div>
+        </div>`).join('');
+
+      if (!data.length) {
+        $('deliveries').innerHTML =
+          '<p class="text-sm text-gray-500 font-medium">No deliveries yet. They appear as soon as a payment reaches a terminal state.</p>';
+        return;
+      }
+
+      $('deliveries').innerHTML = data.map(d => `
+        <details class="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+          <summary class="p-4 cursor-pointer flex flex-wrap items-center gap-3">
+            <span class="text-[10px] font-black uppercase px-2 py-1 rounded border ${STATE_STYLES[d.state] || ''}">${d.state}</span>
+            <span class="font-bold text-sm">${d.event}</span>
+            <span class="mono text-xs text-gray-400">${d.reference}</span>
+            <span class="text-xs text-gray-500 ml-auto">
+              ${d.attempt_count}/${d.max_attempts} attempts${d.last_status_code ? ' · HTTP ' + d.last_status_code : ''}
+              ${d.next_attempt_at ? ' · next ' + new Date(d.next_attempt_at).toLocaleTimeString() : ''}
+            </span>
+            <button data-replay="${d.id}"
+                    class="text-[10px] font-black uppercase tracking-wider bg-[#f68b1e] text-[#0b1a38] px-3 py-1.5 rounded">Replay</button>
+          </summary>
+          <div class="border-t border-white/10 p-4 space-y-3 text-xs">
+            <div>
+              <div class="text-[10px] uppercase font-black text-gray-500 mb-1">Event id (stable across every retry)</div>
+              <div class="mono break-all bg-black/30 p-2 rounded">${d.event_id}</div>
+            </div>
+            <div>
+              <div class="text-[10px] uppercase font-black text-gray-500 mb-1">x-valmontpay-signature</div>
+              <div class="mono break-all bg-black/30 p-2 rounded text-[#f68b1e]">${d.signature || '(no signing secret)'}</div>
+            </div>
+            <div>
+              <div class="text-[10px] uppercase font-black text-gray-500 mb-1">Payload (identical on every attempt)</div>
+              <pre class="mono bg-black/30 p-3 rounded overflow-x-auto">${escapeHtml(JSON.stringify(d.payload, null, 2))}</pre>
+            </div>
+            <div>
+              <div class="text-[10px] uppercase font-black text-gray-500 mb-1">Attempts</div>
+              ${d.attempts.length ? d.attempts.map(a => `
+                <div class="flex flex-wrap gap-3 py-1 border-b border-white/5">
+                  <span class="text-gray-500">#${a.attempt}</span>
+                  <span>${new Date(a.at).toLocaleString()}</span>
+                  <span class="${a.ok ? 'text-emerald-400' : 'text-red-400'}">${a.status_code || a.error || 'no response'}</span>
+                  <span class="text-gray-500">${a.duration_ms}ms</span>
+                  ${a.response_snippet ? '<span class="mono text-gray-500 truncate max-w-xs">' + escapeHtml(a.response_snippet) + '</span>' : ''}
+                </div>`).join('') : '<span class="text-gray-500">None yet.</span>'}
+            </div>
+          </div>
+        </details>`).join('');
+
+      document.querySelectorAll('[data-replay]').forEach(button => {
+        button.addEventListener('click', async event => {
+          event.preventDefault();
+          button.disabled = true;
+          button.textContent = 'Replaying…';
+          const result = await api('/merchant/deliveries/' + encodeURIComponent(button.dataset.replay) + '/replay', { method: 'POST' });
+          if (!result.ok) alert(result.payload.message || 'Replay failed.');
+          await loadDeliveries();
+        });
+      });
+    }
+
+    async function loadPayments() {
+      const result = await api('/merchant/payments?mode=' + mode);
+      if (!result.ok) return;
+      const rows = result.payload.data;
+      if (!rows.length) {
+        $('payments-body').innerHTML =
+          '<tr><td colspan="6" class="p-4 text-gray-500 font-medium">No payments yet.</td></tr>';
+        return;
+      }
+      const STATUS_COLOR = {
+        success: 'text-emerald-400', failed: 'text-red-400',
+        cancelled: 'text-gray-400', pending: 'text-amber-400', refunded: 'text-sky-400'
+      };
+      $('payments-body').innerHTML = rows.map(p => `
+        <tr>
+          <td class="p-3 mono text-xs">${p.reference}</td>
+          <td class="p-3 font-bold">${p.currency} ${(p.amount / 100).toFixed(2)}</td>
+          <td class="p-3 font-black uppercase text-xs ${STATUS_COLOR[p.status] || ''}">${p.status}</td>
+          <td class="p-3 text-gray-400">${p.channel || '—'}</td>
+          <td class="p-3 text-xs">
+            ${p.source}${p.amount_trusted === false ? ' <span class="text-amber-400 font-black">· UNVERIFIED AMOUNT</span>' : ''}
+            ${p.amount_claim && p.amount_claim.rejected ? '<div class="text-amber-400">link claimed ' + (p.amount_claim.amount / 100).toFixed(2) + '</div>' : ''}
+          </td>
+          <td class="p-3 text-gray-500 text-xs">${new Date(p.created_at).toLocaleString()}</td>
+        </tr>`).join('');
+    }
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    $('btn-signin').addEventListener('click', () => signIn($('input-key').value));
+    $('input-key').addEventListener('keydown', e => { if (e.key === 'Enter') signIn($('input-key').value); });
+    $('btn-signout').addEventListener('click', () => signOut(null));
+    $('btn-refresh').addEventListener('click', () => { loadDeliveries(); loadPayments(); });
+
+    if (secretKey) signIn(secretKey);
+  </script>
+
+</body>
+</html>

@@ -9,6 +9,11 @@ const { isSupabaseConfigured, supabaseConfigState, getSupabaseClient } = require
 const transactionStore = require('./lib/transaction-store');
 const webhookLog = require('./lib/webhook-log');
 const webhookDiagnostics = require('./lib/webhook-diagnostics');
+const merchantApi = require('./lib/merchant-api');
+const merchants = require('./lib/merchants');
+const paymentsStore = require('./lib/payments');
+const webhookDelivery = require('./lib/webhook-delivery');
+const gateway = require('./lib/gateway');
 
 // Vercel runs the dashboard checkout (POST /api/v1/transaction/charge) in a
 // serverless function whose memory disappears between requests, so a payment
@@ -41,6 +46,43 @@ app.use(express.json({
 }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.static(__dirname));
+
+// ---------------------------------------------------------------------------
+// Valmont-Pay merchant API (v1)
+//
+//   POST /api/transaction/initialize        secret key  -> one-time access_code
+//   GET  /api/transaction/verify/:reference secret key  -> canonical data shape
+//   POST /api/checkout/resolve|complete     used by pay.html
+//   /api/merchant/*                         dashboard (keys, webhook, deliveries)
+//
+// Mounted BEFORE the legacy /api/v1/* routes so the new contract wins, and
+// after the static handlers so nothing shadows the checkout pages.
+// ---------------------------------------------------------------------------
+app.use((req, _res, next) => {
+  // The router needs an absolute origin to build authorization_url.
+  req.baseOrigin = baseUrl(req);
+  next();
+});
+app.use('/api', merchantApi.router);
+
+// Boot the merchant record (creating keys on first run) and start the webhook
+// retry loop. On a serverless platform the loop only lives as long as the
+// instance, which is why /api/webhooks/drain exists below.
+merchants.getDefaultMerchant();
+if (!IS_SERVERLESS) webhookDelivery.startScheduler();
+
+/**
+ * Drain due webhook retries on demand.
+ *
+ * A serverless deployment has no long-lived timer, so point a cron job (Vercel
+ * Cron, GitHub Actions, cron-job.org — anything) at this endpoint every minute
+ * and the ~24h retry schedule works exactly as documented. Protected by the
+ * merchant secret key so it cannot be used to hammer merchant endpoints.
+ */
+app.post('/api/webhooks/drain', merchantApi.requireSecretKey, async (_req, res) => {
+  const processed = await webhookDelivery.processDue();
+  return res.status(200).json({ status: true, processed });
+});
 
 // LIVE TRANSACTION LEDGER (shared in-memory store, see lib/ledger.js)
 // It starts EMPTY — no seeded demo rows, no fake starting balance. The
@@ -518,6 +560,60 @@ app.post('/api/webhook', async (req, res) => {
     console.error(`[WEBHOOK ${requestId}] STEP 5/6 SIGNATURE — ✗ signature mismatch. Check that WEBHOOK_SECRET (if set) equals PAYSTACK_SECRET_KEY, and that the key mode (test/live) matches the Paystack dashboard mode that sent this event.`);
   }
 
+  // ── Fan the Paystack event out to the MERCHANT's webhook ──
+  //
+  // Paystack tells us a payment reached a terminal state; gateway.settle() is
+  // the single place that records it and enqueues exactly one outbound webhook
+  // per (reference, event). Because both the transition and the enqueue are
+  // idempotent, Paystack retrying this delivery does NOT produce a second
+  // merchant webhook. The reference is passed through untouched.
+  if (result.statusCode === 200 && req.body && req.body.data && req.body.data.reference) {
+    const paystackData = req.body.data;
+    const eventName = String(req.body.event || '');
+    const terminalStatus = eventName.startsWith('refund.')
+      ? paymentsStore.STATUS.REFUNDED
+      : eventName === 'charge.success' || paystackData.status === 'success'
+        ? paymentsStore.STATUS.SUCCESS
+        : eventName === 'charge.failed' || paystackData.status === 'failed'
+          ? paymentsStore.STATUS.FAILED
+          : null;
+
+    if (terminalStatus) {
+      const reference = String(paystackData.reference);
+      // A payment Paystack knows about but we never initialized (e.g. started
+      // before this deployment) still deserves a merchant webhook, so create
+      // the record from the Paystack payload — which IS trustworthy, unlike a
+      // query string, because it arrived over a signed channel.
+      if (!paymentsStore.get(reference)) {
+        const merchantRecord = merchants.getDefaultMerchant();
+        paymentsStore.initialize({
+          merchant: merchantRecord,
+          mode: String(process.env.PAYSTACK_SECRET_KEY || '').includes('_test_') ? 'test' : 'live',
+          amount: Number(paystackData.amount),
+          reference,
+          email: (paystackData.customer && paystackData.customer.email) || paystackData.email,
+          currency: paystackData.currency,
+          callback_url:
+            (paystackData.metadata && paystackData.metadata.callback_url) || null,
+          source: 'paystack'
+        });
+      }
+
+      const settlement = gateway.settle(reference, {
+        status: terminalStatus,
+        channel: paystackData.channel || null,
+        gateway_reference: paystackData.id ? String(paystackData.id) : paystackData.reference,
+        paid_at: paystackData.paid_at || paystackData.paidAt || null,
+        failure_reason: paystackData.gateway_response || null
+      });
+
+      console.log(
+        `[WEBHOOK ${requestId}] MERCHANT-FANOUT — ${reference} ${settlement.changed ? 'settled' : 'already terminal (no duplicate webhook)'}` +
+          (settlement.delivery ? ` -> ${settlement.delivery.state}` : '')
+      );
+    }
+  }
+
 
   // CRITICAL FIX: also persist the webhook event to Supabase so the dashboard
   // can display it. Without this, webhook events only go to the in-memory
@@ -841,6 +937,11 @@ app.get('/admin-login.html', (req, res) => {
 
 app.get('/pay.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'pay.html'));
+});
+
+// Merchant settings: webhook URL, API keys, delivery log with replay.
+app.get('/merchant', (req, res) => {
+  res.sendFile(path.join(__dirname, 'merchant.html'));
 });
 
 // Webhook diagnostic page (also reachable as /webhook-status.html via static).

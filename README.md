@@ -6,6 +6,58 @@ This acts as your **direct functional roadmap** to starting, coding, and scaling
 
 ---
 
+## 💳 Merchant Payment API (valmontpay.app)
+
+The merchant-facing gateway API lives under `/api`. **Full integration guide:
+[MERCHANT-API.md](MERCHANT-API.md).**
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `POST /api/transaction/initialize` | `Bearer sk_…` | Create a payment server-side; returns a one-time `access_code`. **The amount never touches the browser.** |
+| `GET /api/transaction/verify/{reference}` | `Bearer sk_…` | Canonical transaction state — the fallback when a webhook is missed. |
+| `POST /api/checkout/resolve` \| `/complete` | none | Used by `pay.html`; resolves the real amount server-side. |
+| `GET/PUT /api/merchant/webhook` | `Bearer sk_…` | Read/set the webhook URL. |
+| `GET /api/merchant/deliveries` | `Bearer sk_…` | Delivery log + attempt history. |
+| `POST /api/merchant/deliveries/{id}/replay` | `Bearer sk_…` | Replay a delivery, identical body + event id. |
+| `POST /api/webhooks/drain` | `Bearer sk_…` | Cron hook that flushes due retries on serverless. |
+
+Amounts are **integer pesewas** (GH₵ 15.00 → `1500`), currency **GHS**.
+
+### The security fix
+
+The live checkout link used to be
+`pay.html?amount=1500&merchant=…&ref=VE-…` — a customer could edit `amount` and
+underpay. Now:
+
+* merchants call `initialize` with their **secret key** and get an opaque
+  `access_code`; `pay.html?access_code=…` resolves the amount server-side;
+* the legacy query-string form still works, but its `amount` is treated as an
+  untrusted claim and reconciled against the initialized record — a mismatch is
+  ignored (the initialized amount is charged) and flagged in the dashboard.
+
+### Webhooks
+
+Every terminal state POSTs `{event, data:{reference, status, amount, currency,
+channel, paid_at, merchant, gateway_reference}}` signed with **HMAC-SHA512 over
+the raw body** in `x-valmontpay-signature` — Paystack's exact scheme, so merchant
+verification code ports over by changing the header name. Events:
+`charge.success`, `charge.failed`, `refund.processed`. Retried with exponential
+backoff for ~24h until a 2xx, every attempt byte-identical and carrying the same
+`x-valmontpay-event-id`. **Exactly one webhook per payment.**
+
+### Keys & dashboard
+
+`npm run keys` prints a test and live keypair (`pk_*` browser-safe, `sk_*`
+server-only). Pin them with `VALMONTPAY_*_SECRET_KEY` in production. The
+merchant dashboard is at **`/merchant`**: set the webhook URL, inspect every
+delivery attempt, and replay.
+
+```bash
+npm test   # 100+ checks over initialize, webhooks, verify, redirect, keys
+```
+
+---
+
 ## 🛠️ Folder File Architecture
 Your gateway prototype contains the following master-built systems:
 1.  **`package.json`**: Standard dependencies configuration connecting Express JSON parsers, UUID generators, and secure Cross-Origin Resource Sharing (CORS) engines.

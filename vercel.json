@@ -12,6 +12,22 @@
   ],
   "routes": [
     {
+      "src": "/api/transaction/(.*)",
+      "dest": "/server.js"
+    },
+    {
+      "src": "/api/checkout/(.*)",
+      "dest": "/server.js"
+    },
+    {
+      "src": "/api/merchant/(.*)",
+      "dest": "/server.js"
+    },
+    {
+      "src": "/api/webhooks/(.*)",
+      "dest": "/server.js"
+    },
+    {
       "src": "/api/initialize-payment",
       "dest": "/api/initialize-payment.js"
     },

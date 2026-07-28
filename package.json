@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node scripts/api-smoke-test.mjs && node scripts/dashboard-ledger-test.mjs && node scripts/webhook-supabase-test.mjs && node scripts/checkout-supabase-test.mjs && node scripts/webhook-diagnostics-test.mjs"
+    "test": "node scripts/merchant-api-test.mjs && node scripts/api-smoke-test.mjs && node scripts/dashboard-ledger-test.mjs && node scripts/webhook-supabase-test.mjs && node scripts/checkout-supabase-test.mjs && node scripts/webhook-diagnostics-test.mjs",
+    "keys": "node scripts/generate-keys.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.8",
