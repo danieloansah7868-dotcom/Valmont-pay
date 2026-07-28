@@ -1,9 +1,12 @@
-import { createClient } from '@supabase/supabase-js';
-import crypto from 'crypto';
+/**
+ * Paystack webhook handler (Vercel serverless function).
+ *
+ * Receives Paystack charge.success / charge.failed events, verifies the
+ * signature, and persists the transaction to Supabase.
+ */
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import { supabase } from '../lib/supabase.js';
+import crypto from 'crypto';
 
 function verifySignature(rawBody, signature, secretKey = process.env.PAYSTACK_SECRET_KEY) {
   if (!secretKey || !signature || !rawBody) return false;

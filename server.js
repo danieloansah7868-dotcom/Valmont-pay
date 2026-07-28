@@ -6,12 +6,11 @@ const { initializePayment, verifyPayment, generateReference } = require('./lib/p
 const ledger = require('./lib/ledger');
 const { handleWebhookEvent, toLedgerRecord } = require('./lib/webhook');
 
-// Supabase client for persisting test transactions
+// Supabase client for persisting test transactions (shared module)
 let supabase = null;
 try {
-  const { createClient } = require('@supabase/supabase-js');
   if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
-    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+    ({ supabase } = require('./lib/supabase'));
   }
 } catch (e) {
   console.log('[SUPABASE] Not configured, test transactions will only be stored in memory');

@@ -1,8 +1,11 @@
-import { createClient } from '@supabase/supabase-js';
+/**
+ * Vercel serverless function — /api/transactions
+ *
+ * GET  → fetch all transactions from Supabase
+ * POST → upsert a transaction into Supabase
+ */
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import { supabase } from '../lib/supabase.js';
 
 export default async function handler(req, res) {
   // Handle GET - fetch transactions
