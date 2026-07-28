@@ -24,6 +24,14 @@
       "dest": "/api/webhook.js"
     },
     {
+      "src": "/api/webhook-debug",
+      "dest": "/api/webhook-debug.js"
+    },
+    {
+      "src": "/api/manual-transaction",
+      "dest": "/api/manual-transaction.js"
+    },
+    {
       "src": "/api/transactions",
       "dest": "/api/transactions.js"
     },
