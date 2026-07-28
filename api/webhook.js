@@ -8,8 +8,23 @@
 
 import crypto from 'node:crypto';
 import supabaseModule from '../lib/supabase.js';
+import transactionStore from '../lib/transaction-store.js';
 
-const { getSupabaseClient } = supabaseModule;
+const { getSupabaseClient, supabaseConfigState } = supabaseModule;
+const { saveTransaction } = transactionStore;
+
+/**
+ * The secret Paystack signs webhooks with.
+ *
+ * Paystack computes the `x-paystack-signature` HMAC using YOUR PAYSTACK SECRET
+ * KEY, so WEBHOOK_SECRET is really just an override for deployments that set it
+ * explicitly. Prefer WEBHOOK_SECRET, then fall back to PAYSTACK_SECRET_KEY —
+ * otherwise a project that only sets PAYSTACK_SECRET_KEY rejects every real
+ * Paystack webhook.
+ */
+export function getWebhookSecret() {
+  return process.env.WEBHOOK_SECRET || process.env.PAYSTACK_SECRET_KEY || '';
+}
 
 // Vercel must not parse/re-serialize the payload before signature verification.
 export const config = {
@@ -56,7 +71,7 @@ async function readRawBody(req) {
 }
 
 /** Verify an HMAC SHA-512 signature without timing-sensitive string compares. */
-export function verifySignature(rawBody, signature, secret = process.env.WEBHOOK_SECRET) {
+export function verifySignature(rawBody, signature, secret = getWebhookSecret()) {
   if (!secret || !signature || rawBody === undefined || rawBody === null) return false;
 
   const suppliedSignature = String(signature).trim().toLowerCase();
@@ -125,12 +140,17 @@ function transactionFromEvent(eventName, data) {
 }
 
 function configurationState() {
+  const supabase = supabaseConfigState();
   return {
-    webhookSecretConfigured: Boolean(process.env.WEBHOOK_SECRET),
-    supabaseUrlConfigured: Boolean(process.env.SUPABASE_URL),
-    supabaseKeyConfigured: Boolean(
-      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
-    )
+    webhookSecretConfigured: Boolean(getWebhookSecret()),
+    webhookSecretSource: process.env.WEBHOOK_SECRET
+      ? 'WEBHOOK_SECRET'
+      : process.env.PAYSTACK_SECRET_KEY
+        ? 'PAYSTACK_SECRET_KEY'
+        : null,
+    supabaseUrlConfigured: supabase.urlConfigured,
+    supabaseKeyConfigured: supabase.keyConfigured,
+    supabaseCredentialType: supabase.credentialType
   };
 }
 
@@ -159,22 +179,22 @@ export function createWebhookHandler({ supabaseClient } = {}) {
       console.log('[WEBHOOK] Environment configuration:', envState);
 
       const signature = getHeader(req, 'x-paystack-signature');
-      const signatureIsValid = verifySignature(
-        rawBody,
-        signature,
-        process.env.WEBHOOK_SECRET
-      );
+      const signatureIsValid = verifySignature(rawBody, signature, getWebhookSecret());
       console.log('[WEBHOOK] Signature verification result:', {
         valid: signatureIsValid,
         signaturePresent: Boolean(signature),
-        secretConfigured: envState.webhookSecretConfigured
+        secretConfigured: envState.webhookSecretConfigured,
+        secretSource: envState.webhookSecretSource
       });
 
       if (!envState.webhookSecretConfigured) {
-        console.error('[WEBHOOK] Error: WEBHOOK_SECRET is not configured');
+        console.error(
+          '[WEBHOOK] Error: no signing secret configured (set WEBHOOK_SECRET or PAYSTACK_SECRET_KEY)'
+        );
         return res.status(500).json({
           success: false,
-          error: 'Webhook is not configured: WEBHOOK_SECRET is missing'
+          error:
+            'Webhook is not configured: set WEBHOOK_SECRET (or PAYSTACK_SECRET_KEY, which Paystack signs with)'
         });
       }
 
@@ -240,29 +260,20 @@ export function createWebhookHandler({ supabaseClient } = {}) {
         });
       }
 
-      let insertResult;
-      try {
-        insertResult = await client
-          .from('transactions')
-          .insert([transaction])
-          .select();
-      } catch (error) {
-        console.error('[WEBHOOK] Supabase insert threw an error:', error);
+      // Same shared writer the dashboard checkout uses, so the webhook and the
+      // checkout can never write different column shapes. Upserting by
+      // reference also makes Paystack's retries idempotent.
+      const persistence = await saveTransaction(transaction, {
+        client,
+        context: 'WEBHOOK'
+      });
+
+      if (!persistence.ok) {
+        console.error('[WEBHOOK] Supabase write error:', persistence.error);
         return res.status(500).json({
           success: false,
           error: 'Failed to save transaction',
-          message: error.message
-        });
-      }
-
-      console.log('[WEBHOOK] Supabase insert result:', insertResult);
-
-      if (insertResult.error) {
-        console.error('[WEBHOOK] Supabase insert error:', insertResult.error);
-        return res.status(500).json({
-          success: false,
-          error: 'Failed to save transaction',
-          message: insertResult.error.message || String(insertResult.error)
+          message: persistence.reason
         });
       }
 
@@ -271,7 +282,7 @@ export function createWebhookHandler({ supabaseClient } = {}) {
         success: true,
         received: true,
         reference: transaction.reference,
-        transaction: insertResult.data?.[0] || transaction
+        transaction: persistence.data || transaction
       });
     } catch (error) {
       console.error('[WEBHOOK] Unhandled error:', error);
