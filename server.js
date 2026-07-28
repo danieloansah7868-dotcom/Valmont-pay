@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const { initializePayment, verifyPayment, generateReference } = require('./lib/paystack');
 const ledger = require('./lib/ledger');
 const { handleWebhookEvent, toLedgerRecord } = require('./lib/webhook');
-const { isSupabaseConfigured, supabaseConfigState } = require('./lib/supabase');
+const { isSupabaseConfigured, supabaseConfigState, getSupabaseClient } = require('./lib/supabase');
 const transactionStore = require('./lib/transaction-store');
 
 // Vercel runs the dashboard checkout (POST /api/v1/transaction/charge) in a
@@ -297,11 +297,42 @@ app.get('/api/verify-payment', async (req, res) => {
   try {
     const data = await verifyPayment(reference);
 
+    const paystackTrx = data && data.data ? data.data : null;
+    const isSuccess = Boolean(data && data.status && paystackTrx && paystackTrx.status === 'success');
+
     // A verified Paystack transaction is a REAL payment - record it on the
-    // ledger so the dashboard reflects it even if the webhook is delayed or
-    // has not been configured yet. upsert keeps this idempotent.
-    if (data && data.status && data.data && data.data.reference) {
-      ledger.upsertTransaction(toLedgerRecord('charge.verified', data.data));
+    // in-memory ledger so the dashboard reflects it.
+    if (data && data.status && paystackTrx && paystackTrx.reference) {
+      ledger.upsertTransaction(toLedgerRecord('charge.verified', paystackTrx));
+
+      // CRITICAL FIX: ALSO persist to Supabase so the dashboard can display it.
+      // Without this, verified payments only go to the in-memory ledger, which
+      // is lost on server restart and empty on Vercel cold starts.
+      if (isSupabaseConfigured()) {
+        const client = getSupabaseClient();
+        if (client) {
+          const transaction = {
+            reference: paystackTrx.reference,
+            merchant_name: (paystackTrx.metadata && paystackTrx.metadata.merchant) || 'Valmont-Pay',
+            customer_email: paystackTrx.customer?.email || paystackTrx.email || 'unknown@customer',
+            amount: (Number(paystackTrx.amount) || 0) / 100,
+            payment_method: paystackTrx.channel || 'N/A',
+            status: isSuccess ? 'SUCCESS' : (paystackTrx.status || 'PENDING').toUpperCase(),
+            paid_at: isSuccess ? (paystackTrx.paid_at || new Date().toISOString()) : null
+          };
+
+          const persistence = await transactionStore.saveTransaction(transaction, {
+            client,
+            context: 'VERIFY-PAYMENT'
+          });
+
+          if (persistence.ok) {
+            console.log(`[VERIFY-PAYMENT] Persisted to Supabase: ${paystackTrx.reference}`);
+          } else {
+            console.error(`[VERIFY-PAYMENT] Failed to persist: ${paystackTrx.reference}`, persistence.reason);
+          }
+        }
+      }
     }
 
     return res.status(200).json(data);
@@ -436,9 +467,195 @@ app.get('/api/health', (req, res) => {
 
 // API 6: Paystack webhook — the source of truth for real payments.
 // Point your Paystack dashboard webhook URL at https://<your-domain>/api/webhook
-app.post('/api/webhook', (req, res) => {
+app.post('/api/webhook', async (req, res) => {
   const result = handleWebhookEvent(req.body, req.headers['x-paystack-signature'], req.rawBody);
+
+  // CRITICAL FIX: also persist the webhook event to Supabase so the dashboard
+  // can display it. Without this, webhook events only go to the in-memory
+  // ledger, which is lost on server restart and is empty on Vercel cold starts.
+  if (result.statusCode === 200 && result.body && result.body.transaction && isSupabaseConfigured()) {
+    const client = getSupabaseClient();
+    if (client) {
+      const record = result.body.transaction;
+      const persistence = await transactionStore.saveTransaction(
+        {
+          reference: record.reference,
+          merchant: record.merchant,
+          customer: record.customer,
+          amount: record.amount,
+          channel: record.channel,
+          status: record.status,
+          timestamp: record.timestamp
+        },
+        { client, context: 'WEBHOOK' }
+      );
+      if (persistence.ok) {
+        console.log(`[WEBHOOK] Persisted to Supabase: ${record.reference}`);
+      } else {
+        console.error(`[WEBHOOK] Failed to persist to Supabase: ${record.reference}`, persistence.reason);
+      }
+    }
+  }
+
   return res.status(result.statusCode).json(result.body);
+});
+
+// API 6b: Webhook diagnostic endpoint — GET/POST /api/webhook-debug
+// Helps debug webhook delivery issues without needing Paystack dashboard access.
+app.get('/api/webhook-debug', (req, res) => {
+  const supabase = supabaseConfigState();
+  const webhookSecret = process.env.WEBHOOK_SECRET || process.env.PAYSTACK_SECRET_KEY || '';
+  const paystackKey = process.env.PAYSTACK_SECRET_KEY || '';
+
+  const diagnostics = {
+    success: true,
+    timestamp: new Date().toISOString(),
+    environment: {
+      vercel: Boolean(process.env.VERCEL),
+      vercelEnv: process.env.VERCEL_ENV || 'local',
+      nodeVersion: process.version
+    },
+    supabase: {
+      configured: supabase.configured,
+      urlConfigured: supabase.urlConfigured,
+      keyConfigured: supabase.keyConfigured,
+      credentialType: supabase.credentialType
+    },
+    webhook: {
+      webhookSecretConfigured: Boolean(webhookSecret),
+      webhookSecretSource: process.env.WEBHOOK_SECRET
+        ? 'WEBHOOK_SECRET'
+        : process.env.PAYSTACK_SECRET_KEY ? 'PAYSTACK_SECRET_KEY' : null,
+      paystackSecretKeyConfigured: Boolean(paystackKey),
+      expectedWebhookUrl: process.env.PUBLIC_BASE_URL
+        ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/api/webhook`
+        : 'https://<your-vercel-domain>/api/webhook'
+    },
+    recommendations: []
+  };
+
+  if (!supabase.configured) {
+    diagnostics.recommendations.push('Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel env vars');
+  }
+  if (!webhookSecret) {
+    diagnostics.recommendations.push('Set PAYSTACK_SECRET_KEY in Vercel env vars — Paystack signs webhooks with this key');
+  }
+  diagnostics.recommendations.push(
+    'In Paystack Dashboard → Settings → Preferences → Webhooks, ensure your webhook URL is: ' +
+    diagnostics.webhook.expectedWebhookUrl
+  );
+  diagnostics.recommendations.push(
+    'POST to /api/webhook-debug with a test event to verify the pipeline end-to-end'
+  );
+
+  res.set('Cache-Control', 'no-store');
+  return res.status(200).json(diagnostics);
+});
+
+app.post('/api/webhook-debug', async (req, res) => {
+  if (!isSupabaseConfigured()) {
+    return res.status(500).json({ success: false, error: 'Supabase is not configured' });
+  }
+
+  const body = req.body || {};
+  const eventName = body.event || 'charge.success';
+  const data = body.data || {};
+
+  const reference = data.reference || `VP-DEBUG-${Date.now().toString(36).toUpperCase()}`;
+  const amount = (Number(data.amount) || 5000) / 100;
+  const channel = data.channel || 'mobile_money';
+  const email = data.email || 'test@example.com';
+  const merchant = (data.metadata && data.metadata.merchant) || 'Debug Test Merchant';
+
+  const transaction = {
+    reference,
+    merchant_name: merchant,
+    customer_email: email,
+    amount: Math.round(amount * 100) / 100,
+    payment_method: channel === 'mobile_money' ? 'Mobile Money' : channel === 'card' ? 'Credit/Debit Card' : channel,
+    status: eventName === 'charge.success' ? 'SUCCESS' : 'FAILED',
+    paid_at: eventName === 'charge.success' ? new Date().toISOString() : null
+  };
+
+  const client = getSupabaseClient();
+  if (!client) {
+    return res.status(500).json({ success: false, error: 'Supabase client is not available' });
+  }
+
+  const result = await transactionStore.saveTransaction(transaction, {
+    client,
+    context: 'WEBHOOK-DEBUG'
+  });
+
+  if (!result.ok) {
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to save simulated transaction',
+      message: result.reason
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: 'Simulated webhook event processed successfully',
+    reference,
+    event: eventName,
+    transaction: result.data || transaction
+  });
+});
+
+// API 6c: Manual transaction endpoint — POST /api/manual-transaction
+// Temporary workaround that inserts a transaction directly into Supabase.
+app.post('/api/manual-transaction', async (req, res) => {
+  if (!isSupabaseConfigured()) {
+    return res.status(500).json({ success: false, error: 'Supabase is not configured' });
+  }
+
+  const body = req.body || {};
+  const amount = parseFloat(body.amount);
+
+  if (!Number.isFinite(amount) || amount < 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'A valid amount (number >= 0) is required'
+    });
+  }
+
+  const reference = body.reference || `VP-MANUAL-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const transaction = {
+    reference,
+    merchant_name: body.merchant_name || body.merchant || 'Valmont-Pay',
+    customer_email: body.customer_email || body.customer || body.email || 'manual@entry',
+    amount,
+    payment_method: body.payment_method || body.channel || 'Manual Entry',
+    status: (body.status || 'SUCCESS').toUpperCase(),
+    paid_at: body.paid_at || (body.status !== 'FAILED' ? new Date().toISOString() : null)
+  };
+
+  const client = getSupabaseClient();
+  if (!client) {
+    return res.status(500).json({ success: false, error: 'Supabase client is not available' });
+  }
+
+  const result = await transactionStore.saveTransaction(transaction, {
+    client,
+    context: 'MANUAL'
+  });
+
+  if (!result.ok) {
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to save transaction',
+      message: result.reason
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    reference: transaction.reference,
+    data: result.data || transaction,
+    message: 'Transaction saved to Supabase successfully'
+  });
 });
 
 // Serve frontend web routes
