@@ -16,17 +16,21 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'offline-test-service-role-key';
 
 const { createWebhookHandler } = await import('../api/webhook.js');
 
+// The webhook now writes through the shared transaction store, which UPSERTS
+// on `reference` so Paystack's retries stay idempotent.
 const insertedRows = [];
 let nextInsertResult = null;
 const fakeSupabase = {
   from(table) {
     assert.equal(table, 'transactions');
     return {
-      insert(rows) {
-        insertedRows.push(...rows);
+      upsert(row, options) {
+        assert.deepEqual(options, { onConflict: 'reference' }, 'must upsert on reference');
+        assert.ok(!('updated_at' in row), 'must never send an updated_at column');
+        insertedRows.push(row);
         return {
           async select() {
-            return nextInsertResult || { data: rows, error: null };
+            return nextInsertResult || { data: [row], error: null };
           }
         };
       }

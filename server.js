@@ -5,16 +5,18 @@ const { v4: uuidv4 } = require('uuid');
 const { initializePayment, verifyPayment, generateReference } = require('./lib/paystack');
 const ledger = require('./lib/ledger');
 const { handleWebhookEvent, toLedgerRecord } = require('./lib/webhook');
+const { isSupabaseConfigured, supabaseConfigState } = require('./lib/supabase');
+const transactionStore = require('./lib/transaction-store');
 
-// Supabase client for persisting test transactions (shared module)
-let supabase = null;
-try {
-  if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
-    ({ supabase } = require('./lib/supabase'));
-  }
-} catch (e) {
-  console.log('[SUPABASE] Not configured, test transactions will only be stored in memory');
-}
+// Vercel runs the dashboard checkout (POST /api/v1/transaction/charge) in a
+// serverless function whose memory disappears between requests, so a payment
+// that is not written to Supabase is a payment the dashboard will never see.
+// In that environment a persistence failure must be reported, not swallowed.
+const IS_SERVERLESS = Boolean(process.env.VERCEL || process.env.VERCEL_ENV);
+
+// Simulated USSD/card authorization delay. Overridable so the test suite does
+// not have to sit through it.
+const CHARGE_SETTLEMENT_DELAY_MS = Number(process.env.CHARGE_SETTLEMENT_DELAY_MS) || 2000;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -132,24 +134,37 @@ app.post('/api/v1/transaction/charge', (req, res) => {
     declineReason = 'Invalid mobile money number. Please check and try again.';
   }
 
-  // Helper to persist transaction to Supabase (for dashboard visibility)
+  /**
+   * Persist the checkout transaction to Supabase through the SHARED helper, so
+   * this route writes exactly the same columns as POST /api/transactions.
+   *
+   * This route is the dashboard's own checkout and it does NOT go through
+   * Paystack, so no webhook ever fires for it — this write is the only thing
+   * that puts the payment in front of the merchant.
+   */
   async function persistToSupabase(transactionData) {
-    if (!supabase) return;
-    try {
-      await supabase
-        .from('transactions')
-        .upsert({
-          reference: transactionData.reference,
-          customer_email: transactionData.customer,
-          amount: transactionData.amount,
-          payment_method: transactionData.channel,
-          status: transactionData.status,
-          merchant_name: transactionData.merchant,
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'reference' });
-    } catch (err) {
-      console.error('[SUPABASE] Failed to persist transaction:', err.message);
+    const result = await transactionStore.saveTransaction(
+      {
+        reference: transactionData.reference,
+        merchant: transactionData.merchant,
+        customer: transactionData.customer,
+        amount: transactionData.amount,
+        channel: transactionData.channel,
+        status: transactionData.status,
+        timestamp: transactionData.timestamp
+      },
+      { context: 'CHECKOUT' }
+    );
+
+    if (!result.ok) {
+      console.error(
+        `[CHECKOUT] Transaction ${transactionData.reference} was NOT persisted:`,
+        result.reason,
+        { supabase: supabaseConfigState() }
+      );
     }
+
+    return result;
   }
 
   setTimeout(async () => {
@@ -158,27 +173,50 @@ app.post('/api/v1/transaction/charge', (req, res) => {
       // The balance is derived from the ledger (sum of SUCCESS rows), so
       // flipping the status above is all it takes to settle the funds.
       console.log(`[SETTLEMENT] Trans Ref ${reference} CLEARED for GHS ${trx.amount}! New balance GHS ${ledger.getBalance()}.`);
-      
-      // Persist to Supabase so dashboard can see test transactions
-      await persistToSupabase(trx);
-      
-      res.status(200).json({
+
+      // Persist to Supabase so the dashboard can see the payment.
+      const persistence = await persistToSupabase(trx);
+
+      // On Vercel the in-memory ledger dies with the request, so a failed write
+      // means the money would silently vanish from the dashboard. Fail loudly
+      // instead of telling the customer the charge cleared.
+      if (!persistence.ok && IS_SERVERLESS) {
+        return res.status(500).json({
+          status: false,
+          message:
+            'Payment could not be recorded. Please contact support before retrying.',
+          reference,
+          amount: trx.amount,
+          trx_status: 'FAILED',
+          error: 'Failed to persist transaction',
+          detail: persistence.reason
+        });
+      }
+
+      return res.status(200).json({
         status: true,
         message: 'Charge successful',
         reference,
         amount: trx.amount,
-        trx_status: 'SUCCESS'
+        trx_status: 'SUCCESS',
+        persisted: persistence.ok
       });
-    } else {
-      trx.status = 'FAILED';
-      console.log(`[LEDGER] Trans Ref ${reference} DECLINED: ${declineReason}`);
-      
-      // Also persist failed transactions for record
-      await persistToSupabase(trx);
-      
-      res.status(200).json({ status: false, message: declineReason, reference, trx_status: 'FAILED' });
     }
-  }, 2000); // simulated USSD prompt delay
+
+    trx.status = 'FAILED';
+    console.log(`[LEDGER] Trans Ref ${reference} DECLINED: ${declineReason}`);
+
+    // Failed attempts are recorded too, so the ledger tells the whole story.
+    const persistence = await persistToSupabase(trx);
+
+    return res.status(200).json({
+      status: false,
+      message: declineReason,
+      reference,
+      trx_status: 'FAILED',
+      persisted: persistence.ok
+    });
+  }, CHARGE_SETTLEMENT_DELAY_MS); // simulated USSD prompt delay
 });
 
 // API 3: Verify Transaction Status
@@ -283,15 +321,116 @@ app.get('/api/v1/merchant/dashboard', (req, res) => {
 });
 
 // API 5: Canonical transactions endpoint used by the dashboard.
-// Returns the live ledger array (empty until real payments come in) plus the
-// balance derived from the SUCCESSFUL transactions in it.
-app.get('/api/transactions', (req, res) => {
-  const snapshot = ledger.getLedgerSnapshot();
-  res.status(200).json({
+//
+// Supabase is the durable source of truth (the in-memory ledger is per-instance
+// and disappears on a serverless cold start). When Supabase is configured its
+// rows are returned, merged with anything still only in memory. When it is not
+// configured we fall back to the in-memory ledger so local development keeps
+// working — but a Supabase READ ERROR is surfaced rather than hidden behind an
+// innocent-looking empty list.
+app.get('/api/transactions', async (req, res) => {
+  const memorySnapshot = ledger.getLedgerSnapshot();
+
+  if (!isSupabaseConfigured()) {
+    return res.status(200).json({
+      success: true,
+      status: true,
+      source: 'memory',
+      ...memorySnapshot,
+      data: memorySnapshot.transactions
+    });
+  }
+
+  const result = await transactionStore.fetchTransactions({ context: 'TRANSACTIONS' });
+
+  if (!result.ok) {
+    return res.status(500).json({
+      success: false,
+      status: false,
+      error: 'Failed to fetch transactions',
+      message: result.reason,
+      balance: 0,
+      currency: 'GHS',
+      count: 0,
+      successful: 0,
+      transactions: [],
+      data: []
+    });
+  }
+
+  // Merge: Supabase rows win by reference, in-memory-only rows are appended so
+  // a PENDING transaction created seconds ago is not missing from the list.
+  const byReference = new Map();
+  for (const row of memorySnapshot.transactions) {
+    byReference.set(row.reference, transactionStore.toDashboardTransaction({
+      reference: row.reference,
+      merchant_name: row.merchant,
+      customer_email: row.customer,
+      amount: row.amount,
+      payment_method: row.channel,
+      status: row.status,
+      paid_at: row.timestamp
+    }));
+  }
+  for (const row of result.transactions) byReference.set(row.reference, row);
+
+  const payload = transactionStore.buildLedgerPayload([...byReference.values()]);
+
+  return res.status(200).json({
     success: true,
     status: true,
-    ...snapshot,
-    data: snapshot.transactions
+    source: 'supabase',
+    ...payload,
+    data: payload.transactions
+  });
+});
+
+// API 5b: Deployment health check.
+// Reports WHICH environment variables are configured (never their values), so a
+// production deployment can be verified without guessing why the dashboard is
+// empty. Required in Vercel Production: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+// (preferred over SUPABASE_ANON_KEY) and PAYSTACK_SECRET_KEY; WEBHOOK_SECRET is
+// optional because Paystack signs webhooks with PAYSTACK_SECRET_KEY.
+app.get('/api/health', (req, res) => {
+  const supabase = supabaseConfigState();
+  const paystackConfigured = Boolean(process.env.PAYSTACK_SECRET_KEY);
+  const webhookSecretConfigured = Boolean(
+    process.env.WEBHOOK_SECRET || process.env.PAYSTACK_SECRET_KEY
+  );
+
+  const missing = [];
+  if (!supabase.urlConfigured) missing.push('SUPABASE_URL');
+  if (!supabase.keyConfigured) missing.push('SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)');
+  if (!paystackConfigured) missing.push('PAYSTACK_SECRET_KEY');
+
+  const warnings = [];
+  if (supabase.urlConfigured && !supabase.serviceRoleKeyConfigured && supabase.anonKeyConfigured) {
+    warnings.push(
+      'Using SUPABASE_ANON_KEY. Set SUPABASE_SERVICE_ROLE_KEY so Row Level Security cannot reject writes.'
+    );
+  }
+  if (!process.env.WEBHOOK_SECRET && paystackConfigured) {
+    warnings.push('WEBHOOK_SECRET is unset — falling back to PAYSTACK_SECRET_KEY (this is fine for Paystack).');
+  }
+
+  res.set('Cache-Control', 'no-store');
+  res.status(missing.length ? 503 : 200).json({
+    ok: missing.length === 0,
+    environment: process.env.VERCEL_ENV || (IS_SERVERLESS ? 'vercel' : 'local'),
+    required: {
+      SUPABASE_URL: supabase.urlConfigured,
+      SUPABASE_SERVICE_ROLE_KEY: supabase.serviceRoleKeyConfigured,
+      SUPABASE_ANON_KEY: supabase.anonKeyConfigured,
+      PAYSTACK_SECRET_KEY: paystackConfigured
+    },
+    optional: { WEBHOOK_SECRET: Boolean(process.env.WEBHOOK_SECRET) },
+    supabase: {
+      configured: supabase.configured,
+      credentialType: supabase.credentialType
+    },
+    webhook: { signingSecretConfigured: webhookSecretConfigured },
+    missing,
+    warnings
   });
 });
 
