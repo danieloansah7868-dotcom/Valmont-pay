@@ -608,3 +608,5 @@ export function createWebhookHandler({ supabaseClient } = {}) {
 }
 
 export default createWebhookHandler();
+// Paystack webhook handler
+// Auto split: 3% Valmont, 97% owner
