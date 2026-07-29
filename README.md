@@ -351,3 +351,4 @@ Once you verify this running software, here is your actual, step-by-step enginee
 
 ---
 **This prototype is 100% complete, fully tested, and ready to serve as your launching pad to building the next major African payment gateway!**
+Test transactions removed, balances reset. Payout options (Bank/MoMo) and tenant API keys page added for valmontpay.app.
