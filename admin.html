@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valmont-Pay — Multi-Tenant Admin</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #050d24; color: #ffffff; }
+    .card { background-color: #0b1a38; border: 1px solid #142850; border-radius: 8px; }
+    .input-field { background-color: #050d24; border: 1px solid #142850; color: white; padding: 10px 14px; border-radius: 6px; font-size: 13px; outline: none; width: 100%; }
+    .input-field:focus { border-color: #f68b1e; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
+    .badge-test { background-color: #f59e0b20; color: #f59e0b; border: 1px solid #f59e0b40; }
+    .badge-live { background-color: #10b98120; color: #10b981; border: 1px solid #10b98140; }
+    .badge-success { background-color: #10b98120; color: #10b981; border: 1px solid #10b98140; }
+    .badge-failed { background-color: #ef444420; color: #ef4444; border: 1px solid #ef444440; }
+    .badge-pending { background-color: #f59e0b20; color: #f59e0b; border: 1px solid #f59e0b40; }
+    .gold-btn { background-color: #f68b1e; color: white; font-weight: 800; font-size: 12px; padding: 8px 16px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.05em; transition: all 0.15s; }
+    .gold-btn:hover { background-color: #e07d0e; }
+    .gold-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .navy-btn { background-color: #142850; color: white; font-weight: 700; font-size: 12px; padding: 8px 16px; border-radius: 6px; transition: all 0.15s; }
+    .navy-btn:hover { background-color: #1e3a6e; }
+    .tab-active { border-bottom: 2px solid #f68b1e; color: #f68b1e; font-weight: 800; }
+    .tab-inactive { color: #6b7280; font-weight: 600; }
+    .tab-inactive:hover { color: #9ca3af; }
+    pre { white-space: pre-wrap; word-break: break-all; }
+    .copy-btn { cursor: pointer; }
+    .copy-btn:hover { opacity: 0.8; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <script>
+    if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
+      window.location.href = '/admin-login.html';
+    }
+  </script>
+
+  <!-- Header -->
+  <header class="bg-[#0b1a38] border-b border-[#142850] px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-4">
+      <img src="/logo.svg" alt="Valmont Pay" style="height: 36px;">
+      <span class="text-gray-400 text-xs font-bold uppercase tracking-widest hidden sm:inline">Multi-Tenant Admin</span>
+    </div>
+    <div class="flex items-center gap-3">
+      <span id="tenantCount" class="text-xs text-gray-500 font-bold">0 tenants</span>
+      <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" class="text-xs text-gray-400 hover:text-white font-bold transition">Logout</button>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main class="max-w-7xl mx-auto p-6 space-y-6">
+    
+    <!-- Tabs -->
+    <div class="flex gap-6 border-b border-[#142850] pb-3">
+      <button onclick="switchTab('tenants')" id="tab-tenants" class="tab-active text-sm pb-3 -mb-3">Tenants</button>
+      <button onclick="switchTab('transactions')" id="tab-transactions" class="tab-inactive text-sm pb-3 -mb-3">Transactions</button>
+      <button onclick="switchTab('deliveries')" id="tab-deliveries" class="tab-inactive text-sm pb-3 -mb-3">Webhook Deliveries</button>
+      <button onclick="switchTab('api')" id="tab-api" class="tab-inactive text-sm pb-3 -mb-3">API Docs</button>
+    </div>
+
+    <!-- ─── Tenants Tab ──────────────────────────────────────────── -->
+    <div id="panel-tenants" class="space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-black text-[#f68b1e]">Registered Tenants</h2>
+        <button onclick="refreshTenants()" class="navy-btn text-xs">⟳ Refresh</button>
+      </div>
+
+      <!-- Tenant Cards -->
+      <div id="tenantCards" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+    <!-- ─── Transactions Tab ─────────────────────────────────────── -->
+    <div id="panel-transactions" class="space-y-4 hidden">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-black text-[#f68b1e]">Transactions</h2>
+        <div class="flex gap-2">
+          <select id="txFilterTenant" class="input-field text-xs w-auto" onchange="loadTransactions()">
+            <option value="">All Tenants</option>
+          </select>
+          <button onclick="loadTransactions()" class="navy-btn text-xs">⟳ Refresh</button>
+        </div>
+      </div>
+
+      <div class="card overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs">
+            <thead>
+              <tr class="border-b border-[#142850] text-gray-400 font-extrabold uppercase tracking-wider">
+                <th class="text-left p-3">Reference</th>
+                <th class="text-left p-3">Merchant</th>
+                <th class="text-left p-3">Customer</th>
+                <th class="text-right p-3">Amount</th>
+                <th class="text-left p-3">Channel</th>
+                <th class="text-left p-3">Status</th>
+                <th class="text-left p-3">Date</th>
+              </tr>
+            </thead>
+            <tbody id="txTableBody" class="divide-y divide-[#142850]">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+        <div id="txEmpty" class="p-8 text-center text-gray-500 text-sm font-medium hidden">
+          No transactions yet.
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Webhook Deliveries Tab ───────────────────────────────── -->
+    <div id="panel-deliveries" class="space-y-4 hidden">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-black text-[#f68b1e]">Webhook Delivery Log</h2>
+        <button onclick="loadDeliveries()" class="navy-btn text-xs">⟳ Refresh</button>
+      </div>
+
+      <div class="card p-4">
+        <div class="flex gap-3 mb-4">
+          <input id="delFilterReference" placeholder="Filter by reference..." class="input-field flex-1" />
+          <input id="delFilterTenant" placeholder="Filter by tenant..." class="input-field w-48" />
+          <button onclick="loadDeliveries()" class="gold-btn">Filter</button>
+        </div>
+        <div id="deliveryTable" class="space-y-2">
+          <!-- Populated by JS -->
+        </div>
+        <div id="delEmpty" class="p-8 text-center text-gray-500 text-sm font-medium hidden">
+          No delivery attempts recorded.
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── API Docs Tab ─────────────────────────────────────────── -->
+    <div id="panel-api" class="space-y-4 hidden">
+      <h2 class="text-lg font-black text-[#f68b1e]">API Reference</h2>
+      
+      <div class="card p-6 space-y-6 text-sm">
+        <div>
+          <h3 class="font-bold text-[#f68b1e] mb-2">POST /api/transaction/initialize</h3>
+          <p class="text-gray-400 mb-2">Authorised by tenant secret key. Initializes a payment and returns an access_code.</p>
+          <pre class="bg-[#050d24] p-3 rounded text-gray-300 text-xs">
+Authorization: Bearer &lt;secret_key&gt;
+Content-Type: application/json
+
+{
+  "amount": 50.00,
+  "reference": "VM-ORDER-123",
+  "currency": "GHS",
+  "email": "customer@example.com",
+  "phone": "+233501234567",
+  "callback_url": "https://valmontweb.com/orders/thanks"
+}
+
+→ 200
+{
+  "status": true,
+  "data": {
+    "access_code": "ac_1a2b3c4d5e6f7g8h",
+    "reference": "VM-ORDER-123",
+    "amount": 50.00,
+    "currency": "GHS",
+    "pay_url": "https://valmontpay.app/pay.html?access_code=ac_..."
+  }
+}
+          </pre>
+        </div>
+
+        <div>
+          <h3 class="font-bold text-[#f68b1e] mb-2">GET /api/transaction/verify/{reference}</h3>
+          <p class="text-gray-400 mb-2">Verify a transaction. Tenant-scoped — returns 404 for cross-tenant lookups.</p>
+          <pre class="bg-[#050d24] p-3 rounded text-gray-300 text-xs">
+Authorization: Bearer &lt;secret_key&gt;
+
+→ 200
+{
+  "status": true,
+  "data": {
+    "reference": "VM-ORDER-123",
+    "status": "success",
+    "amount": 50.00,
+    "currency": "GHS",
+    "channel": "mobile_money",
+    "paid_at": "2025-06-15T12:00:00Z",
+    "merchant": "valmont-electricals",
+    "gateway_reference": "VM-ORDER-123"
+  }
+}
+          </pre>
+        </div>
+
+        <div>
+          <h3 class="font-bold text-[#f68b1e] mb-2">Webhook: x-valmontpay-signature</h3>
+          <p class="text-gray-400 mb-2">Every event is POSTed to the tenant's webhook URL, signed with HMAC-SHA512 using the tenant's Paystack secret key.</p>
+          <pre class="bg-[#050d24] p-3 rounded text-gray-300 text-xs">
+POST &lt;tenant_webhook_url&gt;
+Content-Type: application/json
+x-valmontpay-signature: &lt;HMAC-SHA256(secret_key, raw_body)&gt;
+
+{
+  "event": "charge.success",
+  "data": {
+    "reference": "VM-ORDER-123",
+    "status": "success",
+    "amount": 50.00,
+    "currency": "GHS",
+    "channel": "mobile_money",
+    "paid_at": "2025-06-15T12:00:00Z",
+    "merchant": "valmont-electricals",
+    "gateway_reference": "VM-ORDER-123"
+  }
+}
+          </pre>
+        </div>
+
+        <div>
+          <h3 class="font-bold text-[#f68b1e] mb-2">Return Redirect</h3>
+          <p class="text-gray-400 mb-2">After Paystack checkout, the customer is redirected to the callback_url with status params.</p>
+          <pre class="bg-[#050d24] p-3 rounded text-gray-300 text-xs">
+GET /api/transaction/return?reference=VM-ORDER-123&status=success&merchant=valmont-electricals&callback_url=https://valmontweb.com/orders/thanks
+
+→ 302 Redirect to:
+https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
+          </pre>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // ─── Tab Switching ────────────────────────────────────────────────
+    const tabs = ['tenants', 'transactions', 'deliveries', 'api'];
+    function switchTab(name) {
+      for (const t of tabs) {
+        document.getElementById('panel-' + t).classList.toggle('hidden', t !== name);
+        const tab = document.getElementById('tab-' + t);
+        tab.className = (t === name ? 'tab-active' : 'tab-inactive') + ' text-sm pb-3 -mb-3';
+      }
+      if (name === 'tenants') refreshTenants();
+      if (name === 'transactions') loadTransactions();
+      if (name === 'deliveries') loadDeliveries();
+    }
+
+    // ─── Tenants ──────────────────────────────────────────────────────
+    async function refreshTenants() {
+      try {
+        const res = await fetch('/api/tenants');
+        const json = await res.json();
+        const tenants = json.data || [];
+        document.getElementById('tenantCount').textContent = tenants.length + ' tenants';
+
+        const container = document.getElementById('tenantCards');
+        container.innerHTML = tenants.map(t => `
+          <div class="card p-5 space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="h-4 w-4 rounded-full" style="background-color: ${t.brand_color || '#f68b1e'}"></div>
+                <h3 class="font-bold text-sm">${escapeHtml(t.display_name)}</h3>
+              </div>
+              <span class="badge ${t.environment === 'live' ? 'badge-live' : 'badge-test'}">${t.environment || 'test'}</span>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <span class="text-gray-500 block">Key</span>
+                <span class="font-mono text-gray-300">${escapeHtml(t.key)}</span>
+              </div>
+              <div>
+                <span class="text-gray-500 block">Currency</span>
+                <span class="font-bold">${t.currency || 'GHS'}</span>
+              </div>
+              <div class="col-span-2">
+                <span class="text-gray-500 block">Webhook URL</span>
+                <span class="font-mono text-gray-300 text-xs break-all">${escapeHtml(t.webhook_url || '(not set)')}</span>
+              </div>
+              <div class="col-span-2">
+                <span class="text-gray-500 block">Settlement Account</span>
+                <span class="text-gray-300">${escapeHtml(t.settlement_account || '(not set)')}</span>
+              </div>
+              <div class="col-span-2">
+                <span class="text-gray-500 block">Allowed Domains</span>
+                <span class="text-gray-300">${(t.allowed_domains || []).join(', ') || '(none)'}</span>
+              </div>
+            </div>
+            <div class="flex gap-2 pt-2 border-t border-[#142850]">
+              <button onclick="showWebhookDialog('${escapeHtml(t.key)}', '${escapeHtml(t.webhook_url || '')}')" class="navy-btn text-xs flex-1">Set Webhook URL</button>
+              <button onclick="rotateKeys('${escapeHtml(t.key)}')" class="navy-btn text-xs flex-1">Rotate Keys</button>
+              <button onclick="showKeyDialog('${escapeHtml(t.key)}')" class="navy-btn text-xs flex-1">Show Keys</button>
+            </div>
+          </div>
+        `).join('');
+      } catch (err) {
+        console.error('Failed to load tenants:', err);
+      }
+    }
+
+    // ─── Webhook Dialog ──────────────────────────────────────────────
+    function showWebhookDialog(key, currentUrl) {
+      const newUrl = prompt('Enter webhook URL for ' + key + ':', currentUrl);
+      if (newUrl === null) return;
+      if (!newUrl.trim()) {
+        alert('Webhook URL cannot be empty.');
+        return;
+      }
+
+      fetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhook_url: newUrl.trim() })
+      })
+      .then(r => r.json())
+      .then(json => {
+        if (json.status) {
+          alert('Webhook URL updated successfully.');
+          refreshTenants();
+        } else {
+          alert('Error: ' + (json.message || 'Unknown error'));
+        }
+      })
+      .catch(err => alert('Error: ' + err.message));
+    }
+
+    // ─── Rotate Keys ─────────────────────────────────────────────────
+    function rotateKeys(key) {
+      if (!confirm('Rotate API keys for ' + key + '?\n\nBoth current and new keys will remain valid during the transition period.')) return;
+
+      fetch('/api/tenants/' + encodeURIComponent(key) + '/rotate-keys', {
+        method: 'POST'
+      })
+      .then(r => r.json())
+      .then(json => {
+        if (json.status && json.data) {
+          alert(
+            'Keys rotated successfully!\n\n' +
+            'secret_key_1: ' + json.data.secret_key_1 + '\n' +
+            'secret_key_2: ' + json.data.secret_key_2 + '\n\n' +
+            'Save these now. secret_key_2 is the new key.'
+          );
+          refreshTenants();
+        } else {
+          alert('Error: ' + (json.message || 'Unknown error'));
+        }
+      })
+      .catch(err => alert('Error: ' + err.message));
+    }
+
+    // ─── Show Keys ───────────────────────────────────────────────────
+    function showKeyDialog(key) {
+      alert(
+        'To see the API keys for ' + key + ', check your server environment variables:\n\n' +
+        'TENANT__' + key.toUpperCase().replace(/-/g, '_') + '__SECRET_KEY_1\n' +
+        'TENANT__' + key.toUpperCase().replace(/-/g, '_') + '__SECRET_KEY_2\n\n' +
+        'Or set TENANTS_JSON with the full configuration.'
+      );
+    }
+
+    // ─── Transactions ────────────────────────────────────────────────
+    async function loadTransactions() {
+      try {
+        const res = await fetch('/api/transactions');
+        const json = await res.json();
+        const data = json.data || json.transactions || [];
+        const tenantFilter = document.getElementById('txFilterTenant').value;
+
+        // Populate filter dropdown
+        const tenants = [...new Set(data.map(t => t.merchant || t.merchant_name || '').filter(Boolean))];
+        const filterSelect = document.getElementById('txFilterTenant');
+        const currentVal = filterSelect.value;
+        filterSelect.innerHTML = '<option value="">All Tenants</option>' +
+          tenants.map(t => `<option value="${escapeHtml(t)}" ${t === currentVal ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('');
+
+        const filtered = tenantFilter ? data.filter(t => (t.merchant || t.merchant_name) === tenantFilter) : data;
+
+        const tbody = document.getElementById('txTableBody');
+        const empty = document.getElementById('txEmpty');
+
+        if (!filtered.length) {
+          tbody.innerHTML = '';
+          empty.classList.remove('hidden');
+          return;
+        }
+        empty.classList.add('hidden');
+
+        tbody.innerHTML = filtered.map(t => {
+          const status = String(t.status || '').toUpperCase();
+          const statusClass = status === 'SUCCESS' || status === 'SUCCESSFUL' || status === 'PAID' || status === 'COMPLETED'
+            ? 'badge-success'
+            : status === 'FAILED' || status === 'ABANDONED'
+              ? 'badge-failed'
+              : 'badge-pending';
+          return `
+            <tr class="hover:bg-[#0d1e3d]/30">
+              <td class="p-3 font-mono font-bold text-gray-200">${escapeHtml(t.reference)}</td>
+              <td class="p-3">${escapeHtml(t.merchant || t.merchant_name || '-')}</td>
+              <td class="p-3 text-gray-400">${escapeHtml(t.customer || t.customer_email || '-')}</td>
+              <td class="p-3 text-right font-bold">${formatAmount(t.amount)}</td>
+              <td class="p-3 text-gray-400">${escapeHtml(t.channel || t.payment_method || '-')}</td>
+              <td class="p-3"><span class="badge ${statusClass}">${status}</span></td>
+              <td class="p-3 text-gray-400 text-[10px]">${formatDate(t.paid_at || t.timestamp)}</td>
+            </tr>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error('Failed to load transactions:', err);
+      }
+    }
+
+    // ─── Webhook Deliveries ──────────────────────────────────────────
+    async function loadDeliveries() {
+      try {
+        const ref = document.getElementById('delFilterReference').value.trim();
+        const tenant = document.getElementById('delFilterTenant').value.trim();
+        let url = '/api/webhook-deliveries';
+        const params = new URLSearchParams();
+        if (ref) params.set('reference', ref);
+        if (tenant) params.set('tenant_key', tenant);
+        if ([...params].length) url += '?' + params.toString();
+
+        const res = await fetch(url);
+        const json = await res.json();
+        const deliveries = json.data || [];
+
+        const container = document.getElementById('deliveryTable');
+        const empty = document.getElementById('delEmpty');
+
+        if (!deliveries.length) {
+          container.innerHTML = '';
+          empty.classList.remove('hidden');
+          return;
+        }
+        empty.classList.add('hidden');
+
+        container.innerHTML = deliveries.map(d => `
+          <div class="bg-[#050d24] border border-[#142850] rounded p-3 text-xs">
+            <div class="flex items-center justify-between mb-2">
+              <span class="font-bold text-gray-200">${escapeHtml(d.reference)}</span>
+              <div class="flex items-center gap-2">
+                <span class="badge ${d.success ? 'badge-success' : 'badge-failed'}">${d.success ? '✓ Delivered' : '✗ Failed'}</span>
+                <span class="text-gray-500">Attempt ${d.attempt || '-'}</span>
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-gray-400">
+              <span>Tenant: <span class="text-gray-300">${escapeHtml(d.tenant_key)}</span></span>
+              <span>Event: <span class="text-gray-300">${escapeHtml(d.event)}</span></span>
+              <span>HTTP: <span class="text-gray-300">${d.statusCode || 'timeout'}</span></span>
+              <span>Duration: <span class="text-gray-300">${d.durationMs || '-'}ms</span></span>
+              <span class="col-span-2">URL: <span class="text-gray-300 break-all">${escapeHtml(d.url)}</span></span>
+            </div>
+            ${d.error ? `<div class="mt-1 text-red-400">Error: ${escapeHtml(d.error)}</div>` : ''}
+            <div class="text-[10px] text-gray-500 mt-1">${formatDate(d.timestamp)}</div>
+          </div>
+        `).join('');
+      } catch (err) {
+        console.error('Failed to load deliveries:', err);
+      }
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────────
+    function escapeHtml(v) { return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+    function formatAmount(v) { return 'GH₵ ' + Number(v || 0).toFixed(2); }
+    function formatDate(d) { if (!d) return '-'; try { return new Date(d).toLocaleString(); } catch(_) { return d; } }
+
+    // ─── Bootstrap ────────────────────────────────────────────────────
+    refreshTenants();
+    loadTransactions();
+  </script>
+</body>
+</html>

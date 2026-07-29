@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Valmont-Pay — Quick Payment</title>
+  <title>Valmont-Pay — Secure Payment</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,56 +16,91 @@
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
 
-  <!-- Payment Card Container -->
-  <div class="bg-white w-full max-w-[480px] rounded-xl shadow-2xl overflow-hidden border border-gray-100">
-    
-    <!-- Header -->
+  <!-- Loading State -->
+  <div id="loadingState" class="bg-white w-full max-w-[480px] rounded-xl shadow-2xl overflow-hidden border border-gray-100">
     <div class="bg-[#0b1a38] text-white p-6 flex items-center justify-between">
       <div class="flex items-center gap-3">
         <div class="h-3 w-3 rounded-full bg-[#f68b1e] animate-pulse"></div>
         <span class="font-extrabold text-sm uppercase tracking-widest text-[#f68b1e]">Valmont-Pay</span>
       </div>
-      <span class="text-xs text-gray-400 font-bold">Quick Payment</span>
+      <span class="text-xs text-gray-400 font-bold">Secure Payment</span>
+    </div>
+    <div class="p-8 text-center">
+      <div class="h-10 w-10 border-4 border-[#f68b1e] border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+      <p class="text-gray-600 font-semibold">Loading payment details...</p>
+    </div>
+  </div>
+
+  <!-- Error State -->
+  <div id="errorState" class="bg-white w-full max-w-[480px] rounded-xl shadow-2xl overflow-hidden border border-gray-100 hidden">
+    <div class="bg-[#0b1a38] text-white p-6 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="h-3 w-3 rounded-full bg-red-500"></div>
+        <span class="font-extrabold text-sm uppercase tracking-widest text-[#f68b1e]">Valmont-Pay</span>
+      </div>
+      <span class="text-xs text-gray-400 font-bold">Error</span>
+    </div>
+    <div class="p-8 text-center">
+      <div class="h-16 w-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center text-3xl font-black mx-auto mb-4">✕</div>
+      <h2 class="text-xl font-black text-gray-800 mb-2">Payment Link Invalid</h2>
+      <p id="errorMessage" class="text-gray-500 font-medium text-sm">This payment link is invalid or has expired.</p>
+      <p class="text-gray-400 text-xs mt-4">Please contact the merchant for a new payment link.</p>
+    </div>
+  </div>
+
+  <!-- Payment Card Container -->
+  <div id="paymentCard" class="bg-white w-full max-w-[480px] rounded-xl shadow-2xl overflow-hidden border border-gray-100 hidden">
+
+    <!-- Header -->
+    <div id="merchantHeader" class="bg-[#0b1a38] text-white p-6 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="h-3 w-3 rounded-full bg-[#f68b1e] animate-pulse"></div>
+        <span class="font-extrabold text-sm uppercase tracking-widest text-[#f68b1e]" id="merchantLabel">Valmont-Pay</span>
+      </div>
+      <span class="text-xs text-gray-400 font-bold">Secure Payment</span>
     </div>
 
     <!-- Payment Form -->
     <div class="p-8 space-y-6">
-      
-      <!-- Amount Display -->
+
+      <!-- Merchant Info -->
+      <div class="bg-gray-50 p-4 rounded-lg border border-gray-100 text-center">
+        <span class="block text-xs text-gray-400 font-bold uppercase tracking-wider">Paying</span>
+        <span class="block text-lg font-extrabold text-[#0b1a38] mt-1" id="merchantName">Loading...</span>
+      </div>
+
+      <!-- Amount Display (server-resolved, not user-editable) -->
       <div class="bg-gray-50 p-6 rounded-lg border border-gray-100 text-center">
         <span class="block text-xs text-gray-400 font-bold uppercase tracking-wider">Amount to Pay</span>
-        <span class="block text-4xl font-black text-[#0b1a38] mt-2" id="amount-display">GH₵ 0.00</span>
-        <span class="block text-sm text-gray-500 font-medium mt-2" id="merchant-name">Valmont-Pay</span>
+        <span class="block text-4xl font-black text-[#0b1a38] mt-2" id="amountDisplay">GH₵ 0.00</span>
+        <span class="block text-sm text-gray-500 font-medium mt-1" id="referenceDisplay">Ref: ---</span>
       </div>
 
-      <!-- Email Input -->
+      <!-- Email Input (pre-filled from server) -->
       <div>
-        <label class="block text-xs font-black uppercase text-gray-400 mb-2">Your Email Address *</label>
-        <input id="customerEmail" type="email" placeholder="your@email.com" 
+        <label class="block text-xs font-black uppercase text-gray-400 mb-2">Email Address</label>
+        <input id="customerEmail" type="email" placeholder="your@email.com"
+               class="w-full border-2 border-gray-100 p-4 rounded-lg text-sm outline-none font-semibold focus:border-[#f68b1e] transition bg-gray-50"
+               readonly />
+      </div>
+
+      <!-- Phone Input -->
+      <div>
+        <label class="block text-xs font-black uppercase text-gray-400 mb-2">Phone Number (optional)</label>
+        <input id="customerPhone" type="tel" placeholder="+233 XX XXX XXXX"
                class="w-full border-2 border-gray-100 p-4 rounded-lg text-sm outline-none font-semibold focus:border-[#f68b1e] transition" />
       </div>
 
-      <!-- Quick Amount Buttons -->
-      <div>
-        <label class="block text-xs font-black uppercase text-gray-400 mb-2">Quick Select Amount</label>
-        <div class="grid grid-cols-3 gap-3">
-          <button onclick="setAmount(50)" class="border-2 border-gray-100 hover:border-[#f68b1e] p-3 rounded-lg text-sm font-bold text-gray-600 hover:text-[#f68b1e] transition">GH₵ 50</button>
-          <button onclick="setAmount(100)" class="border-2 border-gray-100 hover:border-[#f68b1e] p-3 rounded-lg text-sm font-bold text-gray-600 hover:text-[#f68b1e] transition">GH₵ 100</button>
-          <button onclick="setAmount(200)" class="border-2 border-gray-100 hover:border-[#f68b1e] p-3 rounded-lg text-sm font-bold text-gray-600 hover:text-[#f68b1e] transition">GH₵ 200</button>
-        </div>
-      </div>
-
-      <!-- Custom Amount -->
-      <div>
-        <label class="block text-xs font-black uppercase text-gray-400 mb-2">Or Enter Custom Amount (GHS)</label>
-        <input id="customAmount" type="number" placeholder="Enter amount" min="1" step="0.01"
-               class="w-full border-2 border-gray-100 p-4 rounded-lg text-sm outline-none font-semibold focus:border-[#f68b1e] transition" />
-      </div>
-
-      <!-- Pay Button -->
-      <button id="btnProceed" onclick="proceedToCheckout()" 
+      <!-- Pay with Paystack Button -->
+      <button id="btnPayWithPaystack" onclick="payWithPaystack()"
               class="w-full bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-sm tracking-widest uppercase py-4 rounded-lg transition shadow-lg">
-        Proceed to Checkout
+        Pay with Paystack
+      </button>
+
+      <!-- Direct Checkout Fallback -->
+      <button id="btnDirectCheckout" onclick="proceedToCheckout()"
+              class="w-full bg-[#0b1a38] hover:bg-[#1e355c] text-white font-black text-sm tracking-widest uppercase py-4 rounded-lg transition shadow-lg">
+        Pay via Checkout
       </button>
 
       <!-- Footer -->
@@ -79,53 +114,170 @@
 
   <script>
     // ---------------------------------------------------------------
-    // Issue 1 + 2: merchant name AND amount are read from the URL.
-    // e.g. pay.html?amount=50&merchant=Valmont+Electricals
-    // There is NO hardcoded merchant or amount default anywhere below.
+    // SECURE PAYMENT PAGE
+    // amount, merchant, reference are all RESOLVED SERVER-SIDE from
+    // the access_code. The customer can never edit the amount.
     // ---------------------------------------------------------------
     const urlParams = new URLSearchParams(window.location.search);
-    const merchant = urlParams.get('merchant') || 'Valmont-Pay';
-    let amount = parseFloat(urlParams.get('amount')) || 0;
 
-    // Show the dynamic merchant name and update the page title (Issue 1 fix)
-    document.getElementById('merchant-name').textContent = merchant;
-    document.title = 'Pay ' + merchant + ' \u2014 Valmont-Pay';
+    // Accept either access_code (new secure flow) or legacy params
+    const accessCode = urlParams.get('access_code');
+    const merchantFromUrl = urlParams.get('merchant');
+    const amountFromUrl = parseFloat(urlParams.get('amount')) || 0;
+    const refFromUrl = urlParams.get('ref');
 
-    // Render the amount that is currently selected (Issue 2 fix)
-    function renderAmount() {
-      document.getElementById('amount-display').textContent = 'GH\u20b5 ' + amount.toFixed(2);
-      updateButtonText();
-    }
+    let paymentData = null;
+    let tenantData = null;
 
-    // Called by the GH\u20b5 50 / 100 / 200 quick-select buttons.
-    // Updates the shared `amount` variable that is later sent to the API.
-    function setAmount(value) {
-      amount = parseFloat(value) || 0;
-      document.getElementById('customAmount').value = amount > 0 ? amount : '';
-      renderAmount();
-    }
+    // Try to resolve from access_code first
+    async function loadPaymentDetails() {
+      if (accessCode) {
+        try {
+          const res = await fetch('/api/transaction/access/' + encodeURIComponent(accessCode));
+          const json = await res.json();
 
-    function updateButtonText() {
-      const btn = document.getElementById('btnProceed');
-      if (amount > 0) {
-        btn.textContent = 'Pay GH\u20b5 ' + amount.toFixed(2);
-        btn.classList.remove('opacity-50', 'cursor-not-allowed');
-      } else {
-        btn.textContent = 'Proceed to Checkout';
-        btn.classList.add('opacity-50', 'cursor-not-allowed');
+          if (json.status && json.data) {
+            paymentData = json.data;
+            renderPaymentForm();
+            return;
+          }
+        } catch (err) {
+          console.error('Failed to resolve access code:', err);
+        }
+
+        // Fallback: try to load tenant info if merchant is available
+        if (paymentData && paymentData.merchant) {
+          try {
+            const tRes = await fetch('/api/tenants/' + encodeURIComponent(paymentData.merchant));
+            const tJson = await tRes.json();
+            if (tJson.status && tJson.data) {
+              tenantData = tJson.data;
+            }
+          } catch (_) {}
+        }
+
+        showError('This payment link is invalid or has expired.');
+        return;
       }
+
+      // Legacy flow: amount and merchant come from URL (less secure)
+      if (merchantFromUrl && amountFromUrl > 0) {
+        paymentData = {
+          amount: amountFromUrl,
+          reference: refFromUrl || ('VP-' + Math.floor(100000 + Math.random() * 900000)),
+          currency: 'GHS',
+          email: urlParams.get('email') || '',
+          merchant: merchantFromUrl,
+          callback_url: urlParams.get('callback_url') || window.location.origin + '/dashboard.html'
+        };
+
+        // Load tenant info
+        try {
+          const tRes = await fetch('/api/tenants/' + encodeURIComponent(merchantFromUrl));
+          const tJson = await tRes.json();
+          if (tJson.status && tJson.data) {
+            tenantData = tJson.data;
+            paymentData.merchant_display_name = tenantData.display_name;
+            paymentData.merchant_brand_color = tenantData.brand_color;
+          }
+        } catch (_) {}
+
+        renderPaymentForm();
+        return;
+      }
+
+      // Neither access_code nor legacy params — check URL hash or show error
+      const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'));
+      const hashAccessCode = hashParams.get('access_code');
+      if (hashAccessCode) {
+        window.location.search = '?access_code=' + encodeURIComponent(hashAccessCode);
+        return;
+      }
+
+      showError('No payment details found. Please use the payment link provided by the merchant.');
     }
 
-    document.getElementById('customAmount').addEventListener('input', function () {
-      const val = parseFloat(this.value);
-      // Reset to 0 when the input is cleared / invalid so state stays in sync
-      amount = !isNaN(val) && val > 0 ? val : 0;
-      renderAmount();
-    });
+    function renderPaymentForm() {
+      // Set merchant branding
+      const displayName = paymentData.merchant_display_name || paymentData.merchant || 'Valmont-Pay';
+      const brandColor = paymentData.merchant_brand_color || '#f68b1e';
+
+      document.getElementById('merchantLabel').textContent = displayName;
+      document.getElementById('merchantName').textContent = displayName;
+
+      // Apply brand color to header
+      const header = document.getElementById('merchantHeader');
+      header.style.backgroundColor = brandColor;
+
+      // Set amount (server-resolved)
+      const currency = paymentData.currency || 'GHS';
+      const symbol = currency === 'GHS' ? 'GH₵' : currency === 'NGN' ? '₦' : currency + ' ';
+      document.getElementById('amountDisplay').textContent = symbol + ' ' + Number(paymentData.amount).toFixed(2);
+
+      // Set reference
+      document.getElementById('referenceDisplay').textContent = 'Ref: ' + (paymentData.reference || '---');
+
+      // Pre-fill email
+      const emailInput = document.getElementById('customerEmail');
+      if (paymentData.email) {
+        emailInput.value = paymentData.email;
+      } else {
+        emailInput.readOnly = false;
+        emailInput.classList.remove('bg-gray-50');
+      }
+
+      // Pre-fill phone
+      if (paymentData.phone) {
+        document.getElementById('customerPhone').value = paymentData.phone;
+      }
+
+      // Show/hide Paystack button based on whether we have an authorization URL
+      const paystackBtn = document.getElementById('btnPayWithPaystack');
+      if (paymentData.paystack_authorization_url) {
+        paystackBtn.classList.remove('hidden');
+      } else {
+        paystackBtn.classList.add('hidden');
+      }
+
+      // Hide loading, show payment card
+      document.getElementById('loadingState').classList.add('hidden');
+      document.getElementById('paymentCard').classList.remove('hidden');
+
+      // Update page title
+      document.title = 'Pay ' + displayName + ' — Valmont-Pay';
+    }
+
+    function showError(message) {
+      document.getElementById('loadingState').classList.add('hidden');
+      document.getElementById('paymentCard').classList.add('hidden');
+      document.getElementById('errorState').classList.remove('hidden');
+      document.getElementById('errorMessage').textContent = message || 'This payment link is invalid or has expired.';
+    }
+
+    function payWithPaystack() {
+      // Open Paystack's standard checkout in a new window
+      const authUrl = paymentData.paystack_authorization_url;
+      if (!authUrl) {
+        alert('Paystack checkout is not available for this payment. Use the direct checkout instead.');
+        return;
+      }
+
+      const email = document.getElementById('customerEmail').value.trim();
+      if (!email) {
+        alert('Please enter your email address.');
+        return;
+      }
+
+      const btn = document.getElementById('btnPayWithPaystack');
+      btn.disabled = true;
+      btn.textContent = 'Redirecting to Paystack...';
+
+      // Open Paystack checkout in same window (standard redirect flow)
+      window.location.href = authUrl;
+    }
 
     function proceedToCheckout() {
       const email = document.getElementById('customerEmail').value.trim();
-
       if (!email) {
         alert('Please enter your email address.');
         return;
@@ -136,55 +288,25 @@
         return;
       }
 
-      if (amount <= 0) {
-        alert('Please select or enter an amount.');
-        return;
+      const btn = document.getElementById('btnDirectCheckout');
+      btn.disabled = true;
+      btn.textContent = 'Processing...';
+
+      // Redirect to checkout page with the server-resolved amount
+      const checkoutUrl = new URL('/checkout.html', window.location.origin);
+      checkoutUrl.searchParams.set('reference', paymentData.reference);
+      checkoutUrl.searchParams.set('amount', paymentData.amount);
+      checkoutUrl.searchParams.set('email', email);
+      checkoutUrl.searchParams.set('merchant', paymentData.merchant || paymentData.merchant_display_name);
+      if (paymentData.callback_url) {
+        checkoutUrl.searchParams.set('callback_url', paymentData.callback_url);
       }
 
-      const btn = document.getElementById('btnProceed');
-      btn.disabled = true;
-      btn.textContent = 'Processing\u2026';
-
-      // Initialize transaction via API, sending the CORRECT amount (Issue 2 fix)
-      fetch('/api/v1/transaction/initialize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: email,
-          amount: amount,
-          merchant: merchant,
-          callback_url: window.location.origin + '/checkout.html'
-        })
-      })
-        .then(res => res.json())
-        .then(data => {
-          if (data.status && data.data && data.data.checkout_url) {
-            // Redirect to checkout, carrying the reference, the real amount,
-            // the email and the merchant name through the query string.
-            const checkoutUrl = new URL(data.data.checkout_url, window.location.origin);
-            checkoutUrl.searchParams.set('amount', amount);
-            checkoutUrl.searchParams.set('email', email);
-            checkoutUrl.searchParams.set('merchant', merchant);
-            if (data.data.callback_url) {
-              checkoutUrl.searchParams.set('callback_url', data.data.callback_url);
-            }
-            window.location.href = checkoutUrl.toString();
-          } else {
-            btn.disabled = false;
-            updateButtonText();
-            alert(data.message || 'Failed to initialize transaction. Please try again.');
-          }
-        })
-        .catch(err => {
-          console.error('Error:', err);
-          btn.disabled = false;
-          updateButtonText();
-          alert('Connection error. Please check your network.');
-        });
+      window.location.href = checkoutUrl.toString();
     }
 
-    // Initialize the display from the URL amount (0.00 when not provided)
-    renderAmount();
+    // Boot
+    loadPaymentDetails();
   </script>
 
 </body>

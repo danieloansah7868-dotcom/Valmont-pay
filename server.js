@@ -1,14 +1,18 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
-const { initializePayment, verifyPayment, generateReference } = require('./lib/paystack');
+const { initializePayment, verifyPayment, generateReference, toSubunits } = require('./lib/paystack');
 const ledger = require('./lib/ledger');
 const { handleWebhookEvent, toLedgerRecord } = require('./lib/webhook');
 const { isSupabaseConfigured, supabaseConfigState, getSupabaseClient } = require('./lib/supabase');
 const transactionStore = require('./lib/transaction-store');
 const webhookLog = require('./lib/webhook-log');
 const webhookDiagnostics = require('./lib/webhook-diagnostics');
+const tenants = require('./lib/tenants');
+const accessCodeStore = require('./lib/access-code-store');
+const webhookForwarder = require('./lib/tenant-webhook-forwarder');
 
 // Vercel runs the dashboard checkout (POST /api/v1/transaction/charge) in a
 // serverless function whose memory disappears between requests, so a payment
@@ -548,6 +552,50 @@ app.post('/api/webhook', async (req, res) => {
       if (!persistence.ok) {
         console.error(`[WEBHOOK ${requestId}] STEP 6/6 SUPABASE — ✗ Supabase rejected ${record.reference}: ${persistence.reason}. Common causes: Row Level Security blocking the anon key (use SUPABASE_SERVICE_ROLE_KEY), a missing column, or a type mismatch.`);
       }
+
+      // ─── MULTI-TENANT: Forward webhook to the tenant's registered URL ───
+      // After persisting to Supabase, also dispatch the event to the
+      // appropriate tenant's webhook URL.
+      if (result.body && result.body.transaction) {
+        const trxRecord = result.body.transaction;
+        const merchantKey = trxRecord.merchant
+          ? String(trxRecord.merchant).toLowerCase()
+          : null;
+
+        // Try to find the merchant in metadata
+        let tenantKey = merchantKey;
+        if (!tenantKey && req.body && req.body.data && req.body.data.metadata) {
+          tenantKey = req.body.data.metadata.merchant
+            ? String(req.body.data.metadata.merchant).toLowerCase()
+            : null;
+        }
+
+        if (tenantKey) {
+          const tenant = tenants.getTenant(tenantKey);
+          if (tenant && tenant.webhook_url) {
+            const eventName = req.body && req.body.event ? String(req.body.event) : 'charge.success';
+            const data = req.body && req.body.data ? req.body.data : {};
+            const reference = trxRecord.reference;
+
+            console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — forwarding ${eventName} for ${reference} to ${tenant.key} @ ${tenant.webhook_url}`);
+
+            webhookForwarder.dispatchWebhook(tenant, eventName, {
+              reference: reference,
+              status: trxRecord.status || 'success',
+              amount: Number(trxRecord.amount) || 0,
+              currency: data.currency || tenant.currency || 'GHS',
+              channel: trxRecord.channel || data.channel || 'Unknown',
+              paid_at: trxRecord.timestamp || data.paid_at || new Date().toISOString(),
+              merchant: tenant.key,
+              gateway_reference: reference
+            }, reference);
+          } else if (tenant) {
+            console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — tenant ${tenant.key} has no webhook URL configured, skipping`);
+          }
+        } else {
+          console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — could not determine tenant from transaction merchant field, skipping`);
+        }
+      }
     }
   } else if (result.statusCode === 200) {
     console.log(`[WEBHOOK ${requestId}] STEP 6/6 SUPABASE — skipped (no transaction to save, or Supabase is not configured)`);
@@ -804,7 +852,518 @@ app.post('/api/manual-transaction', async (req, res) => {
   });
 });
 
-// Serve frontend web routes
+// ═══════════════════════════════════════════════════════════════════════
+// MULTI-TENANT PAYMENT GATEWAY API
+// ═══════════════════════════════════════════════════════════════════════
+
+// ─── Authentication middleware ──────────────────────────────────────────
+
+/**
+ * Extract and validate the Bearer token (tenant secret key) from the
+ * Authorization header. On success, sets req.tenant to the resolved tenant.
+ */
+function requireTenantAuth(req, res, next) {
+  const authHeader = req.headers.authorization || req.headers.Authorization || '';
+  const match = String(authHeader).match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    return res.status(401).json({ status: false, message: 'Missing or invalid Authorization header. Use: Bearer <secret_key>' });
+  }
+
+  const secretKey = match[1].trim();
+  const tenant = tenants.getTenantBySecretKey(secretKey);
+  if (!tenant) {
+    return res.status(401).json({ status: false, message: 'Invalid secret key' });
+  }
+
+  req.tenant = tenant;
+  next();
+}
+
+/**
+ * Resolve a merchant param to a tenant. Used for public endpoints where
+ * the merchant key comes from the request body or query string.
+ * Returns 404 (not 403) for cross-tenant reference lookups per spec.
+ */
+function resolveTenant(req, res, next) {
+  const merchantKey = req.body && req.body.merchant
+    ? String(req.body.merchant).toLowerCase()
+    : req.query && req.query.merchant
+      ? String(req.query.merchant).toLowerCase()
+      : null;
+
+  if (!merchantKey) {
+    return res.status(400).json({ status: false, message: 'merchant parameter is required' });
+  }
+
+  const tenant = tenants.getTenant(merchantKey);
+  if (!tenant) {
+    return res.status(404).json({ status: false, message: 'Merchant not found' });
+  }
+
+  req.tenant = tenant;
+  next();
+}
+
+// ─── New: POST /api/transaction/initialize (security-critical) ─────────
+
+/**
+ * Server-side payment initialization. Authorised by tenant secret key.
+ *
+ * Replaces the old client-side amount-in-URL pattern with a one-time
+ * access_code that resolves every detail server-side.
+ *
+ * Body: {amount, reference, currency, email, phone, callback_url}
+ * Headers: Authorization: Bearer <secret_key>
+ *
+ * Validates callback_url against the tenant's allowed domains.
+ * Returns {status, message, data: {access_code, reference, amount, ...}}
+ */
+app.post('/api/transaction/initialize', requireTenantAuth, async (req, res) => {
+  const tenant = req.tenant;
+  const { amount, reference, currency, email, phone, callback_url } = req.body;
+
+  // Validate required fields
+  if (!email || !amount || isNaN(amount) || Number(amount) <= 0) {
+    return res.status(400).json({ status: false, message: 'A valid email and amount > 0 are required' });
+  }
+
+  // Validate callback_url against tenant's allowed domains
+  if (callback_url) {
+    const validation = tenants.validateCallbackUrl(tenant, callback_url);
+    if (!validation.valid) {
+      return res.status(400).json({
+        status: false,
+        message: `Invalid callback_url: ${validation.reason}`
+      });
+    }
+  }
+
+  // Use provided reference or generate one (must be unique per tenant)
+  const finalReference = reference && String(reference).trim()
+    ? String(reference).trim()
+    : `${tenant.key.toUpperCase().replace(/-/g, '_')}-${Date.now().toString(36).toUpperCase()}-${Math.floor(10000 + Math.random() * 90000)}`;
+
+  const finalCurrency = currency || tenant.currency || 'GHS';
+  const finalCallbackUrl = callback_url || `${baseUrl(req)}/checkout.html`;
+
+  // Initialize with Paystack using the tenant's own keys
+  let paystackResult = null;
+  let paystackError = null;
+
+  if (tenant.paystack_secret_key) {
+    try {
+      // Use tenant's Paystack key by temporarily overriding env var
+      const originalKey = process.env.PAYSTACK_SECRET_KEY;
+      process.env.PAYSTACK_SECRET_KEY = tenant.paystack_secret_key;
+
+      // We need to call Paystack's initialize with the tenant's key.
+      // The paystack helper reads from process.env.PAYSTACK_SECRET_KEY.
+      paystackResult = await initializePayment({
+        amount: Number(amount),
+        email,
+        reference: finalReference,
+        callback_url: `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(finalReference)}&merchant=${encodeURIComponent(tenant.key)}`,
+        merchant: tenant.key,
+        currency: finalCurrency
+      });
+
+      // Restore original key
+      process.env.PAYSTACK_SECRET_KEY = originalKey || '';
+    } catch (error) {
+      paystackError = error.message || String(error);
+    }
+  }
+
+  if (paystackError) {
+    // If Paystack is not fully configured, fall back to the local ledger
+    console.log(`[TENANT-INIT] Paystack init failed for ${tenant.key}/${finalReference}: ${paystackError}`);
+  }
+
+  // Store the payment intent in the access code store (source of truth for amount)
+  const accessCodeData = accessCodeStore.createAccessCode({
+    amount: Number(amount),
+    reference: finalReference,
+    currency: finalCurrency,
+    email,
+    phone: phone || '',
+    callback_url: finalCallbackUrl,
+    tenant_key: tenant.key,
+    merchant_display_name: tenant.display_name,
+    merchant_brand_color: tenant.brand_color,
+    merchant_logo_url: tenant.logo_url,
+    paystack_authorization_url: paystackResult && paystackResult.data
+      ? paystackResult.data.authorization_url || ''
+      : '',
+    paystack_access_code: paystackResult && paystackResult.data
+      ? paystackResult.data.access_code || ''
+      : ''
+  });
+
+  // Also record on the local ledger with tenant ownership
+  ledger.addTransaction({
+    reference: finalReference,
+    customer: email,
+    amount: Number(amount),
+    channel: 'PENDING',
+    status: 'PENDING',
+    merchant: tenant.display_name,
+    tenant_key: tenant.key,
+    callback_url: finalCallbackUrl
+  });
+
+  console.log(`[TENANT-INIT] ${tenant.key}: Ref ${finalReference} | Amount ${finalCurrency} ${amount} | Email ${email}`);
+
+  // Return access_code — this is what pay.html reads
+  res.status(200).json({
+    status: true,
+    message: 'Transaction initialized successfully',
+    data: {
+      access_code: accessCodeData.access_code,
+      reference: finalReference,
+      amount: Number(amount),
+      currency: finalCurrency,
+      merchant: tenant.key,
+      merchant_display_name: tenant.display_name,
+      merchant_brand_color: tenant.brand_color,
+      merchant_logo_url: tenant.logo_url,
+      paystack_authorization_url: paystackResult && paystackResult.data
+        ? paystackResult.data.authorization_url
+        : null,
+      callback_url: finalCallbackUrl,
+      checkout_url: `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(finalReference)}` +
+        `&amount=${encodeURIComponent(Number(amount))}` +
+        `&email=${encodeURIComponent(email)}` +
+        `&merchant=${encodeURIComponent(tenant.key)}`,
+      pay_url: `${baseUrl(req)}/pay.html?access_code=${encodeURIComponent(accessCodeData.access_code)}`
+    }
+  });
+});
+
+// ─── New: GET /api/transaction/verify/{reference} ──────────────────────
+
+/**
+ * Verify a transaction status. Authorised by tenant secret key.
+ * Returns the same data shape as the webhook payload.
+ * Tenant-scoped: a key from tenant A cannot see tenant B's transactions.
+ */
+app.get('/api/transaction/verify/:reference', requireTenantAuth, async (req, res) => {
+  const tenant = req.tenant;
+  const { reference } = req.params;
+
+  if (!reference) {
+    return res.status(400).json({ status: false, message: 'Reference is required' });
+  }
+
+  // Look up in the in-memory ledger first (fast path)
+  let trx = ledger.findTransaction(reference);
+
+  // Also try Supabase if available
+  if (!trx && isSupabaseConfigured()) {
+    try {
+      const client = getSupabaseClient();
+      if (client) {
+        const { data, error } = await client
+          .from('transactions')
+          .select('*')
+          .eq('reference', reference)
+          .single();
+
+        if (data && !error) {
+          trx = transactionStore.toDashboardTransaction(data);
+        }
+      }
+    } catch (_) {
+      // Silently fall through
+    }
+  }
+
+  // Try Paystack verify as a last resort
+  if (!trx && tenant.paystack_secret_key) {
+    try {
+      const originalKey = process.env.PAYSTACK_SECRET_KEY;
+      process.env.PAYSTACK_SECRET_KEY = tenant.paystack_secret_key;
+
+      const paystackData = await verifyPayment(reference);
+      process.env.PAYSTACK_SECRET_KEY = originalKey || '';
+
+      if (paystackData && paystackData.status && paystackData.data) {
+        const pd = paystackData.data;
+        trx = {
+          reference: pd.reference,
+          customer: (pd.customer && pd.customer.email) || pd.email || 'unknown',
+          amount: (Number(pd.amount) || 0) / 100,
+          channel: pd.channel || 'Unknown',
+          status: pd.status === 'success' ? 'SUCCESS' : pd.status === 'failed' ? 'FAILED' : (pd.status || 'PENDING').toUpperCase(),
+          merchant: tenant.display_name,
+          timestamp: pd.paid_at || pd.created_at || new Date().toISOString(),
+          gateway_response: pd.gateway_response || '',
+          paid_at: pd.paid_at || null,
+          currency: pd.currency || tenant.currency
+        };
+
+        // Persist to ledger so future lookups are fast
+        ledger.upsertTransaction(trx);
+      }
+    } catch (_) {
+      // Silently fall through
+    }
+  }
+
+  if (!trx) {
+    return res.status(404).json({ status: false, message: 'Transaction reference not found.' });
+  }
+
+  // Enforce tenant scope: a tenant must only see its own transactions.
+  // When tenant_key is stored on the transaction record, we check it.
+  // If not stored (older records), we fall back to checking the merchant name.
+  const transactionTenant = trx.tenant_key || (
+    trx.merchant ? String(trx.merchant).toLowerCase().replace(/\s+/g, '-') : null
+  );
+  if (transactionTenant && transactionTenant !== tenant.key) {
+    return res.status(404).json({ status: false, message: 'Transaction reference not found.' });
+  }
+
+  // Build the response in the same shape as the webhook payload
+  const status = String(trx.status || 'PENDING').toUpperCase();
+  const isSuccess = ['SUCCESS', 'SUCCESSFUL', 'PAID', 'COMPLETED'].includes(status);
+
+  const response = {
+    status: true,
+    message: 'Transaction verified',
+    data: {
+      reference: trx.reference,
+      status: isSuccess ? 'success' : status === 'FAILED' ? 'failed' : 'pending',
+      amount: Number(trx.amount) || 0,
+      currency: trx.currency || tenant.currency || 'GHS',
+      channel: trx.channel || 'Unknown',
+      paid_at: trx.paid_at || trx.timestamp || null,
+      merchant: tenant.key,
+      gateway_reference: trx.reference,
+      customer: trx.customer || trx.customer_email || 'unknown'
+    }
+  };
+
+  res.status(200).json(response);
+});
+
+// ─── New: GET /api/transaction/access/{access_code} ────────────────────
+
+/**
+ * Resolve an access_code to payment details. Used by pay.html to render
+ * the payment form with server-side amounts (not user-editable).
+ */
+app.get('/api/transaction/access/:access_code', (req, res) => {
+  const { access_code } = req.params;
+
+  if (!access_code) {
+    return res.status(400).json({ status: false, message: 'Access code is required' });
+  }
+
+  const payment = accessCodeStore.peekAccessCode(access_code);
+  if (!payment) {
+    return res.status(404).json({ status: false, message: 'Invalid or expired access code' });
+  }
+
+  // Get fresh tenant data (branding may have been updated)
+  const tenant = tenants.getTenant(payment.tenant_key);
+
+  res.status(200).json({
+    status: true,
+    data: {
+      access_code: access_code,
+      amount: payment.amount,
+      reference: payment.reference,
+      currency: payment.currency,
+      email: payment.email,
+      phone: payment.phone,
+      callback_url: payment.callback_url,
+      merchant: payment.tenant_key,
+      merchant_display_name: tenant ? tenant.display_name : payment.merchant_display_name,
+      merchant_brand_color: tenant ? tenant.brand_color : payment.merchant_brand_color,
+      merchant_logo_url: tenant ? tenant.logo_url : payment.merchant_logo_url,
+      paystack_authorization_url: payment.paystack_authorization_url,
+      paystack_access_code: payment.paystack_access_code
+    }
+  });
+});
+
+// ─── Update existing Paystack webhook to also forward to tenant ─────────
+
+// We patch the existing webhook handler by wrapping the success path.
+// The existing /api/webhook route processes Paystack events, and after
+// a successful event we now also forward to the tenant's own webhook URL.
+
+// ─── New: GET /api/tenants — list all tenants (sanitised) ──────────────
+
+app.get('/api/tenants', (req, res) => {
+  res.status(200).json({
+    status: true,
+    data: tenants.listTenants()
+  });
+});
+
+// ─── New: GET /api/tenants/{key} — get a single tenant ─────────────────
+
+app.get('/api/tenants/:key', (req, res) => {
+  const tenant = tenants.getTenant(req.params.key);
+  if (!tenant) {
+    return res.status(404).json({ status: false, message: 'Tenant not found' });
+  }
+  res.status(200).json({
+    status: true,
+    data: tenants.sanitiseTenant(tenant)
+  });
+});
+
+// ─── New: PUT /api/tenants/{key}/webhook — set webhook URL ─────────────
+
+app.put('/api/tenants/:key/webhook', (req, res) => {
+  const { webhook_url } = req.body;
+  if (!webhook_url) {
+    return res.status(400).json({ status: false, message: 'webhook_url is required' });
+  }
+
+  // Validate URL format
+  try {
+    new URL(webhook_url);
+  } catch (_) {
+    return res.status(400).json({ status: false, message: 'Invalid webhook URL format' });
+  }
+
+  const updated = tenants.setTenantWebhookUrl(req.params.key, webhook_url);
+  if (!updated) {
+    return res.status(404).json({ status: false, message: 'Tenant not found' });
+  }
+
+  res.status(200).json({ status: true, message: 'Webhook URL updated', webhook_url });
+});
+
+// ─── New: POST /api/tenants/{key}/rotate-keys — rotate API secrets ─────
+
+app.post('/api/tenants/:key/rotate-keys', (req, res) => {
+  const result = tenants.rotateTenantSecrets(req.params.key);
+  if (!result) {
+    return res.status(404).json({ status: false, message: 'Tenant not found' });
+  }
+
+  res.status(200).json({
+    status: true,
+    message: 'API keys rotated. Both old (secret_1) and new (secret_2) are valid.',
+    data: {
+      secret_key_1: result.secret_1,
+      secret_key_2: result.secret_2,
+      note: 'Keep both keys valid during rotation. Switch your integration to secret_key_2, then revoke secret_key_1.'
+    }
+  });
+});
+
+// ─── New: GET /api/webhook-deliveries — inspect delivery attempts ──────
+
+app.get('/api/webhook-deliveries', (req, res) => {
+  const { reference, tenant_key } = req.query;
+  const filters = {};
+  if (reference) filters.reference = reference;
+  if (tenant_key) filters.tenant_key = tenant_key;
+
+  const log = webhookForwarder.getDeliveryLog(filters);
+  res.status(200).json({ status: true, count: log.length, data: log });
+});
+
+// ─── New: POST /api/webhook-deliveries/{reference}/replay ──────────────
+
+app.post('/api/webhook-deliveries/:reference/replay', (req, res) => {
+  const { reference } = req.params;
+  const { tenant_key } = req.body;
+
+  if (!tenant_key) {
+    return res.status(400).json({ status: false, message: 'tenant_key is required' });
+  }
+
+  const tenant = tenants.getTenant(tenant_key);
+  if (!tenant) {
+    return res.status(404).json({ status: false, message: 'Tenant not found' });
+  }
+
+  // Build a payload from the ledger
+  const trx = ledger.findTransaction(reference);
+  if (!trx) {
+    return res.status(404).json({ status: false, message: 'Transaction not found' });
+  }
+
+  const status = String(trx.status || 'PENDING').toUpperCase();
+  const isSuccess = ['SUCCESS', 'SUCCESSFUL', 'PAID', 'COMPLETED'].includes(status);
+
+  const originalPayload = {
+    event: isSuccess ? 'charge.success' : 'charge.failed',
+    data: {
+      reference: trx.reference,
+      status: isSuccess ? 'success' : 'failed',
+      amount: Number(trx.amount) || 0,
+      currency: tenant.currency || 'GHS',
+      channel: trx.channel || 'Unknown',
+      paid_at: trx.timestamp || new Date().toISOString(),
+      merchant: tenant.key,
+      gateway_reference: trx.reference
+    }
+  };
+
+  webhookForwarder.replayWebhook(tenant, reference, originalPayload);
+
+  res.status(200).json({
+    status: true,
+    message: 'Webhook replay initiated',
+    reference,
+    tenant_key
+  });
+});
+
+// ─── New: GET /api/transaction/return — return redirect endpoint ───────
+
+/**
+ * The return redirect after a Paystack checkout.
+ * Appends ?ref=&status=success|failed|cancelled to the validated callback_url.
+ * This is cosmetic only — the webhook is the source of truth.
+ */
+app.get('/api/transaction/return', (req, res) => {
+  const { reference, status, merchant, callback_url } = req.query;
+
+  if (!callback_url) {
+    return res.status(400).json({ status: false, message: 'callback_url parameter is required' });
+  }
+
+  // Validate the callback_url against the tenant's allowed domains
+  if (merchant) {
+    const tenant = tenants.getTenant(String(merchant).toLowerCase());
+    if (tenant) {
+      const validation = tenants.validateCallbackUrl(tenant, callback_url);
+      if (!validation.valid) {
+        return res.status(400).json({ status: false, message: `Invalid callback_url: ${validation.reason}` });
+      }
+    }
+  }
+
+  try {
+    const redirectUrl = new URL(callback_url);
+    if (reference) redirectUrl.searchParams.set('ref', reference);
+
+    const normalizedStatus = String(status || '').toLowerCase();
+    if (['success', 'failed', 'cancelled'].includes(normalizedStatus)) {
+      redirectUrl.searchParams.set('status', normalizedStatus);
+    } else {
+      redirectUrl.searchParams.set('status', 'success');
+    }
+
+    return res.redirect(302, redirectUrl.toString());
+  } catch (_) {
+    return res.status(400).json({ status: false, message: 'Invalid callback_url' });
+  }
+});
+
+// ─── New: POST /api/transaction/paystack-webhook — Patched webhook ─────
+// This patches the existing /api/webhook route to also forward events
+// to the tenant's webhook URL. We monkey-patch after the existing route.
+
+// ─── Serve frontend web routes ──────────────────────────────────────────
 app.get('/', (req, res) => {
   res.redirect('/dashboard.html');
 });
@@ -841,6 +1400,15 @@ app.get('/admin-login.html', (req, res) => {
 
 app.get('/pay.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'pay.html'));
+});
+
+// Multi-tenant admin page
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'admin.html'));
+});
+
+app.get('/admin.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
 // Webhook diagnostic page (also reachable as /webhook-status.html via static).
