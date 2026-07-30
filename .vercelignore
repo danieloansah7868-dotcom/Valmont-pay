@@ -1,0 +1,17 @@
+# Files that must NOT be uploaded to Vercel.
+#
+# Keep this list conservative. `lib/` and `api/` are runtime code — never add
+# them here. A missing lib/ module does not fail the build, it fails at runtime
+# on a cold start (ERR_MODULE_NOT_FOUND), which is how a broken deployment can
+# look "successful" in the Vercel dashboard while every request 500s.
+#
+# scripts/verify-module-graph.mjs (run in CI and by `npm test`) enforces that
+# every require()/import of a local file resolves to a tracked, non-empty file.
+
+node_modules
+.git
+.github
+.env
+.env.local
+*.log
+.DS_Store
