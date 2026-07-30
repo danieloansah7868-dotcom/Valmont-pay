@@ -8,6 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <!-- Embedded inline checkout engine (loads as an overlay ON TOP of this page — no external redirect) -->
+  <script src="https://js.paystack.co/v2/inline.js"></script>
   <style>
     body { font-family: 'Inter', sans-serif; background-color: #0b1a38; }
     .valmont-gold { background-color: #f68b1e; }
@@ -89,16 +91,19 @@
                readonly />
       </div>
 
-      <!-- Phone Input -->
+      <!-- Mobile Money Number (REQUIRED) -->
       <div>
-        <label class="block text-xs font-black uppercase text-gray-400 mb-2">Phone Number (optional)</label>
-        <input id="customerPhone" type="tel" placeholder="+233 XX XXX XXXX"
+        <label for="customerPhone" class="block text-xs font-black uppercase text-gray-400 mb-2">
+          Mobile Money Number <span class="text-red-500">*</span>
+        </label>
+        <input id="customerPhone" type="tel" placeholder="+233 XX XXX XXXX" required aria-required="true"
                class="w-full border-2 border-gray-100 p-4 rounded-lg text-sm outline-none font-semibold focus:border-[#f68b1e] transition" />
+        <p id="phoneError" class="hidden text-red-500 text-xs font-bold mt-2">Please enter a valid Mobile Money number (e.g. 024 XXX XXXX or +233 24 XXX XXXX).</p>
       </div>
 
-      <!-- Pay with Paystack Button (always visible) -->
-      <button id="btnPayWithPaystack" onclick="payWithPaystack()"
-              class="w-full bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-sm tracking-widest uppercase py-4 rounded-lg transition shadow-lg">
+      <!-- Pay Button (ALWAYS visible — never carries the `hidden` class) -->
+      <button id="btnPayWithPaystack" onclick="payWithValmontPay()"
+              class="w-full bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-sm tracking-widest uppercase py-4 rounded-lg transition shadow-lg block">
         Pay Securely via Valmont-Pay
       </button>
 
@@ -117,6 +122,29 @@
 
     </div>
 
+  </div>
+
+  <!-- Success State (shown on this same page after inline payment completes) -->
+  <div id="successState" class="bg-white w-full max-w-[480px] rounded-xl shadow-2xl overflow-hidden border border-gray-100 hidden">
+    <div class="bg-[#0b1a38] text-white p-6 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="h-3 w-3 rounded-full bg-green-500"></div>
+        <span class="font-extrabold text-sm uppercase tracking-widest text-[#f68b1e]">Valmont-Pay</span>
+      </div>
+      <span class="text-xs text-gray-400 font-bold">Payment Complete</span>
+    </div>
+    <div class="p-8 text-center">
+      <div class="h-16 w-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center text-3xl font-black mx-auto mb-4">✓</div>
+      <h2 class="text-xl font-black text-gray-800 mb-2">Payment Successful</h2>
+      <p class="text-gray-500 font-medium text-sm">Your payment has been received.</p>
+      <p class="text-gray-400 text-xs mt-2">Ref: <span id="successRef" class="font-bold">---</span></p>
+      <a id="successReturnLink" href="#" class="hidden inline-block mt-6 bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-xs tracking-widest uppercase py-3 px-6 rounded-lg transition shadow-lg">
+        Return to Merchant
+      </a>
+      <div class="text-center pt-6 mt-6 border-t border-gray-100">
+        <p class="text-xs text-gray-400 font-medium">Secured by Valmont-Pay Payment Gateway</p>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -256,11 +284,12 @@
         document.getElementById('customerPhone').value = paymentData.phone;
       }
 
-      // The primary payment button is ALWAYS visible. If no authorization URL
-      // is present yet (e.g. loaded from legacy query params), payWithPaystack()
-      // will generate a live Paystack authorization URL on the fly via the API.
-      const paystackBtn = document.getElementById('btnPayWithPaystack');
-      paystackBtn.classList.remove('hidden');
+      // The primary payment button is ALWAYS visible. Defensive: strip any
+      // `hidden` class and force display in case another script hid it.
+      const payBtn = document.getElementById('btnPayWithPaystack');
+      payBtn.classList.remove('hidden');
+      payBtn.classList.add('block');
+      payBtn.style.display = 'block';
 
       // Hide loading, show payment card
       document.getElementById('loadingState').classList.add('hidden');
@@ -277,30 +306,66 @@
       document.getElementById('errorMessage').textContent = message || 'This payment link is invalid or has expired.';
     }
 
-    async function payWithPaystack() {
+    // ---------------------------------------------------------------
+    // EMBEDDED INLINE CHECKOUT
+    // The gateway is initialized 100% server-side (secret key never
+    // touches the browser) and the checkout opens as an overlay ON TOP
+    // of pay.html. The customer NEVER leaves valmontpay.app — there is
+    // no external redirect at any point in the flow.
+    // ---------------------------------------------------------------
+
+    function resetPayButton() {
+      const btn = document.getElementById('btnPayWithPaystack');
+      btn.disabled = false;
+      btn.textContent = 'Pay Securely via Valmont-Pay';
+    }
+
+    // Ghana MoMo numbers: 0XXXXXXXXX (10 digits) or +233XXXXXXXXX
+    function isValidMomoNumber(raw) {
+      const digits = (raw || '').replace(/[\s\-()]/g, '');
+      return /^(\+?233\d{9}|0\d{9})$/.test(digits);
+    }
+
+    async function payWithValmontPay() {
       const email = document.getElementById('customerEmail').value.trim();
       if (!email || !email.includes('@')) {
         alert('Please enter a valid email address.');
         return;
       }
 
+      // Mobile Money number is REQUIRED
+      const phoneInput = document.getElementById('customerPhone');
+      const phoneError = document.getElementById('phoneError');
+      const phone = phoneInput.value.trim();
+      if (!isValidMomoNumber(phone)) {
+        phoneError.classList.remove('hidden');
+        phoneInput.classList.remove('border-gray-100');
+        phoneInput.classList.add('border-red-400');
+        phoneInput.focus();
+        return;
+      }
+      phoneError.classList.add('hidden');
+      phoneInput.classList.remove('border-red-400');
+      phoneInput.classList.add('border-gray-100');
+
       const btn = document.getElementById('btnPayWithPaystack');
       btn.disabled = true;
-      btn.textContent = 'Connecting to Paystack...';
+      btn.textContent = 'Opening Secure Checkout...';
 
-      // 1. If an authorization URL is already present, redirect immediately
-      if (paymentData && paymentData.paystack_authorization_url) {
-        window.location.href = paymentData.paystack_authorization_url;
+      // 1. Reuse a server-issued gateway access code when the link already has one
+      if (paymentData && paymentData.paystack_access_code) {
+        openEmbeddedCheckout(paymentData.paystack_access_code, paymentData.reference);
         return;
       }
 
-      // 2. Otherwise, generate a live Paystack authorization URL on the fly
+      // 2. Otherwise initialize the transaction in the BACKEND and get a fresh access code
       try {
         const res = await fetch('/api/initialize-payment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             email: email,
+            phone: phone,
             amount: paymentData.amount || parseFloat(new URLSearchParams(window.location.search).get('amount')),
             merchant: paymentData.merchant || new URLSearchParams(window.location.search).get('merchant') || 'Valmont-Pay',
             reference: paymentData.reference || new URLSearchParams(window.location.search).get('ref') || `VP-${Date.now()}`
@@ -308,26 +373,75 @@
         });
         const data = await res.json();
 
-        // Accept the live API shape (success + paymentUrl) as well as the spec
-        // shape (status + data.authorization_url / authorization_url).
-        const authUrl =
-          data.paymentUrl ||
-          data.data?.authorization_url ||
-          data.authorization_url ||
-          data.data?.paymentUrl;
+        const accessCode =
+          data.accessCode ||
+          data.access_code ||
+          data.data?.access_code ||
+          data.data?.accessCode;
+        const reference = data.reference || data.data?.reference || paymentData.reference;
 
-        if ((data.status || data.success) && authUrl) {
-          window.location.href = authUrl;
+        if ((data.status || data.success) && accessCode) {
+          openEmbeddedCheckout(accessCode, reference);
         } else {
-          alert(data.message || data.error || 'Unable to initialize Paystack checkout. Please try again.');
-          btn.disabled = false;
-          btn.textContent = 'Pay Securely via Valmont-Pay';
+          alert(data.message || data.error || 'Unable to start secure checkout. Please try again.');
+          resetPayButton();
         }
       } catch (err) {
         alert('Network error connecting to payment gateway.');
-        btn.disabled = false;
-        btn.textContent = 'Pay Securely via Valmont-Pay';
+        resetPayButton();
       }
+    }
+
+    // Opens the checkout as an embedded overlay directly over pay.html.
+    // No redirect: the page underneath stays loaded the whole time.
+    function openEmbeddedCheckout(accessCode, reference) {
+      if (typeof PaystackPop === 'undefined') {
+        alert('Secure checkout could not load. Please check your connection and try again.');
+        resetPayButton();
+        return;
+      }
+
+      const popup = new PaystackPop();
+      popup.resumeTransaction(accessCode, {
+        onSuccess: function (response) {
+          const paidRef = (response && response.reference) || reference;
+          confirmPaymentOnPage(paidRef);
+        },
+        onCancel: function () {
+          resetPayButton();
+        },
+        onError: function (error) {
+          alert((error && error.message) || 'Payment could not be completed. Please try again.');
+          resetPayButton();
+        }
+      });
+    }
+
+    // Verify the payment server-side, then show the success card on THIS page.
+    async function confirmPaymentOnPage(reference) {
+      const btn = document.getElementById('btnPayWithPaystack');
+      btn.textContent = 'Confirming Payment...';
+
+      try {
+        await fetch('/api/verify-payment?reference=' + encodeURIComponent(reference));
+      } catch (_) {
+        // Webhook remains the source of truth; the on-page verify is best-effort.
+      }
+
+      document.getElementById('paymentCard').classList.add('hidden');
+      document.getElementById('successRef').textContent = reference || '---';
+
+      const returnUrl =
+        (paymentData && paymentData.callback_url) ||
+        urlParams.get('return_url') ||
+        '';
+      const successLink = document.getElementById('successReturnLink');
+      if (returnUrl) {
+        successLink.href = returnUrl;
+        successLink.classList.remove('hidden');
+      }
+
+      document.getElementById('successState').classList.remove('hidden');
     }
 
     function proceedToCheckout() {

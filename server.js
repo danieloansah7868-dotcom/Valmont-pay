@@ -258,7 +258,7 @@ app.get('/api/v1/transaction/verify/:reference', (req, res) => {
 // API 3b: Paystack-backed endpoints (same contract as the /api serverless
 // functions, so local development and Vercel behave identically).
 app.post('/api/initialize-payment', async (req, res) => {
-  const { email, merchant, callback_url } = req.body || {};
+  const { email, merchant, phone, callback_url } = req.body || {};
   const amount = parseFloat(req.body && req.body.amount);
   const reference = (req.body && req.body.reference) || generateReference();
 
@@ -274,6 +274,7 @@ app.post('/api/initialize-payment', async (req, res) => {
       email,
       reference,
       merchant,
+      phone,
       callback_url:
         callback_url ||
         `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(reference)}` +
@@ -284,6 +285,9 @@ app.post('/api/initialize-payment', async (req, res) => {
       return res.status(200).json({
         success: true,
         paymentUrl: data.data.authorization_url,
+        // access_code powers the embedded inline checkout on pay.html so the
+        // customer never leaves valmontpay.app (Paystack stays in the backend).
+        accessCode: data.data.access_code,
         reference: data.data.reference || reference,
         amount
       });
