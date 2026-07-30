@@ -203,7 +203,11 @@
           currency: 'GHS',
           email: urlParams.get('email') || '',
           merchant: merchantFromUrl,
-          callback_url: urlParams.get('callback_url') || window.location.origin + '/dashboard.html'
+          // IMPORTANT: no fallback here. The old default of /dashboard.html
+          // bounced customers to the ADMIN LOGIN page after paying. If the
+          // merchant did not supply a callback_url the customer simply stays
+          // on the Valmont-Pay success screen.
+          callback_url: urlParams.get('callback_url') || ''
         };
 
         // Load tenant info
@@ -246,7 +250,15 @@
         document.getElementById('lockedInfo').classList.remove('hidden');
         document.getElementById('lockedRef').textContent = refFromUrl || paymentData.reference || '---';
         document.getElementById('lockedMerchant').textContent = sanitize(displayName);
-        const returnUrl = urlParams.get('return_url') || document.referrer || '';
+        let returnUrl = urlParams.get('return_url') || document.referrer || '';
+        // Never point customers at internal admin pages.
+        try {
+          const parsed = new URL(returnUrl, window.location.origin);
+          if (parsed.origin === window.location.origin &&
+              INTERNAL_PAGE_BLOCKLIST.includes(parsed.pathname.toLowerCase())) {
+            returnUrl = '';
+          }
+        } catch (_) { returnUrl = ''; }
         const returnLink = document.getElementById('returnLink');
         if (returnUrl) {
           returnLink.href = returnUrl;
@@ -417,7 +429,46 @@
       });
     }
 
-    // Verify the payment server-side, then show the success card on THIS page.
+    // ---------------------------------------------------------------
+    // POST-PAYMENT REDIRECT
+    // Customers must NEVER land on internal/admin pages after paying.
+    // Internal pages (dashboard/admin) redirect unauthenticated visitors
+    // to admin-login.html, so any callback pointing at them is rejected.
+    // ---------------------------------------------------------------
+    const INTERNAL_PAGE_BLOCKLIST = ['/dashboard.html', '/admin.html', '/admin-login.html', '/webhook-status.html', '/payout.html'];
+
+    // Returns a validated merchant callback URL, or null when there is
+    // no usable callback (in which case we stay on the pay.html success card).
+    function getMerchantCallbackUrl() {
+      const raw =
+        (paymentData && paymentData.callback_url) ||
+        new URLSearchParams(window.location.search).get('callback_url') ||
+        urlParams.get('return_url') ||
+        '';
+      if (!raw) return null;
+
+      let target;
+      try {
+        target = new URL(raw, window.location.origin);
+      } catch (_) {
+        return null; // malformed URL — do not redirect
+      }
+
+      // Only http(s) destinations are allowed (blocks javascript: etc.)
+      if (target.protocol !== 'https:' && target.protocol !== 'http:') return null;
+
+      // Never send a customer to an internal Valmont-Pay admin page.
+      if (target.origin === window.location.origin &&
+          INTERNAL_PAGE_BLOCKLIST.includes(target.pathname.toLowerCase())) {
+        return null;
+      }
+
+      return target;
+    }
+
+    // Verify the payment server-side, then either send the customer back to
+    // the merchant's receipt page (callback_url) or show the success card on
+    // THIS page. The customer is NEVER redirected to the admin login page.
     async function confirmPaymentOnPage(reference) {
       const btn = document.getElementById('btnPayWithPaystack');
       btn.textContent = 'Confirming Payment...';
@@ -428,19 +479,21 @@
         // Webhook remains the source of truth; the on-page verify is best-effort.
       }
 
-      document.getElementById('paymentCard').classList.add('hidden');
-      document.getElementById('successRef').textContent = reference || '---';
-
-      const returnUrl =
-        (paymentData && paymentData.callback_url) ||
-        urlParams.get('return_url') ||
-        '';
-      const successLink = document.getElementById('successReturnLink');
-      if (returnUrl) {
-        successLink.href = returnUrl;
-        successLink.classList.remove('hidden');
+      // 1. Merchant provided a callback_url → return the customer to the
+      //    merchant's receipt page with the reference + status appended.
+      const callbackTarget = getMerchantCallbackUrl();
+      if (callbackTarget) {
+        callbackTarget.searchParams.set('reference', reference || (paymentData && paymentData.reference) || '');
+        callbackTarget.searchParams.set('status', 'success');
+        window.location.href = callbackTarget.toString();
+        return;
       }
 
+      // 2. No callback_url → stay on Valmont-Pay and show the success card.
+      //    (Never fall back to dashboard.html / admin pages.)
+      document.getElementById('paymentCard').classList.add('hidden');
+      document.getElementById('successRef').textContent = reference || '---';
+      document.getElementById('successReturnLink').classList.add('hidden');
       document.getElementById('successState').classList.remove('hidden');
     }
 

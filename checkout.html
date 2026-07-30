@@ -143,8 +143,10 @@
     const merchant = urlParams.get('merchant') || 'Valmont-Pay';
     const amount = parseFloat(urlParams.get('amount')) || 0;
     const email = urlParams.get('email') || '';
-    // Issue 3 fix: honor per-transaction callback_url (fall back to the merchant dashboard)
-    const callbackUrl = urlParams.get('callback_url') || (window.location.origin + '/dashboard.html');
+    // Issue 3 fix: honor per-transaction callback_url.
+    // NO dashboard fallback — dashboard.html bounces unauthenticated
+    // customers to the ADMIN LOGIN page, which customers must never see.
+    const callbackUrl = urlParams.get('callback_url') || '';
 
     document.getElementById('merchant-name').textContent = merchant;
     document.getElementById('successMerchantDesc').textContent =
@@ -253,10 +255,26 @@
     function handleCallback() {
       // Redirect back to the merchant's callback URL (Issue 3 fix),
       // appending the transaction reference so the merchant can verify.
-      const target = new URL(callbackUrl);
-      target.searchParams.set('reference', reference);
-      target.searchParams.set('status', 'success');
-      window.location.href = target.toString();
+      // Customers must NEVER be routed to internal/admin pages, so when no
+      // valid merchant callback exists we keep them on the success screen.
+      const INTERNAL_PAGES = ['/dashboard.html', '/admin.html', '/admin-login.html', '/webhook-status.html', '/payout.html'];
+      let target = null;
+      try {
+        if (callbackUrl) target = new URL(callbackUrl, window.location.origin);
+      } catch (_) { target = null; }
+
+      if (target &&
+          (target.protocol === 'https:' || target.protocol === 'http:') &&
+          !(target.origin === window.location.origin && INTERNAL_PAGES.includes(target.pathname.toLowerCase()))) {
+        target.searchParams.set('reference', reference);
+        target.searchParams.set('status', 'success');
+        window.location.href = target.toString();
+        return;
+      }
+
+      // No merchant callback — stay on this page and confirm completion.
+      document.getElementById('successMerchantDesc').textContent =
+        'Payment complete. You may now close this window. Ref: ' + reference;
     }
   </script>
 </body>
