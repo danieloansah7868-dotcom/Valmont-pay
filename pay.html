@@ -102,11 +102,13 @@
         Pay with Paystack
       </button>
 
-      <!-- Direct Checkout Fallback -->
+      <!-- REMOVE OR COMMENT OUT -->
+      <!--
       <button id="btnDirectCheckout" onclick="proceedToCheckout()"
               class="w-full bg-[#0b1a38] hover:bg-[#1e355c] text-white font-black text-sm tracking-widest uppercase py-4 rounded-lg transition shadow-lg">
         Pay via Checkout
       </button>
+      -->
 
       <!-- Footer -->
       <div class="text-center pt-4 border-t border-gray-100">
@@ -281,7 +283,7 @@
       // Open Paystack's standard checkout in a new window
       const authUrl = paymentData.paystack_authorization_url;
       if (!authUrl) {
-        alert('Paystack checkout is not available for this payment. Use the direct checkout instead.');
+        alert('Paystack checkout is not available for this payment. Please contact the merchant.');
         return;
       }
 
@@ -312,8 +314,10 @@
       }
 
       const btn = document.getElementById('btnDirectCheckout');
-      btn.disabled = true;
-      btn.textContent = 'Processing...';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Processing...';
+      }
 
       // Redirect to checkout page with the server-resolved amount
       const checkoutUrl = new URL('/checkout.html', window.location.origin);
