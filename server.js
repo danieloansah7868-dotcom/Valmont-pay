@@ -92,6 +92,13 @@ app.post('/api/v1/transaction/initialize', (req, res) => {
 
 // API 2: Process Charge (Simulates MoMo USSD Prompt or Card Tokenization)
 app.post('/api/v1/transaction/charge', (req, res) => {
+  if ((process.env.PAYSTACK_SECRET_KEY || '').startsWith('sk_live_')) {
+    return res.status(403).json({
+      status: false,
+      message: 'Simulated checkout is disabled in live production mode. Please use live Paystack checkout.'
+    });
+  }
+
   const { reference, channel, wallet_number, card_number, amount } = req.body;
 
   let trx = TRANSACTIONS.find(t => t.reference === reference);

@@ -332,6 +332,20 @@ check(
 );
 nextReadResult = null;
 
+// Ensure simulated checkout is blocked when PAYSTACK_SECRET_KEY is a live key
+const savedPaystackKeyForCharge = process.env.PAYSTACK_SECRET_KEY;
+process.env.PAYSTACK_SECRET_KEY = 'sk_live_test_key_abc';
+const liveBlockedRes = await fetch(base + '/api/v1/transaction/charge', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ reference: 'VP-LIVE-BLOCK', amount: '50.00', channel: 'mobile_money', wallet_number: '0244123456' })
+});
+check(liveBlockedRes.status === 403, 'POST /api/v1/transaction/charge returns 403 in live production mode (sk_live_)');
+const liveBlockedBody = await liveBlockedRes.json();
+check(liveBlockedBody.status === false && liveBlockedBody.message.includes('live production mode'), 'blocked charge reports helpful live production mode error message');
+if (savedPaystackKeyForCharge === undefined) delete process.env.PAYSTACK_SECRET_KEY;
+else process.env.PAYSTACK_SECRET_KEY = savedPaystackKeyForCharge;
+
 // ----------------------------------------------------- 6b. deployment health
 console.log('\n# /api/health environment verification');
 const savedPaystackForHealth = process.env.PAYSTACK_SECRET_KEY;
