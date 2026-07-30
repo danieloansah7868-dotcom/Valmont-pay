@@ -240,6 +240,34 @@ npm test
 
 ---
 
+## 🧱 Build guard: every import must be in the repository
+
+```bash
+npm run verify:modules
+```
+
+`scripts/verify-module-graph.mjs` walks every `require('./…')` / `import … from
+'../…'` in the codebase and asserts the target is **tracked by git, present and
+non-empty**. It also checks that every `dest` in `vercel.json` points at a real
+tracked file. It runs **first** in `npm test`, so any CI that runs the suite
+enforces it. A dedicated CI workflow is provided in `ci/github-workflow-ci.yml`
+— see `ci/README.md` for the one command that activates it.
+
+This exists because the same failure shipped twice:
+
+* `lib/transaction-store.js` was imported by `server.js` and four `/api`
+  functions but was **never committed**. It worked on the author's machine and
+  every deployment died with `ERR_MODULE_NOT_FOUND` on cold start.
+* `lib/ledger.js` *was* committed — as a **zero-byte file** — so
+  `ledger.addTransaction` was `undefined` and the gateway `500`d immediately.
+
+A local checkout is not the deployment: **what deploys is what git tracks.**
+That is why the guard resolves against `git ls-files` rather than the filesystem,
+and why it treats an empty file as a failure. Never add `lib/`, `api/`,
+`scripts/` or any individual module to `.gitignore` or `.vercelignore`.
+
+---
+
 ## 📒 The Transaction Ledger (no test data)
 
 The ledger lives in `lib/ledger.js` and **starts completely empty** — there are no

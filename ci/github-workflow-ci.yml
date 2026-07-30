@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Full history + a clean checkout means `git ls-files` sees exactly what a
+      # deployment would receive — which is the whole point of the module guard.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm install
+
+      # FIRST, and on its own step, so a missing/untracked/empty module is an
+      # obvious red X rather than a confusing failure buried in the test output.
+      # This is the guard for the class of bug where a module is require()d but
+      # never committed: it works locally and crashes every deployment.
+      - name: Verify every local import exists in the repository
+        run: npm run verify:modules
+
+      - name: Test
+        run: npm test

@@ -36,10 +36,6 @@
       "dest": "/api/webhook-status.js"
     },
     {
-      "src": "/api/manual-transaction",
-      "dest": "/api/manual-transaction.js"
-    },
-    {
       "src": "/api/transactions",
       "dest": "/api/transactions.js"
     },

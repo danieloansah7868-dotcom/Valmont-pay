@@ -1,3 +1,11 @@
+# Dependencies and local-only artifacts.
+#
+# NEVER add runtime source directories (lib/, api/, scripts/, public/) or any
+# individual module here. A require()d file that git does not track is missing
+# from the deployment and crashes on a serverless cold start, while the build
+# still reports success. `npm run verify:modules` fails the build if that ever
+# happens again.
+
 node_modules/
 package-lock.json
 .env
