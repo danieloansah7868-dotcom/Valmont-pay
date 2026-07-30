@@ -124,7 +124,8 @@
 
   </div>
 
-  <!-- Success State (shown on this same page after inline payment completes) -->
+  <!-- Thank You State (public customer receipt — shown on this same page when
+       the merchant did not provide a callback_url; never redirects anywhere) -->
   <div id="successState" class="bg-white w-full max-w-[480px] rounded-xl shadow-2xl overflow-hidden border border-gray-100 hidden">
     <div class="bg-[#0b1a38] text-white p-6 flex items-center justify-between">
       <div class="flex items-center gap-3">
@@ -135,12 +136,22 @@
     </div>
     <div class="p-8 text-center">
       <div class="h-16 w-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center text-3xl font-black mx-auto mb-4">✓</div>
-      <h2 class="text-xl font-black text-gray-800 mb-2">Payment Successful</h2>
-      <p class="text-gray-500 font-medium text-sm">Your payment has been received.</p>
-      <p class="text-gray-400 text-xs mt-2">Ref: <span id="successRef" class="font-bold">---</span></p>
-      <a id="successReturnLink" href="#" class="hidden inline-block mt-6 bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-xs tracking-widest uppercase py-3 px-6 rounded-lg transition shadow-lg">
-        Return to Merchant
-      </a>
+      <h2 class="text-xl font-black text-gray-800 mb-2">Thank You — Payment Successful</h2>
+      <p class="text-gray-500 font-medium text-sm">Your payment has been received and confirmed.</p>
+
+      <!-- Reference Code -->
+      <div class="bg-gray-50 border border-gray-100 rounded-lg p-4 mt-6">
+        <span class="block text-[10px] text-gray-400 font-black uppercase tracking-widest">Your Reference Code</span>
+        <span id="successRef" class="block text-lg font-black text-[#0b1a38] mt-1 break-all">---</span>
+        <p class="text-[11px] text-gray-400 font-medium mt-1">Keep this code as proof of payment.</p>
+      </div>
+
+      <button id="btnCloseSuccess" onclick="closeSuccessPage()"
+              class="w-full mt-6 bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-xs tracking-widest uppercase py-4 rounded-lg transition shadow-lg">
+        Close This Page
+      </button>
+      <p id="closeHint" class="hidden text-[11px] text-gray-400 font-medium mt-3">You're all set — you may now close this browser tab.</p>
+
       <div class="text-center pt-6 mt-6 border-t border-gray-100">
         <p class="text-xs text-gray-400 font-medium">Secured by Valmont-Pay Payment Gateway</p>
       </div>
@@ -203,7 +214,11 @@
           currency: 'GHS',
           email: urlParams.get('email') || '',
           merchant: merchantFromUrl,
-          callback_url: urlParams.get('callback_url') || window.location.origin + '/dashboard.html'
+          // IMPORTANT: no fallback here. The old default of /dashboard.html
+          // bounced customers to the ADMIN LOGIN page after paying. If the
+          // merchant did not supply a callback_url the customer simply stays
+          // on the Valmont-Pay success screen.
+          callback_url: urlParams.get('callback_url') || ''
         };
 
         // Load tenant info
@@ -246,7 +261,15 @@
         document.getElementById('lockedInfo').classList.remove('hidden');
         document.getElementById('lockedRef').textContent = refFromUrl || paymentData.reference || '---';
         document.getElementById('lockedMerchant').textContent = sanitize(displayName);
-        const returnUrl = urlParams.get('return_url') || document.referrer || '';
+        let returnUrl = urlParams.get('return_url') || document.referrer || '';
+        // Never point customers at internal admin pages.
+        try {
+          const parsed = new URL(returnUrl, window.location.origin);
+          if (parsed.origin === window.location.origin &&
+              INTERNAL_PAGE_BLOCKLIST.includes(parsed.pathname.toLowerCase())) {
+            returnUrl = '';
+          }
+        } catch (_) { returnUrl = ''; }
         const returnLink = document.getElementById('returnLink');
         if (returnUrl) {
           returnLink.href = returnUrl;
@@ -417,7 +440,46 @@
       });
     }
 
-    // Verify the payment server-side, then show the success card on THIS page.
+    // ---------------------------------------------------------------
+    // POST-PAYMENT REDIRECT
+    // Customers must NEVER land on internal/admin pages after paying.
+    // Internal pages (dashboard/admin) redirect unauthenticated visitors
+    // to admin-login.html, so any callback pointing at them is rejected.
+    // ---------------------------------------------------------------
+    const INTERNAL_PAGE_BLOCKLIST = ['/dashboard.html', '/admin.html', '/admin-login.html', '/webhook-status.html', '/payout.html'];
+
+    // Returns a validated merchant callback URL, or null when there is
+    // no usable callback (in which case we stay on the pay.html success card).
+    function getMerchantCallbackUrl() {
+      const raw =
+        (paymentData && paymentData.callback_url) ||
+        new URLSearchParams(window.location.search).get('callback_url') ||
+        urlParams.get('return_url') ||
+        '';
+      if (!raw) return null;
+
+      let target;
+      try {
+        target = new URL(raw, window.location.origin);
+      } catch (_) {
+        return null; // malformed URL — do not redirect
+      }
+
+      // Only http(s) destinations are allowed (blocks javascript: etc.)
+      if (target.protocol !== 'https:' && target.protocol !== 'http:') return null;
+
+      // Never send a customer to an internal Valmont-Pay admin page.
+      if (target.origin === window.location.origin &&
+          INTERNAL_PAGE_BLOCKLIST.includes(target.pathname.toLowerCase())) {
+        return null;
+      }
+
+      return target;
+    }
+
+    // Verify the payment server-side, then either send the customer back to
+    // the merchant's receipt page (callback_url) or show the success card on
+    // THIS page. The customer is NEVER redirected to the admin login page.
     async function confirmPaymentOnPage(reference) {
       const btn = document.getElementById('btnPayWithPaystack');
       btn.textContent = 'Confirming Payment...';
@@ -428,20 +490,35 @@
         // Webhook remains the source of truth; the on-page verify is best-effort.
       }
 
-      document.getElementById('paymentCard').classList.add('hidden');
-      document.getElementById('successRef').textContent = reference || '---';
-
-      const returnUrl =
-        (paymentData && paymentData.callback_url) ||
-        urlParams.get('return_url') ||
-        '';
-      const successLink = document.getElementById('successReturnLink');
-      if (returnUrl) {
-        successLink.href = returnUrl;
-        successLink.classList.remove('hidden');
+      // 1. Merchant provided a callback_url → return the customer to the
+      //    merchant's receipt page with the reference + status appended.
+      const callbackTarget = getMerchantCallbackUrl();
+      if (callbackTarget) {
+        callbackTarget.searchParams.set('reference', reference || (paymentData && paymentData.reference) || '');
+        callbackTarget.searchParams.set('status', 'success');
+        window.location.href = callbackTarget.toString();
+        return;
       }
 
+      // 2. No callback_url → render the public "Thank You — Payment
+      //    Successful" card on THIS page with the customer's reference code.
+      //    NEVER fall back to /dashboard.html, /admin-login.html or /.
+      document.getElementById('paymentCard').classList.add('hidden');
+      document.getElementById('successRef').textContent = reference || (paymentData && paymentData.reference) || '---';
       document.getElementById('successState').classList.remove('hidden');
+    }
+
+    // "Close This Page" on the Thank You card. Browsers only allow scripts to
+    // close windows they opened, so if window.close() is blocked we show a
+    // hint instead — the customer is never navigated to any internal page.
+    function closeSuccessPage() {
+      window.close();
+      setTimeout(function () {
+        document.getElementById('closeHint').classList.remove('hidden');
+        const btn = document.getElementById('btnCloseSuccess');
+        btn.disabled = true;
+        btn.classList.add('opacity-60', 'cursor-not-allowed');
+      }, 300);
     }
 
     function proceedToCheckout() {

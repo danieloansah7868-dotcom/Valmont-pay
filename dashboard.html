@@ -265,8 +265,9 @@
         alert('There is nothing to settle yet. Your balance is GH₵ 0.00.');
         return;
       }
-      alert('Settlement Request Logged: Your funds of GHS ' + formatMoney(currentBalance) +
-        ' are being swept to your GCB Bank corporate escrow account.');
+      // Send the merchant to the payout destination form (Bank / MoMo)
+      // with the settled balance pre-filled — no more mock alert.
+      window.location.href = '/payout.html?amount=' + encodeURIComponent(currentBalance);
     }
 
     function copyPaymentLink() {
