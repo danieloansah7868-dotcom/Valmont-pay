@@ -69,6 +69,11 @@
         <span class="block text-lg font-extrabold text-[#0b1a38] mt-1" id="merchantName">Loading...</span>
       </div>
 
+      <div id="lockedInfo" class="hidden mb-2">
+        <p class="text-xs text-gray-400 font-medium">Order ref: <span id="lockedRef">---</span> · Merchant: <span id="lockedMerchant">---</span></p>
+        <a id="returnLink" href="#" class="text-xs text-[#f68b1e] font-bold hover:underline">← Return to merchant</a>
+      </div>
+
       <!-- Amount Display (server-resolved, not user-editable) -->
       <div class="bg-gray-50 p-6 rounded-lg border border-gray-100 text-center">
         <span class="block text-xs text-gray-400 font-bold uppercase tracking-wider">Amount to Pay</span>
@@ -202,8 +207,24 @@
       const displayName = paymentData.merchant_display_name || paymentData.merchant || 'Valmont-Pay';
       const brandColor = paymentData.merchant_brand_color || '#f68b1e';
 
+      const safeName = sanitize(displayName);
       document.getElementById('merchantLabel').textContent = displayName;
-      document.getElementById('merchantName').textContent = displayName;
+      document.getElementById('merchantName').innerHTML = safeName;
+
+      const locked = amountFromUrl > 0;
+      if (locked) {
+        document.getElementById('lockedInfo').classList.remove('hidden');
+        document.getElementById('lockedRef').textContent = refFromUrl || paymentData.reference || '---';
+        document.getElementById('lockedMerchant').textContent = sanitize(displayName);
+        const returnUrl = urlParams.get('return_url') || document.referrer || '';
+        const returnLink = document.getElementById('returnLink');
+        if (returnUrl) {
+          returnLink.href = returnUrl;
+          returnLink.classList.remove('hidden');
+        } else {
+          returnLink.classList.add('hidden');
+        }
+      }
 
       // Apply brand color to header
       const header = document.getElementById('merchantHeader');
@@ -221,6 +242,8 @@
       const emailInput = document.getElementById('customerEmail');
       if (paymentData.email) {
         emailInput.value = paymentData.email;
+        emailInput.readOnly = true;
+        emailInput.classList.add('bg-gray-50');
       } else {
         emailInput.readOnly = false;
         emailInput.classList.remove('bg-gray-50');
@@ -244,7 +267,7 @@
       document.getElementById('paymentCard').classList.remove('hidden');
 
       // Update page title
-      document.title = 'Pay ' + displayName + ' — Valmont-Pay';
+      document.title = 'Pay ' + sanitize(displayName) + ' — Valmont-Pay';
     }
 
     function showError(message) {
@@ -303,6 +326,12 @@
       }
 
       window.location.href = checkoutUrl.toString();
+    }
+
+    function sanitize(str) {
+      const div = document.createElement('div');
+      div.textContent = str || '';
+      return div.innerHTML;
     }
 
     // Boot
