@@ -96,10 +96,10 @@
                class="w-full border-2 border-gray-100 p-4 rounded-lg text-sm outline-none font-semibold focus:border-[#f68b1e] transition" />
       </div>
 
-      <!-- Pay with Paystack Button -->
+      <!-- Pay with Paystack Button (always visible) -->
       <button id="btnPayWithPaystack" onclick="payWithPaystack()"
               class="w-full bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-sm tracking-widest uppercase py-4 rounded-lg transition shadow-lg">
-        Pay with Paystack
+        Pay Securely via Valmont-Pay
       </button>
 
       <!-- REMOVE OR COMMENT OUT -->
@@ -256,13 +256,11 @@
         document.getElementById('customerPhone').value = paymentData.phone;
       }
 
-      // Show/hide Paystack button based on whether we have an authorization URL
+      // The primary payment button is ALWAYS visible. If no authorization URL
+      // is present yet (e.g. loaded from legacy query params), payWithPaystack()
+      // will generate a live Paystack authorization URL on the fly via the API.
       const paystackBtn = document.getElementById('btnPayWithPaystack');
-      if (paymentData.paystack_authorization_url) {
-        paystackBtn.classList.remove('hidden');
-      } else {
-        paystackBtn.classList.add('hidden');
-      }
+      paystackBtn.classList.remove('hidden');
 
       // Hide loading, show payment card
       document.getElementById('loadingState').classList.add('hidden');
@@ -279,26 +277,57 @@
       document.getElementById('errorMessage').textContent = message || 'This payment link is invalid or has expired.';
     }
 
-    function payWithPaystack() {
-      // Open Paystack's standard checkout in a new window
-      const authUrl = paymentData.paystack_authorization_url;
-      if (!authUrl) {
-        alert('Paystack checkout is not available for this payment. Please contact the merchant.');
-        return;
-      }
-
+    async function payWithPaystack() {
       const email = document.getElementById('customerEmail').value.trim();
-      if (!email) {
-        alert('Please enter your email address.');
+      if (!email || !email.includes('@')) {
+        alert('Please enter a valid email address.');
         return;
       }
 
       const btn = document.getElementById('btnPayWithPaystack');
       btn.disabled = true;
-      btn.textContent = 'Redirecting to Paystack...';
+      btn.textContent = 'Connecting to Paystack...';
 
-      // Open Paystack checkout in same window (standard redirect flow)
-      window.location.href = authUrl;
+      // 1. If an authorization URL is already present, redirect immediately
+      if (paymentData && paymentData.paystack_authorization_url) {
+        window.location.href = paymentData.paystack_authorization_url;
+        return;
+      }
+
+      // 2. Otherwise, generate a live Paystack authorization URL on the fly
+      try {
+        const res = await fetch('/api/initialize-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: email,
+            amount: paymentData.amount || parseFloat(new URLSearchParams(window.location.search).get('amount')),
+            merchant: paymentData.merchant || new URLSearchParams(window.location.search).get('merchant') || 'Valmont-Pay',
+            reference: paymentData.reference || new URLSearchParams(window.location.search).get('ref') || `VP-${Date.now()}`
+          })
+        });
+        const data = await res.json();
+
+        // Accept the live API shape (success + paymentUrl) as well as the spec
+        // shape (status + data.authorization_url / authorization_url).
+        const authUrl =
+          data.paymentUrl ||
+          data.data?.authorization_url ||
+          data.authorization_url ||
+          data.data?.paymentUrl;
+
+        if ((data.status || data.success) && authUrl) {
+          window.location.href = authUrl;
+        } else {
+          alert(data.message || data.error || 'Unable to initialize Paystack checkout. Please try again.');
+          btn.disabled = false;
+          btn.textContent = 'Pay Securely via Valmont-Pay';
+        }
+      } catch (err) {
+        alert('Network error connecting to payment gateway.');
+        btn.disabled = false;
+        btn.textContent = 'Pay Securely via Valmont-Pay';
+      }
     }
 
     function proceedToCheckout() {
