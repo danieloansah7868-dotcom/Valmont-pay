@@ -101,5 +101,25 @@ res = mkRes();
 await verify({ method: 'GET', query: {} }, res);
 check(res._c === 400, 'verify without a reference is rejected');
 
+// 6. subaccount from body
+calls.length = 0;
+res = mkRes();
+await init(
+  { method: 'POST', body: { email: 'sub@example.com', amount: 30, subaccount: 'ACCT_testsub123' } },
+  res
+);
+let sentSub = JSON.parse(calls[0].opts.body);
+check(sentSub.subaccount === 'ACCT_testsub123', 'subaccount from req.body is forwarded in Paystack payload');
+
+// 7. subaccount from query
+calls.length = 0;
+res = mkRes();
+await init(
+  { method: 'POST', body: { email: 'sub2@example.com', amount: 40 }, query: { subaccount: 'ACCT_testsub456' } },
+  res
+);
+let sentSubQuery = JSON.parse(calls[0].opts.body);
+check(sentSubQuery.subaccount === 'ACCT_testsub456', 'subaccount from req.query is forwarded in Paystack payload');
+
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

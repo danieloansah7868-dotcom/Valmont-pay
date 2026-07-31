@@ -23,6 +23,7 @@ export default async function handler(req, res) {
   // Get data from the request (Vercel parses JSON bodies, but be defensive)
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
   const { email, merchant, phone, callback_url: callbackUrl } = body;
+  const subaccount = body.subaccount || (req.query && req.query.subaccount);
 
   // The amount always comes from the request, never from a hardcoded default.
   const amount = parseFloat(body.amount);
@@ -53,6 +54,7 @@ export default async function handler(req, res) {
       reference,
       merchant,
       phone,
+      subaccount,
       callback_url:
         callbackUrl ||
         `https://valmont-pay.vercel.app/checkout.html?reference=${encodeURIComponent(reference)}` +

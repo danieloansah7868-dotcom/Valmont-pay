@@ -262,6 +262,7 @@ app.post('/api/initialize-payment', async (req, res) => {
   const { email, merchant, phone, callback_url } = req.body || {};
   const amount = parseFloat(req.body && req.body.amount);
   const reference = (req.body && req.body.reference) || generateReference();
+  const subaccount = (req.body && req.body.subaccount) || (req.query && req.query.subaccount);
 
   if (!email || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ success: false, error: 'Missing or invalid fields' });
@@ -276,6 +277,7 @@ app.post('/api/initialize-payment', async (req, res) => {
       reference,
       merchant,
       phone,
+      subaccount,
       callback_url:
         callback_url ||
         `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(reference)}` +
@@ -948,6 +950,7 @@ function resolveTenant(req, res, next) {
 app.post('/api/transaction/initialize', requireTenantAuth, async (req, res) => {
   const tenant = req.tenant;
   const { amount, reference, currency, email, phone, callback_url } = req.body;
+  const subaccount = (req.body && req.body.subaccount) || (req.query && req.query.subaccount);
 
   // Validate required fields
   if (!email || !amount || isNaN(amount) || Number(amount) <= 0) {
@@ -991,6 +994,7 @@ app.post('/api/transaction/initialize', requireTenantAuth, async (req, res) => {
         reference: finalReference,
         callback_url: `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(finalReference)}&merchant=${encodeURIComponent(tenant.key)}`,
         merchant: tenant.key,
+        subaccount,
         currency: finalCurrency
       });
 
