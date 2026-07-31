@@ -170,7 +170,11 @@
     const accessCode = urlParams.get('access_code');
     const merchantFromUrl = urlParams.get('merchant');
     const amountFromUrl = parseFloat(urlParams.get('amount')) || 0;
-    const refFromUrl = urlParams.get('ref');
+    // Storefront integrations send `reference`; older links used `ref`.
+    const refFromUrl = urlParams.get('reference') || urlParams.get('ref');
+    // Paystack subaccount code → automatic split settlement (98%/2% for
+    // Nanahemaa Market's ACCT_uvyay690lwskmw5). Forwarded to the backend.
+    const subaccountFromUrl = urlParams.get('subaccount') || '';
 
     let paymentData = null;
     let tenantData = null;
@@ -214,6 +218,7 @@
           currency: 'GHS',
           email: urlParams.get('email') || '',
           merchant: merchantFromUrl,
+          subaccount: subaccountFromUrl,
           // IMPORTANT: no fallback here. The old default of /dashboard.html
           // bounced customers to the ADMIN LOGIN page after paying. If the
           // merchant did not supply a callback_url the customer simply stays
@@ -391,7 +396,11 @@
             phone: phone,
             amount: paymentData.amount || parseFloat(new URLSearchParams(window.location.search).get('amount')),
             merchant: paymentData.merchant || new URLSearchParams(window.location.search).get('merchant') || 'Valmont-Pay',
-            reference: paymentData.reference || new URLSearchParams(window.location.search).get('ref') || `VP-${Date.now()}`
+            reference: paymentData.reference || new URLSearchParams(window.location.search).get('reference') || new URLSearchParams(window.location.search).get('ref') || `VP-${Date.now()}`,
+            // Forward the merchant's Paystack subaccount (e.g. Nanahemaa
+            // Market's ACCT_uvyay690lwskmw5) so Paystack applies the
+            // automatic 98%/2% split settlement to this transaction.
+            subaccount: (paymentData && paymentData.subaccount) || urlParams.get('subaccount') || undefined
           })
         });
         const data = await res.json();

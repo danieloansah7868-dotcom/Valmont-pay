@@ -23,6 +23,8 @@ export default async function handler(req, res) {
   // Get data from the request (Vercel parses JSON bodies, but be defensive)
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
   const { email, merchant, phone, callback_url: callbackUrl } = body;
+  // Paystack subaccount (body or query) — enables split settlement, e.g.
+  // Nanahemaa Market's ACCT_uvyay690lwskmw5 for automatic 98%/2% splits.
   const subaccount = body.subaccount || (req.query && req.query.subaccount);
 
   // The amount always comes from the request, never from a hardcoded default.
@@ -48,6 +50,8 @@ export default async function handler(req, res) {
   try {
     // Call Paystack API to initialize payment.
     // The helper forwards `reference` and multiplies the amount by 100.
+    // `subaccount` (when present) enables Paystack split settlement, e.g.
+    // Nanahemaa Market's ACCT_uvyay690lwskmw5 for automatic 98%/2% splits.
     const data = await initializePayment({
       amount,
       email,

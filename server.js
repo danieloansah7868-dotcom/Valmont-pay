@@ -262,6 +262,8 @@ app.post('/api/initialize-payment', async (req, res) => {
   const { email, merchant, phone, callback_url } = req.body || {};
   const amount = parseFloat(req.body && req.body.amount);
   const reference = (req.body && req.body.reference) || generateReference();
+  // Paystack subaccount (body or query) — enables split settlement, e.g.
+  // Nanahemaa Market's ACCT_uvyay690lwskmw5 for automatic 98%/2% splits.
   const subaccount = (req.body && req.body.subaccount) || (req.query && req.query.subaccount);
 
   if (!email || isNaN(amount) || amount <= 0) {
@@ -433,6 +435,59 @@ app.get('/api/transactions', async (req, res) => {
     source: 'supabase',
     ...payload,
     data: payload.transactions
+  });
+});
+
+// POST /api/transactions — write side of the shared ledger.
+// Mirrors api/transactions.js (the Vercel serverless function) so local and
+// deployed behavior are identical.
+//
+// Used by the Nanahemaa Market storefront checkout to record Cash on
+// Delivery / Manual MoMo orders (status PENDING_MOMO) and by the admin panel's
+// Orders tab to reconcile them (PENDING_MOMO → PAID) and to advance
+// fulfillment status (PAID → SHIPPED / CANCELLED). Upserts by `reference`.
+app.post('/api/transactions', async (req, res) => {
+  const body = req.body || {};
+  if (!body.reference) {
+    return res.status(400).json({ success: false, error: 'Reference is required' });
+  }
+
+  // Without Supabase (local dev / demo) persist to the in-memory ledger so the
+  // storefront → admin order loop still works end-to-end.
+  if (!isSupabaseConfigured()) {
+    const row = ledger.upsertTransaction({
+      reference: body.reference,
+      merchant: body.merchant_name || body.merchant || 'Valmont-Pay',
+      customer: body.customer_email || body.customer || body.email || 'unknown@customer',
+      amount: body.amount,
+      channel: body.payment_method || body.channel || 'Unknown',
+      status: body.status || 'PENDING',
+      timestamp: body.paid_at || new Date().toISOString()
+    });
+    return res.status(200).json({
+      success: true,
+      status: true,
+      source: 'memory',
+      reference: row.reference,
+      data: row
+    });
+  }
+
+  const result = await transactionStore.saveTransaction(body, { context: 'TRANSACTIONS' });
+
+  if (!result.ok) {
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to save transaction',
+      message: result.reason,
+      reference: result.record.reference
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    reference: result.record.reference,
+    data: result.data
   });
 });
 

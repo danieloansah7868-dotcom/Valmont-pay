@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Checkout — Nanahemaa Market</title>
+  <meta name="description" content="Secure checkout for Nanahemaa Market. Pay online with Mobile Money or Card via Valmont-Pay, or choose Cash on Delivery / Manual MoMo.">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background: linear-gradient(180deg, #f4faf6 0%, #eaf3ee 100%); min-height: 100vh; color: #123524; }
+    .brand-green { color: #14603c; }
+    .bg-brand-green { background-color: #14603c; }
+    .brand-amber { color: #f59e0b; }
+    .bg-brand-amber { background-color: #f59e0b; }
+    .card-shadow { box-shadow: 0 12px 32px rgba(20, 96, 60, 0.10); }
+    .field { width: 100%; border: 1.5px solid #d7e4db; background: #ffffff; padding: 10px 14px; border-radius: 10px; font-size: 14px; outline: none; transition: border-color .15s; }
+    .field:focus { border-color: #14603c; }
+    .pay-option { display: flex; gap: 12px; align-items: flex-start; border: 1.5px solid #d7e4db; background: #fff; border-radius: 12px; padding: 14px; cursor: pointer; transition: all .15s; }
+    .pay-option.selected { border-color: #14603c; background: #f0f9f3; box-shadow: 0 0 0 3px rgba(20, 96, 60, .12); }
+    .pay-option input { margin-top: 3px; accent-color: #14603c; }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header class="w-full bg-white border-b border-emerald-900/10 sticky top-0 z-20">
+    <div class="max-w-5xl mx-auto flex items-center justify-between px-4 py-3">
+      <a href="https://nanahemaamarket.com/" class="flex items-center gap-2">
+        <svg class="h-8 w-8" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M3 4h2l.7 2.5M5 6.5h14l-1.5 8.2a2 2 0 0 1-2 1.6H9.6a2 2 0 0 1-2-1.6L5.7 6.5Z" stroke="#14603c" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M9.5 19.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM16.5 19.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" fill="#f59e0b"/>
+        </svg>
+        <span class="text-lg font-black tracking-tight brand-green">Nanahemaa <span class="text-amber-500">Market</span></span>
+      </a>
+      <div class="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-emerald-900/50">
+        <svg class="h-4 w-4 text-emerald-700" viewBox="0 0 24 24" fill="currentColor"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+        Secure Checkout
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 py-8">
+
+    <!-- Empty cart state (hidden by default) -->
+    <div id="emptyCartState" class="hidden max-w-md mx-auto text-center bg-white card-shadow rounded-2xl p-10">
+      <div class="mx-auto w-14 h-14 rounded-full bg-emerald-50 flex items-center justify-center mb-4">
+        <svg class="h-7 w-7 text-emerald-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h2l.7 2.5M5 6.5h14l-1.5 8.2a2 2 0 0 1-2 1.6H9.6a2 2 0 0 1-2-1.6L5.7 6.5Z"/><path d="M9.5 19.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM16.5 19.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z"/></svg>
+      </div>
+      <h1 class="text-xl font-black brand-green">Your cart is empty</h1>
+      <p class="text-sm text-emerald-900/60 mt-2">Add some products to your cart first, then come back to check out.</p>
+      <a href="https://nanahemaamarket.com/" class="mt-6 inline-block rounded-xl bg-brand-green hover:bg-[#0e4a2e] text-white font-extrabold uppercase text-xs tracking-widest py-3 px-6 transition">Continue Shopping</a>
+      <a id="manualConfirmWhatsAppBtn" href="#" target="_blank" rel="noopener" class="hidden mt-3 w-full inline-flex items-center justify-center gap-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe57] text-white font-extrabold uppercase text-xs tracking-widest py-3 px-6 transition">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20.52 3.48A11.9 11.9 0 0 0 12 0C5.37 0 0 5.37 0 12a11.94 11.94 0 0 0 1.64 6L0 24l6.2-1.63A12 12 0 0 0 12 24c6.63 0 12-5.37 12-12 0-3.2-1.25-6.21-3.48-8.52ZM12 22a10 10 0 0 1-5.1-1.4l-.36-.21-3.68.97.98-3.59-.24-.37A9.94 9.94 0 0 1 2 12C2 6.48 6.48 2 12 2s10 4.48 10 10-4.48 10-10 10Zm5.36-7.47c-.29-.15-1.73-.85-2-.95s-.46-.15-.66.15-.76.95-.94 1.15-.34.22-.63.07a8.2 8.2 0 0 1-2.41-1.49 9 9 0 0 1-1.66-2.06c-.17-.29 0-.44.13-.58.13-.13.29-.34.44-.51a2 2 0 0 0 .29-.49.55.55 0 0 0 0-.51c-.07-.15-.66-1.58-.9-2.16s-.48-.5-.66-.51h-.56a1.08 1.08 0 0 0-.78.36 3.28 3.28 0 0 0-1 2.44 5.7 5.7 0 0 0 1.19 3.05 13 13 0 0 0 5 4.4c.7.3 1.24.48 1.66.62a4 4 0 0 0 1.83.12 3 3 0 0 0 2-1.4 2.44 2.44 0 0 0 .17-1.4c-.06-.13-.25-.2-.54-.35Z"/></svg>
+        Confirm Order on WhatsApp
+      </a>
+    </div>
+
+    <!-- Checkout grid (hidden while cart empty) -->
+    <div id="checkoutGrid" class="hidden grid md:grid-cols-5 gap-6 items-start">
+
+      <!-- Left: customer + payment -->
+      <div class="md:col-span-3 space-y-5">
+
+        <!-- Customer details -->
+        <section class="bg-white card-shadow rounded-2xl p-6">
+          <h2 class="text-sm font-black uppercase tracking-widest text-emerald-900/50 mb-4">Delivery Details</h2>
+          <div class="grid sm:grid-cols-2 gap-4">
+            <div class="sm:col-span-2">
+              <label class="block text-[11px] font-black uppercase tracking-wider text-emerald-900/50 mb-1.5">Full Name *</label>
+              <input id="customerName" type="text" class="field" placeholder="Ama Mensah" autocomplete="name" required />
+            </div>
+            <div>
+              <label class="block text-[11px] font-black uppercase tracking-wider text-emerald-900/50 mb-1.5">Phone *</label>
+              <input id="customerPhone" type="tel" class="field" placeholder="024 000 0000" autocomplete="tel" required />
+            </div>
+            <div>
+              <label class="block text-[11px] font-black uppercase tracking-wider text-emerald-900/50 mb-1.5">Email *</label>
+              <input id="customerEmail" type="email" class="field" placeholder="you@email.com" autocomplete="email" required />
+            </div>
+            <div class="sm:col-span-2">
+              <label class="block text-[11px] font-black uppercase tracking-wider text-emerald-900/50 mb-1.5">Delivery Address *</label>
+              <textarea id="deliveryAddress" rows="2" class="field resize-none" placeholder="House number, street, area / landmark (e.g. 14 Osu Oxford St, Accra)" autocomplete="street-address" required></textarea>
+            </div>
+          </div>
+        </section>
+
+        <!-- Payment method -->
+        <section class="bg-white card-shadow rounded-2xl p-6">
+          <h2 class="text-sm font-black uppercase tracking-widest text-emerald-900/50 mb-4">Payment Method</h2>
+          <div class="space-y-3" id="paymentOptions">
+
+            <label class="pay-option selected" id="opt-online_momo">
+              <input type="radio" name="paymentMethod" value="online_momo" checked />
+              <span class="flex-1">
+                <span class="block font-extrabold text-sm brand-green">Mobile Money (Online)</span>
+                <span class="block text-xs text-emerald-900/60 mt-0.5">MTN MoMo, Telecel Cash or AT Money — pay instantly via Valmont-Pay.</span>
+              </span>
+              <svg class="h-5 w-5 text-emerald-700 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+            </label>
+
+            <label class="pay-option" id="opt-card">
+              <input type="radio" name="paymentMethod" value="card" />
+              <span class="flex-1">
+                <span class="block font-extrabold text-sm brand-green">Credit / Debit Card</span>
+                <span class="block text-xs text-emerald-900/60 mt-0.5">Visa, Mastercard or Verve — processed securely by Valmont-Pay.</span>
+              </span>
+              <svg class="h-5 w-5 text-emerald-700 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2ZM4 6h16v3H4V6Zm0 12v-5h16v5H4Zm2-2h5v2H6v-2Z"/></svg>
+            </label>
+
+            <label class="pay-option" id="opt-manual">
+              <input type="radio" name="paymentMethod" value="manual" />
+              <span class="flex-1">
+                <span class="block font-extrabold text-sm brand-green">Cash on Delivery / Manual MoMo</span>
+                <span class="block text-xs text-emerald-900/60 mt-0.5">Pay cash when your order arrives, or send a MoMo transfer manually.</span>
+              </span>
+              <svg class="h-5 w-5 text-emerald-700 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 16h-2v-1.07A7 7 0 0 1 5.9 12l1.95-.45A5 5 0 0 0 11 14.5V11a9 9 0 0 1-3-2.5l1.55-1.25A6.7 6.7 0 0 0 11 8V4h2v4a6.8 6.8 0 0 0 2.5-.6L17 8.4A8 8 0 0 1 13 9.9V14a4.9 4.9 0 0 0 2.7 1.4L17.5 16A7 7 0 0 1 13 16.93V18Z"/></svg>
+            </label>
+          </div>
+        </section>
+
+        <!-- Manual payment instructions (hidden unless Manual MoMo selected) -->
+        <section id="manualInstructions" class="hidden bg-amber-50 border border-amber-300/60 rounded-2xl p-5">
+          <h3 class="text-sm font-black text-amber-700">Manual MoMo / Cash on Delivery</h3>
+          <ul class="mt-2 text-xs text-amber-800/80 space-y-1.5 list-disc pl-4">
+            <li>Pay cash on delivery, or send a Mobile Money transfer to the number we share with you on WhatsApp.</li>
+            <li>We will confirm your order on WhatsApp within minutes.</li>
+            <li>Your order is saved as <b>PENDING_MOMO</b> until the payment is reconciled by our team.</li>
+          </ul>
+          <a id="manualWhatsAppBtn" href="#" target="_blank" rel="noopener"
+             class="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#25D366] hover:bg-[#1ebe57] text-white font-extrabold uppercase text-[11px] tracking-widest py-2.5 px-4 transition">
+            Confirm Order on WhatsApp
+          </a>
+        </section>
+      </div>
+
+      <!-- Right: order summary -->
+      <aside class="md:col-span-2 space-y-5">
+        <section class="bg-white card-shadow rounded-2xl p-6 sticky top-20">
+          <h2 class="text-sm font-black uppercase tracking-widest text-emerald-900/50 mb-4">Order Summary</h2>
+
+          <ul id="orderItemsList" class="divide-y divide-emerald-900/5 max-h-64 overflow-y-auto">
+            <!-- items injected -->
+          </ul>
+
+          <div class="mt-4 space-y-1.5 text-sm border-t border-dashed border-emerald-900/15 pt-4">
+            <div class="flex items-center justify-between">
+              <span class="font-semibold text-emerald-900/50">Subtotal</span>
+              <span id="subtotalDisplay" class="font-bold text-emerald-900/70">GH₵ 0.00</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="font-semibold text-emerald-900/50">Delivery Fee</span>
+              <span id="deliveryFeeDisplay" class="font-bold text-emerald-900/70">GH₵ 0.00</span>
+            </div>
+            <div class="flex items-center justify-between pt-2 border-t border-emerald-900/10">
+              <span class="font-bold brand-green">Total</span>
+              <span id="totalDisplay" class="text-xl font-black text-amber-500">GH₵ 0.00</span>
+            </div>
+          </div>
+
+          <button id="placeOrderBtn" onclick="submitCheckout()"
+                  class="mt-5 w-full rounded-xl bg-brand-amber hover:bg-amber-600 text-white font-black uppercase text-xs tracking-widest py-4 transition shadow">
+            Place Order
+          </button>
+
+          <p class="text-center text-[10px] text-emerald-900/50 mt-3 flex items-center justify-center gap-1">
+            <svg class="h-3.5 w-3.5 text-emerald-700 fill-current" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+            Online payments secured by <a class="font-bold underline" href="https://valmontpay.app" target="_blank" rel="noopener">Valmont-Pay</a>
+          </p>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <script>
+    // ═══════════════════════════════════════════════════════════════════
+    // NANAHEMAA MARKET — STOREFRONT CHECKOUT
+    //
+    // Online payments (Mobile Money / Card) are redirected to the
+    // Valmont-Pay hosted gateway (https://valmontpay.app/pay.html) with
+    // Jane Boadi Nyarko's Paystack subaccount attached, so Paystack
+    // automatically splits every settlement 98% merchant / 2% gateway.
+    // ═══════════════════════════════════════════════════════════════════
+
+    // ── Storefront configuration ──────────────────────────────────────
+    var NANAHEMAA = {
+      merchant: 'Nanahemaa Market',
+      subaccount: 'ACCT_uvyay690lwskmw5',                 // Jane Boadi Nyarko — 98%/2% split
+      gatewayUrl: 'https://valmontpay.app/pay.html',
+      callbackUrl: 'https://nanahemaamarket.com/order-confirmed.html',
+      whatsappNumber: '233537683874',
+      fallbackEmail: 'orders@nanahemaamarket.com',
+      deliveryFee: 30,        // GH₵ flat delivery fee
+      freeDeliveryAbove: 500  // subtotal >= GH₵ 500 → FREE delivery
+    };
+
+    // ── Cart (nanahemaamarket_cart) ───────────────────────────────────
+    var cart = [];
+    try {
+      var rawCart = localStorage.getItem('nanahemaamarket_cart');
+      if (rawCart) {
+        var parsedCart = JSON.parse(rawCart);
+        if (Array.isArray(parsedCart)) cart = parsedCart;
+      }
+    } catch (_) { cart = []; }
+
+    var money = function (n) {
+      return 'GH₵ ' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    };
+
+    var subtotal = cart.reduce(function (sum, item) {
+      return sum + (Number(item.price || 0) * Number(item.qty || 1));
+    }, 0);
+    var deliveryFee = subtotal >= NANAHEMAA.freeDeliveryAbove ? 0 : NANAHEMAA.deliveryFee;
+    var totalAmount = subtotal + deliveryFee;
+
+    // ── Render ─────────────────────────────────────────────────────────
+    var $ = function (id) { return document.getElementById(id); };
+
+    if (cart.length === 0) {
+      $('emptyCartState').classList.remove('hidden');
+      $('checkoutGrid').classList.add('hidden');
+    } else {
+      $('emptyCartState').classList.add('hidden');
+      $('checkoutGrid').classList.remove('hidden');
+
+      $('orderItemsList').innerHTML = cart.map(function (item) {
+        var qty = Number(item.qty || 1);
+        var price = Number(item.price || 0);
+        var variant = [item.selected_color, item.selected_storage, item.variant].filter(Boolean).join(' / ');
+        return '<li class="flex items-center justify-between gap-3 py-2.5 text-sm">' +
+          '<div class="min-w-0"><div class="font-bold brand-green truncate">' + (item.name || 'Item') + '</div>' +
+          (variant ? '<div class="text-[11px] text-emerald-900/50">' + variant + '</div>' : '') +
+          '</div>' +
+          '<div class="text-right shrink-0"><div class="text-[11px] text-emerald-900/50">Qty ' + qty + '</div>' +
+          '<div class="font-extrabold brand-green">' + money(price * qty) + '</div></div>' +
+          '</li>';
+      }).join('');
+
+      $('subtotalDisplay').textContent = money(subtotal);
+      $('deliveryFeeDisplay').textContent = deliveryFee > 0 ? money(deliveryFee) : 'FREE';
+      $('totalDisplay').textContent = money(totalAmount);
+      updatePlaceOrderLabel();
+    }
+
+    // ── Payment method selection ───────────────────────────────────────
+    var selectedMethod = 'online_momo';
+    function setPaymentMethod(method) {
+      selectedMethod = method;
+      ['online_momo', 'card', 'manual'].forEach(function (m) {
+        var opt = $('opt-' + m);
+        opt.classList.toggle('selected', m === method);
+      });
+      $('manualInstructions').classList.toggle('hidden', method !== 'manual');
+      updatePlaceOrderLabel();
+      if (method === 'manual') buildManualWhatsAppLink();
+    }
+    document.querySelectorAll('input[name="paymentMethod"]').forEach(function (radio) {
+      radio.addEventListener('change', function () { setPaymentMethod(radio.value); });
+    });
+
+    function updatePlaceOrderLabel() {
+      var btn = $('placeOrderBtn');
+      if (selectedMethod === 'manual') {
+        btn.textContent = 'Place Order (Pay on Delivery / Manual MoMo)';
+      } else {
+        btn.textContent = 'Pay ' + money(totalAmount) + ' Securely';
+      }
+    }
+
+    // ── Manual order WhatsApp confirmation ─────────────────────────────
+    function buildManualWhatsAppLink() {
+      var itemsText = cart.map(function (item) {
+        var variant = [item.selected_color, item.selected_storage, item.variant].filter(Boolean).join('/');
+        return '• ' + (item.name || 'Item') + (variant ? ' (' + variant + ')' : '') +
+               ' — Qty ' + Number(item.qty || 1) + ' — ' + money(Number(item.price || 0) * Number(item.qty || 1));
+      }).join('\n');
+      var message =
+        '*NANAHEMAA MARKET — NEW MANUAL ORDER*\n' +
+        'Reference Code: *#' + (pendingReference || '') + '*\n\n' +
+        '*ITEMS:*\n' + itemsText + '\n\n' +
+        '*Subtotal:* ' + money(subtotal) + '\n' +
+        '*Delivery Fee:* ' + (deliveryFee > 0 ? money(deliveryFee) : 'FREE') + '\n' +
+        '*TOTAL BILL:* ' + money(totalAmount) + '\n\n' +
+        '*PAYMENT:* Cash on Delivery / Manual MoMo\n\n' +
+        '*DELIVERY DETAILS:*\n' +
+        'Recipient: ' + ($('customerName').value.trim() || '—') + '\n' +
+        'Phone: ' + ($('customerPhone').value.trim() || '—') + '\n' +
+        'Address: ' + ($('deliveryAddress').value.trim() || 'To be provided via chat') + '\n\n' +
+        '_Thank you for shopping with Nanahemaa Market!_';
+      $('manualWhatsAppBtn').href = 'https://wa.me/' + NANAHEMAA.whatsappNumber + '?text=' + encodeURIComponent(message);
+    }
+
+    var pendingReference = 'NM-' + Date.now().toString().slice(-6) + Math.floor(10 + Math.random() * 90);
+
+    // ── Submit checkout ────────────────────────────────────────────────
+    function submitCheckout() {
+      var name = $('customerName').value.trim();
+      var phone = $('customerPhone').value.trim();
+      var email = $('customerEmail').value.trim();
+      var address = $('deliveryAddress').value.trim();
+
+      if (!name) { alert('Please enter your full name.'); return; }
+      if (!phone) { alert('Please enter your phone number.'); return; }
+      if (!address) { alert('Please enter your delivery address.'); return; }
+
+      // Email is required for online payments (gateway receipt); for manual
+      // orders we fall back to the store's order email when it is missing.
+      if ((selectedMethod === 'online_momo' || selectedMethod === 'card') && !email) {
+        alert('Please enter your email address so we can send your payment receipt.');
+        return;
+      }
+
+      var orderData = {
+        reference_code: pendingReference,
+        customer_name: name,
+        customer_email: email || NANAHEMAA.fallbackEmail,
+        email: email || NANAHEMAA.fallbackEmail,
+        customer_phone: phone,
+        delivery_address: address,
+        payment_method: selectedMethod === 'online_momo' ? 'Mobile Money (Online)' : selectedMethod === 'card' ? 'Credit / Debit Card' : 'Cash on Delivery / Manual MoMo',
+        items: cart.map(function (item) {
+          return {
+            id: item.id,
+            name: item.name,
+            image_url: item.image || item.image_url,
+            qty: item.qty,
+            price: Number(item.price || 0),
+            selected_color: item.selected_color,
+            selected_storage: item.selected_storage,
+            variant: item.variant
+          };
+        }),
+        subtotal: subtotal,
+        delivery_fee: deliveryFee,
+        total_amount: totalAmount
+      };
+
+      // ── Online Mobile Money / Card → Valmont-Pay hosted gateway with
+      //    Jane's Paystack Subaccount attached (98%/2% split settlement) ──
+      if (selectedMethod === 'online_momo' || selectedMethod === 'card') {
+        try {
+          localStorage.setItem('nanahemaa_pending_order', JSON.stringify(orderData));
+        } catch (_) {}
+
+        var gatewayUrl = new URL(NANAHEMAA.gatewayUrl);
+        gatewayUrl.searchParams.set('merchant', NANAHEMAA.merchant);
+        gatewayUrl.searchParams.set('amount', Number(orderData.total_amount).toFixed(2));
+        gatewayUrl.searchParams.set('email', orderData.customer_email || NANAHEMAA.fallbackEmail);
+        gatewayUrl.searchParams.set('reference', orderData.reference_code);
+        gatewayUrl.searchParams.set('subaccount', NANAHEMAA.subaccount); // Jane Boadi Nyarko 98% split
+        gatewayUrl.searchParams.set('callback_url', NANAHEMAA.callbackUrl);
+
+        window.location.href = gatewayUrl.toString();
+        return;
+      }
+
+      // ── Cash on Delivery / Manual MoMo → keep the manual flow ─────────
+      finishManualOrder(orderData);
+    }
+
+    async function finishManualOrder(orderData) {
+      // 1. Save the order to the storefront order log.
+      try {
+        var log = JSON.parse(localStorage.getItem('nanahemaa_orders') || '[]');
+        if (!log.some(function (o) { return o.reference_code === orderData.reference_code; })) {
+          log.unshift(Object.assign({ status: 'PENDING_MOMO', created_at: new Date().toISOString() }, orderData));
+          localStorage.setItem('nanahemaa_orders', JSON.stringify(log));
+        }
+      } catch (_) {}
+
+      // 2. Persist the order to the gateway order ledger (best effort) so
+      //    Jane's admin panel can reconcile it as PENDING_MOMO → PAID.
+      try {
+        await fetch('/api/transactions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reference: orderData.reference_code,
+            merchant_name: NANAHEMAA.merchant,
+            customer_email: orderData.customer_email || NANAHEMAA.fallbackEmail,
+            amount: Number(orderData.total_amount).toFixed(2),
+            payment_method: orderData.payment_method,
+            status: 'PENDING_MOMO'
+          })
+        });
+      } catch (_) {
+        // Never block the customer: the order is saved locally and on WhatsApp.
+      }
+
+      // 3. Clear the cart and show manual confirmation with a WhatsApp button.
+      try { localStorage.removeItem('nanahemaamarket_cart'); } catch (_) {}
+      cart = [];
+      $('checkoutGrid').classList.add('hidden');
+      $('emptyCartState').classList.remove('hidden');
+      $('emptyCartState').querySelector('h1').textContent = 'Order Placed!';
+      $('emptyCartState').querySelector('p').innerHTML =
+        'Your order reference is <b>#' + orderData.reference_code + '</b>.<br>' +
+        'Send your MoMo transfer or pay on delivery, then confirm on WhatsApp and we will start preparing your order.';
+      $('emptyCartState').querySelector('a').textContent = 'Back to Store';
+      buildManualWhatsAppLink();
+      $('manualConfirmWhatsAppBtn').href = $('manualWhatsAppBtn').href;
+      $('manualConfirmWhatsAppBtn').classList.remove('hidden');
+      setTimeout(function () {
+        var el = $('emptyCartState');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+    }
+  </script>
+</body>
+</html>
