@@ -5,6 +5,13 @@
  */
 process.env.PAYSTACK_SECRET_KEY = 'sk_test_fake';
 
+// This is an offline Paystack handler test. CI injects real Supabase secrets for
+// the persistence-specific suites later in `npm test`; keep those credentials
+// out of this process so verify-payment cannot make a real database write.
+for (const name of ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY']) {
+  delete process.env[name];
+}
+
 const calls = [];
 globalThis.fetch = async (url, opts = {}) => {
   calls.push({ url: String(url), opts });
