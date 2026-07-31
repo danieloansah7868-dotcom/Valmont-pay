@@ -20,6 +20,13 @@ import path from 'node:path';
 const require = createRequire(import.meta.url);
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
+// This suite deliberately exercises the empty in-memory ledger. CI provides
+// Supabase secrets for the persistence-specific suites that run afterwards, so
+// remove them before loading server.js to prevent live reads or writes here.
+for (const name of ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY']) {
+  delete process.env[name];
+}
+
 let failures = 0;
 const check = (cond, msg) => {
   console.log(`${cond ? 'PASS' : 'FAIL'} - ${msg}`);

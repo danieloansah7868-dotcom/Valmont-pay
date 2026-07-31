@@ -179,6 +179,13 @@ check(diagnostics.paystackKeyMode(process.env.PAYSTACK_SECRET_KEY) === 'live', '
 check(diagnostics.paystackKeyMode('pk_test_abc') === 'public-key-misconfigured', 'a public key is flagged as misconfigured');
 process.env.PAYSTACK_SECRET_KEY = 'sk_test_offline_diagnostics_key';
 
+// The cross-reference below only stubs Paystack. Disable the fake Supabase
+// configuration before it runs so this offline test does not construct a live
+// client (which also requires a WebSocket transport under the CI Node version).
+delete process.env.SUPABASE_URL;
+delete process.env.SUPABASE_ANON_KEY;
+delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+
 // ------------------------------------------- Paystack cross-reference (stubbed)
 const deliveries = await diagnostics.getRecentPaystackDeliveries(10);
 check(deliveries.available === true, 'the Paystack transaction list is fetched');
