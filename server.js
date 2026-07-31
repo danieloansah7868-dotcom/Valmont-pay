@@ -13,6 +13,7 @@ const webhookDiagnostics = require('./lib/webhook-diagnostics');
 const tenants = require('./lib/tenants');
 const accessCodeStore = require('./lib/access-code-store');
 const webhookForwarder = require('./lib/tenant-webhook-forwarder');
+const notifier = require('./lib/notifier');
 
 // Vercel runs the dashboard checkout (POST /api/v1/transaction/charge) in a
 // serverless function whose memory disappears between requests, so a payment
@@ -610,6 +611,21 @@ app.post('/api/webhook', async (req, res) => {
     }
   } else if (result.statusCode === 200) {
     console.log(`[WEBHOOK ${requestId}] STEP 6/6 SUPABASE — skipped (no transaction to save, or Supabase is not configured)`);
+  }
+
+  // ─── NOTIFY: instant SMS/WhatsApp receipt to customer + merchant ───────
+  // The event is verified and the SUCCESS transaction is recorded. Dispatch
+  // fire-and-forget: lib/notifier never throws, but even if it did, a broken
+  // receipt must never change the HTTP 200 Paystack is waiting for.
+  if (
+    result.statusCode === 200 &&
+    result.body && result.body.transaction &&
+    String(result.body.transaction.status).toUpperCase() === 'SUCCESS'
+  ) {
+    console.log(`[WEBHOOK ${requestId}] NOTIFY — dispatching SMS/WhatsApp receipt for ${result.body.transaction.reference} (fire-and-forget)`);
+    notifier.sendOrderReceiptNotification(result.body.transaction, req.body || {}).catch(err => {
+      console.error(`[WEBHOOK ${requestId}] [WEBHOOK-NOTIFIER-ERROR]`, err && err.message ? err.message : err);
+    });
   }
 
   console.log(`[WEBHOOK ${requestId}] RESPONSE — → HTTP ${result.statusCode} in ${Date.now() - startedAt}ms`, JSON.stringify(result.body, null, 2));

@@ -15,7 +15,7 @@ Your gateway prototype contains the following master-built systems:
     *   `GET /api/v1/transaction/verify/:ref`: Validates transaction clearance status.
     *   `GET /api/v1/merchant/dashboard`: Fetches active ledger arrays and settles wallet balances.
     *   `GET /api/transactions`: The canonical ledger feed the dashboard reads. Returns the live transactions array plus the derived balance.
-    *   `POST /api/webhook`: Paystack webhook receiver (HMAC SHA512 signature verified). This is how real payments land on the ledger.
+    *   `POST /api/webhook`: Paystack webhook receiver (HMAC SHA512 signature verified). This is how real payments land on the ledger — and every `charge.success` instantly triggers an SMS/WhatsApp receipt via **`lib/notifier.js`** (the notification engine that texts both the customer and the merchant).
 3.  **`checkout.html` (Secured Checkout Widget)**: A responsive popup widget styled in deep navy and bright emerald green. Features forms to collect **Mobile Money Number** (MTN, Telecel, AT) or **Card details**, communicates with the API, and displays loading spinners for simulated USSD PIN authorization prompts!
 4.  **`dashboard.html` (Merchant Analytics Portal)**: A high-end dark analytics board displaying virtual wallet balances, a **Live Settlement Ledger**, and an **interactive Checkout Link Generator**!
 
@@ -132,6 +132,40 @@ dashboard checkout uses.
 
 > **Amounts:** Paystack works in the smallest currency unit, so `GH₵ 50` is sent as `5000`.
 > The conversion (with correct rounding) lives in `lib/paystack.js` and is applied in one place only.
+
+### 📲 Instant SMS & WhatsApp receipts (`lib/notifier.js`)
+
+After a `charge.success` event is verified and the `SUCCESS` row is upserted to
+Supabase, the webhook fires `sendOrderReceiptNotification(trx, payload)`
+**fire-and-forget** — the customer **and** the merchant get a real-time receipt,
+and Paystack always gets its `200 OK` even if every provider is down:
+
+```text
+*VALMONT-PAY INSTANT RECEIPT* 🔒
+Ref: #VP-123456
+Merchant: Valmont Electricals
+Amount Paid: GH₵ 50.00
+Payment Method: Mobile Money (MTN)
+Status: PAID ✅
+Paid at: 31 Jul 2026, 12:00 pm
+Thank you for your payment!
+```
+
+*   **Customer number** comes from the payment itself: `metadata.momo_number` →
+    `momo_phone`/`momo_number` custom field → `metadata.phone` →
+    `customer.phone` → `trx.customer_phone` (checkout writes the MoMo number
+    into metadata, see `lib/paystack.js`).
+*   **Merchant number** comes from `MERCHANT_NOTIFICATION_PHONE` /
+    `ADMIN_NOTIFICATION_PHONE` (env-only — never from the payload).
+*   **Channels** — every configured one is used: `WHATSAPP_WEBHOOK_URL` (POSTs
+    `{ phone, message, reference }`), `SMS_WEBHOOK_URL` (same shape), or the
+    Ghana SMS APIs `ARKESEL_API_KEY` and `MNOTIFY_API_KEY` (sender id via
+    `ARKESEL_SENDER_ID` / `MNOTIFY_SENDER_ID`, default `VALMONT-PAY`).
+*   **Auditable by default** — the full receipt is always logged as
+    `[VALMONT-NOTIFIER] Sent receipt for Ref ...`, even with no provider set.
+*   **Safe** — dispatch never throws; delivered references are remembered
+    in-process so Paystack redeliveries never double-text a customer, while a
+    fully failed pass stays retryable.
 
 ---
 
@@ -308,6 +342,10 @@ npm test
 | `PAYSTACK_SECRET_KEY` | **Required** | Paystack API calls, and the fallback webhook signing secret. |
 | `WEBHOOK_SECRET` | Optional | Overrides the webhook signing secret. Omit it and `PAYSTACK_SECRET_KEY` is used, which is what Paystack actually signs with. |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Optional | Admin dashboard login. |
+| `WHATSAPP_WEBHOOK_URL` | Optional | WhatsApp receipt hook. Receives POST `{ phone, message, reference }` for every SUCCESS payment. |
+| `SMS_WEBHOOK_URL` | Optional | Generic SMS receipt hook. Same JSON payload shape as the WhatsApp hook. |
+| `ARKESEL_API_KEY` / `MNOTIFY_API_KEY` | Optional | Ghana SMS provider keys for direct receipt dispatch (`ARKESEL_SENDER_ID` / `MNOTIFY_SENDER_ID` set the sender id, default `VALMONT-PAY`). |
+| `MERCHANT_NOTIFICATION_PHONE` / `ADMIN_NOTIFICATION_PHONE` | Optional | Merchant/admin phone that also receives every payment receipt by SMS/WhatsApp. |
 
 Verify a deployment at a glance — this reports which variables are set, and
 never their values:
