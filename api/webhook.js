@@ -10,10 +10,12 @@ import crypto from 'node:crypto';
 import supabaseModule from '../lib/supabase.js';
 import transactionStore from '../lib/transaction-store.js';
 import webhookLog from '../lib/webhook-log.js';
+import notifierModule from '../lib/notifier.js';
 
 const { getSupabaseClient, supabaseConfigState } = supabaseModule;
 const { saveTransaction } = transactionStore;
 const { recordWebhookHit, completeWebhookHit } = webhookLog;
+const { sendOrderReceiptNotification } = notifierModule;
 
 /**
  * Every log line from one request carries the same short id, so a single
@@ -580,6 +582,25 @@ export function createWebhookHandler({ supabaseClient } = {}) {
           'supabase-write-failed',
           { supabaseError: persistence.error || null }
         );
+      }
+
+      // ------------------------------------------------- NOTIFY (receipt)
+      // The SUCCESS row is durable, so fire the instant SMS/WhatsApp receipt
+      // to the customer and merchant. Deliberately NOT awaited and the module
+      // never throws — a broken notification provider must never delay or
+      // change the 200 OK Paystack is waiting for.
+      if (transaction.status === 'SUCCESS') {
+        step(
+          requestId,
+          'STEP 8/9 NOTIFY',
+          `dispatching SMS/WhatsApp receipt for ${transaction.reference} (fire-and-forget)`
+        );
+        sendOrderReceiptNotification(transaction, payload).catch(error => {
+          console.error(
+            `[WEBHOOK ${requestId}] [WEBHOOK-NOTIFIER-ERROR]`,
+            error && error.message ? error.message : error
+          );
+        });
       }
 
       // -------------------------------------------------------------- STEP 9
