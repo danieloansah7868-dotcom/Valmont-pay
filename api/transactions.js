@@ -19,6 +19,19 @@ const { isSupabaseConfigured, missingSupabaseEnvMessage, supabaseConfigState } =
 const { saveTransaction, fetchTransactions, buildLedgerPayload } = transactionStore;
 
 export default async function handler(req, res) {
+  // Cross-origin support: the Nanahemaa Market storefront (nanahemaamarket.com)
+  // records Cash on Delivery / Manual MoMo orders (status PENDING_MOMO) and the
+  // admin panel reconciles them, both via this endpoint on the gateway origin.
+  const requestOrigin = req.headers && req.headers.origin;
+  res.setHeader('Access-Control-Allow-Origin', requestOrigin || '*');
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-valmontpay-signature');
+  res.setHeader('Access-Control-Max-Age', '86400');
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
   // Environment is checked up front so a misconfigured deployment returns a
   // clear error instead of an empty dashboard that looks like "no sales yet".
   if (!isSupabaseConfigured()) {

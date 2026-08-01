@@ -167,6 +167,49 @@ Thank you for your payment!
     in-process so Paystack redeliveries never double-text a customer, while a
     fully failed pass stays retryable.
 
+### 🛍️ Nanahemaa Market — automated checkout with Paystack subaccount split (Phase 4)
+
+Nanahemaa Market (Jane Boadi Nyarko) is the flagship storefront connected to the
+gateway. Online Mobile Money / Card checkouts are redirected to
+`https://valmontpay.app/pay.html` with Jane's Paystack **subaccount
+`ACCT_uvyay690lwskmw5`**, so Paystack automatically splits every settlement
+**98% merchant / 2% gateway** — no manual reconciliation.
+
+| File | Purpose |
+|---|---|
+| `nanahemaa-checkout.html` | Storefront checkout. Reads `nanahemaamarket_cart` from localStorage, collects delivery details, and offers **Mobile Money (Online)**, **Credit/Debit Card** (both redirect to the gateway) and **Cash on Delivery / Manual MoMo** (manual flow with WhatsApp confirmation, recorded as `PENDING_MOMO`). |
+| `order-confirmed.html` | Callback receipt page. Reads `?reference=...&status=success` + `nanahemaa_pending_order`, shows the itemized receipt, WhatsApp (wa.me/233537683874) and Continue Shopping buttons, clears `nanahemaamarket_cart` / `nanahemaa_pending_order`, and fires `ValmontAnalytics.trackPurchase(order)`. |
+| `admin.html` → **Nanahemaa Orders** tab | Jane's order dashboard: status filter tabs (`ALL / PENDING_MOMO / PAID / SHIPPED / CANCELLED`), one-click **Mark as PAID** to reconcile manual transfers, and **Export to CSV** for the filtered order ledger. |
+
+The redirect built by `nanahemaa-checkout.html`:
+
+```javascript
+const gatewayUrl = new URL('https://valmontpay.app/pay.html');
+gatewayUrl.searchParams.set('merchant', 'Nanahemaa Market');
+gatewayUrl.searchParams.set('amount', Number(order.total_amount).toFixed(2));
+gatewayUrl.searchParams.set('email', order.customer_email || 'orders@nanahemaamarket.com');
+gatewayUrl.searchParams.set('reference', order.reference_code);
+gatewayUrl.searchParams.set('subaccount', 'ACCT_uvyay690lwskmw5'); // Jane Boadi Nyarko 98% split
+gatewayUrl.searchParams.set('callback_url', 'https://nanahemaamarket.com/order-confirmed.html');
+window.location.href = gatewayUrl.toString();
+```
+
+How the split flows end-to-end:
+
+1. `pay.html` reads the `reference` **and** `subaccount` query params (it also
+   still accepts the legacy `ref` param) and forwards them to
+   `POST /api/initialize-payment`.
+2. `lib/paystack.js` passes `subaccount` straight through to Paystack's
+   `transaction/initialize`, which splits the settlement 98/2 automatically.
+3. The Paystack webhook records the paid transaction (merchant
+   `Nanahemaa Market`) into the ledger, where it appears as **PAID** in the
+   admin's Nanahemaa Orders tab.
+4. Manual MoMo / COD orders are POSTed to `POST /api/transactions` with status
+   `PENDING_MOMO` (CORS-enabled on `api/transactions.js` for the cross-origin
+   storefront; `server.js` also accepts POST locally with an in-memory
+   fallback). Jane marks them PAID with one click; both states are exportable
+   as CSV for accounting.
+
 ---
 
 ## 🔍 Debugging: "the webhook isn't receiving events"

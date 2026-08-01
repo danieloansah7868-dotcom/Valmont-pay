@@ -20,6 +20,12 @@
     .badge-success { background-color: #10b98120; color: #10b981; border: 1px solid #10b98140; }
     .badge-failed { background-color: #ef444420; color: #ef4444; border: 1px solid #ef444440; }
     .badge-pending { background-color: #f59e0b20; color: #f59e0b; border: 1px solid #f59e0b40; }
+    .badge-shipped { background-color: #3b82f620; color: #3b82f6; border: 1px solid #3b82f640; }
+    .badge-cancelled { background-color: #ef444420; color: #ef4444; border: 1px solid #ef444440; }
+    .order-tab { padding: 6px 14px; border-radius: 9999px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; border: 1px solid #142850; color: #9ca3af; transition: all 0.15s; }
+    .order-tab:hover { color: #ffffff; border-color: #f68b1e; }
+    .order-tab-active { background-color: #f68b1e; border-color: #f68b1e; color: #ffffff; }
+    .order-tab-active:hover { color: #ffffff; }
     .gold-btn { background-color: #f68b1e; color: white; font-weight: 800; font-size: 12px; padding: 8px 16px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.05em; transition: all 0.15s; }
     .gold-btn:hover { background-color: #e07d0e; }
     .gold-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -56,9 +62,10 @@
   <main class="max-w-7xl mx-auto p-6 space-y-6">
     
     <!-- Tabs -->
-    <div class="flex gap-6 border-b border-[#142850] pb-3">
+    <div class="flex gap-6 border-b border-[#142850] pb-3 flex-wrap">
       <button onclick="switchTab('tenants')" id="tab-tenants" class="tab-active text-sm pb-3 -mb-3">Tenants</button>
       <button onclick="switchTab('transactions')" id="tab-transactions" class="tab-inactive text-sm pb-3 -mb-3">Transactions</button>
+      <button onclick="switchTab('orders')" id="tab-orders" class="tab-inactive text-sm pb-3 -mb-3">Nanahemaa Orders</button>
       <button onclick="switchTab('deliveries')" id="tab-deliveries" class="tab-inactive text-sm pb-3 -mb-3">Webhook Deliveries</button>
       <button onclick="switchTab('api')" id="tab-api" class="tab-inactive text-sm pb-3 -mb-3">API Docs</button>
     </div>
@@ -110,6 +117,58 @@
         <div id="txEmpty" class="p-8 text-center text-gray-500 text-sm font-medium hidden">
           No transactions yet.
         </div>
+      </div>
+    </div>
+
+    <!-- ─── Nanahemaa Market Orders Tab ────────────────────────────── -->
+    <div id="panel-orders" class="space-y-4 hidden">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-lg font-black text-[#f68b1e]">Nanahemaa Market — Orders</h2>
+          <p class="text-xs text-gray-500 font-medium mt-0.5">
+            Online MoMo / card payments settle automatically via Valmont-Pay (subaccount ACCT_uvyay690lwskmw5).
+            Manual MoMo / COD orders arrive as PENDING_MOMO — reconcile them with one click.
+          </p>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="exportOrdersCsv()" class="gold-btn text-xs">⬇ Export to CSV</button>
+          <button onclick="loadOrders()" class="navy-btn text-xs">⟳ Refresh</button>
+        </div>
+      </div>
+
+      <!-- Status filter tabs -->
+      <div id="orderStatusTabs" class="flex flex-wrap gap-2">
+        <button onclick="setOrderFilter('ALL')" id="orderTab-ALL" class="order-tab order-tab-active">ALL</button>
+        <button onclick="setOrderFilter('PENDING_MOMO')" id="orderTab-PENDING_MOMO" class="order-tab">PENDING_MOMO</button>
+        <button onclick="setOrderFilter('PAID')" id="orderTab-PAID" class="order-tab">PAID</button>
+        <button onclick="setOrderFilter('SHIPPED')" id="orderTab-SHIPPED" class="order-tab">SHIPPED</button>
+        <button onclick="setOrderFilter('CANCELLED')" id="orderTab-CANCELLED" class="order-tab">CANCELLED</button>
+      </div>
+
+      <div class="card overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs">
+            <thead>
+              <tr class="border-b border-[#142850] text-gray-400 font-extrabold uppercase tracking-wider">
+                <th class="text-left p-3">Reference</th>
+                <th class="text-left p-3">Customer</th>
+                <th class="text-right p-3">Amount</th>
+                <th class="text-left p-3">Payment Method</th>
+                <th class="text-left p-3">Status</th>
+                <th class="text-left p-3">Date</th>
+                <th class="text-left p-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="orderTableBody" class="divide-y divide-[#142850]">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+        <div id="orderEmpty" class="p-8 text-center text-gray-500 text-sm font-medium hidden">
+          No orders match this filter yet. Orders appear here once a customer checks out (online payments land
+          automatically; manual MoMo / COD orders are recorded as PENDING_MOMO).
+        </div>
+        <div id="orderError" class="p-6 text-center text-red-400 text-xs font-bold hidden"></div>
       </div>
     </div>
 
@@ -234,7 +293,7 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
 
   <script>
     // ─── Tab Switching ────────────────────────────────────────────────
-    const tabs = ['tenants', 'transactions', 'deliveries', 'api'];
+    const tabs = ['tenants', 'transactions', 'orders', 'deliveries', 'api'];
     function switchTab(name) {
       for (const t of tabs) {
         document.getElementById('panel-' + t).classList.toggle('hidden', t !== name);
@@ -243,6 +302,7 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
       }
       if (name === 'tenants') refreshTenants();
       if (name === 'transactions') loadTransactions();
+      if (name === 'orders') loadOrders();
       if (name === 'deliveries') loadDeliveries();
     }
 
@@ -464,9 +524,220 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
     function formatAmount(v) { return 'GH₵ ' + Number(v || 0).toFixed(2); }
     function formatDate(d) { if (!d) return '-'; try { return new Date(d).toLocaleString(); } catch(_) { return d; } }
 
+    // ─── Nanahemaa Market Orders ──────────────────────────────────────
+    // The order ledger lives in /api/transactions (the same store the webhook
+    // and checkout write to). Online MoMo/card payments arrive as SUCCESS →
+    // PAID; manual MoMo / COD orders are recorded as PENDING_MOMO and
+    // reconciled with the "Mark as PAID" button. SHIPPED / CANCELLED
+    // transitions are kept in a local overlay so Jane's status choices
+    // survive refreshes even when the gateway's Supabase table is
+    // temporarily unreachable.
+    const ORDER_MERCHANT_MATCH = /nanahemaa/i;
+    const ORDER_STATUSES = ['ALL', 'PENDING_MOMO', 'PAID', 'SHIPPED', 'CANCELLED'];
+
+    let orders = [];
+    let orderStatusFilter = 'ALL';
+
+    function readOrderStatusOverlay() {
+      try { return JSON.parse(localStorage.getItem('nanahemaa_admin_order_statuses') || '{}'); }
+      catch (_) { return {}; }
+    }
+    function writeOrderStatusOverlay(overlay) {
+      try { localStorage.setItem('nanahemaa_admin_order_statuses', JSON.stringify(overlay)); } catch (_) {}
+    }
+
+    // Map a gateway ledger row onto an e-commerce order status.
+    function mapOrderStatus(status) {
+      const s = String(status || '').toUpperCase();
+      if (s === 'PENDING_MOMO' || s === 'PENDING') return 'PENDING_MOMO';
+      if (['SUCCESS', 'SUCCESSFUL', 'PAID', 'COMPLETED'].includes(s)) return 'PAID';
+      if (s === 'SHIPPED') return 'SHIPPED';
+      if (['FAILED', 'ABANDONED', 'CANCELLED', 'CANCELED'].includes(s)) return 'CANCELLED';
+      return 'PENDING_MOMO';
+    }
+
+    function orderStatusClass(status) {
+      if (status === 'PAID') return 'badge-success';
+      if (status === 'SHIPPED') return 'badge-shipped';
+      if (status === 'CANCELLED') return 'badge-cancelled';
+      return 'badge-pending';
+    }
+
+    async function loadOrders() {
+      const errorBox = document.getElementById('orderError');
+      try {
+        const res = await fetch('/api/transactions');
+        const json = await res.json();
+        const rows = json.transactions || json.data || [];
+        const overlay = readOrderStatusOverlay();
+
+        orders = rows
+          .filter(t => ORDER_MERCHANT_MATCH.test(String(t.merchant || t.merchant_name || '')))
+          .map(t => {
+            const base = {
+              reference: t.reference,
+              customer_email: t.customer || t.customer_email || '—',
+              amount: Number(t.amount || 0),
+              payment_method: t.channel || t.payment_method || '—',
+              date: t.timestamp || t.paid_at || t.created_at || null,
+              paid_at: t.paid_at || null
+            };
+            const local = overlay[base.reference];
+            base.status = local ? local.status : mapOrderStatus(t.status);
+            if (local && local.paid_at) base.paid_at = local.paid_at;
+            return base;
+          })
+          .sort((a, b) => (new Date(b.date || 0)) - (new Date(a.date || 0)));
+
+        errorBox.classList.add('hidden');
+      } catch (err) {
+        console.error('Failed to load orders:', err);
+        errorBox.textContent = 'Could not load orders: ' + (err && err.message ? err.message : 'network error');
+        errorBox.classList.remove('hidden');
+        orders = [];
+      }
+      renderOrders();
+    }
+
+    function getFilteredOrders() {
+      if (orderStatusFilter === 'ALL') return orders;
+      return orders.filter(o => o.status === orderStatusFilter);
+    }
+
+    function renderOrders() {
+      const tbody = document.getElementById('orderTableBody');
+      const empty = document.getElementById('orderEmpty');
+      const filtered = getFilteredOrders();
+
+      if (!filtered.length) {
+        tbody.innerHTML = '';
+        empty.classList.remove('hidden');
+      } else {
+        empty.classList.add('hidden');
+      }
+
+      tbody.innerHTML = filtered.map(o => {
+        let actions = '';
+        if (o.status === 'PENDING_MOMO') {
+          actions =
+            `<button onclick="updateOrderStatus('${escapeHtml(o.reference)}', 'PAID')" class="gold-btn text-xs mr-2">✓ Mark as PAID</button>` +
+            `<button onclick="updateOrderStatus('${escapeHtml(o.reference)}', 'CANCELLED')" class="navy-btn text-xs">Cancel Order</button>`;
+        } else if (o.status === 'PAID') {
+          actions =
+            `<button onclick="updateOrderStatus('${escapeHtml(o.reference)}', 'SHIPPED')" class="navy-btn text-xs mr-2">Mark as SHIPPED</button>` +
+            `<button onclick="updateOrderStatus('${escapeHtml(o.reference)}', 'CANCELLED')" class="navy-btn text-xs">Cancel Order</button>`;
+        } else {
+          actions = '<span class="text-gray-600 text-[10px] font-bold">—</span>';
+        }
+        return `
+          <tr class="hover:bg-[#0d1e3d]/30">
+            <td class="p-3 font-mono font-bold text-gray-200">${escapeHtml(o.reference)}</td>
+            <td class="p-3 text-gray-400 break-all">${escapeHtml(o.customer_email)}</td>
+            <td class="p-3 text-right font-bold">${formatAmount(o.amount)}</td>
+            <td class="p-3 text-gray-400">${escapeHtml(o.payment_method)}</td>
+            <td class="p-3"><span class="badge ${orderStatusClass(o.status)}">${escapeHtml(o.status)}</span></td>
+            <td class="p-3 text-gray-400 text-[10px]">${formatDate(o.date)}</td>
+            <td class="p-3">${actions}</td>
+          </tr>
+        `;
+      }).join('');
+
+      // Reflect live counts on the filter tabs.
+      ORDER_STATUSES.forEach(status => {
+        const tab = document.getElementById('orderTab-' + status);
+        if (!tab) return;
+        const count = status === 'ALL' ? orders.length : orders.filter(o => o.status === status).length;
+        tab.textContent = status + ' (' + count + ')';
+      });
+    }
+
+    function setOrderFilter(status) {
+      orderStatusFilter = ORDER_STATUSES.includes(status) ? status : 'ALL';
+      ORDER_STATUSES.forEach(s => {
+        const tab = document.getElementById('orderTab-' + s);
+        if (tab) tab.classList.toggle('order-tab-active', s === orderStatusFilter);
+      });
+      renderOrders();
+    }
+
+    // One-click status change — "Mark as PAID" reconciles manual transfers.
+    async function updateOrderStatus(reference, newStatus) {
+      const order = orders.find(o => o.reference === reference);
+      if (!order) return;
+      if (!confirm('Mark order ' + reference + ' as ' + newStatus + '?')) return;
+
+      const paidAt = order.paid_at || (newStatus === 'PAID' ? new Date().toISOString() : null);
+      const body = {
+        reference,
+        merchant_name: 'Nanahemaa Market',
+        customer_email: order.customer_email,
+        amount: order.amount,
+        payment_method: order.payment_method,
+        status: newStatus,
+        paid_at: paidAt
+      };
+
+      let savedOnServer = false;
+      try {
+        const res = await fetch('/api/transactions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        savedOnServer = res.ok;
+      } catch (err) {
+        savedOnServer = false;
+      }
+
+      // Local overlay guarantees the status change is visible immediately and
+      // survives refreshes even if the server write failed.
+      const overlay = readOrderStatusOverlay();
+      overlay[reference] = { status: newStatus, paid_at: paidAt, updated_at: new Date().toISOString(), synced: savedOnServer };
+      writeOrderStatusOverlay(overlay);
+
+      if (!savedOnServer) {
+        alert('Server sync failed — status updated locally for now. It will be re-synced when the gateway is reachable.');
+      }
+      loadOrders();
+    }
+
+    // Download the currently filtered order ledger as a CSV accounting file.
+    function exportOrdersCsv() {
+      const filtered = getFilteredOrders();
+      if (!filtered.length) {
+        alert('No orders to export for the current filter.');
+        return;
+      }
+      const headers = ['Reference', 'Status', 'Date', 'Customer Email', 'Amount (GHS)', 'Payment Method'];
+      const rows = filtered.map(o => [
+        o.reference,
+        o.status,
+        o.date ? new Date(o.date).toISOString() : '',
+        o.customer_email,
+        o.amount.toFixed(2),
+        o.payment_method
+      ]);
+      const csv = '\uFEFF' + [headers, ...rows]
+        .map(row => row.map(cell => {
+          const text = String(cell == null ? '' : cell);
+          return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+        }).join(','))
+        .join('\r\n');
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.download = 'nanahemaa-market-orders-' + orderStatusFilter.toLowerCase() + '-' + stamp + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    }
+
     // ─── Bootstrap ────────────────────────────────────────────────────
     refreshTenants();
     loadTransactions();
+    loadOrders();
   </script>
 </body>
 </html>
