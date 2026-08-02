@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valmont-Pay — Tenants Admin</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #050d24; color: #ffffff; }
+    .card { background-color: #0b1a38; border: 1px solid #142850; border-radius: 8px; }
+    .input-field { background-color: #050d24; border: 1px solid #142850; color: white; padding: 10px 14px; border-radius: 6px; font-size: 13px; outline: none; width: 100%; }
+    .input-field:focus { border-color: #f68b1e; }
+    .input-label { display:block; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: #9ca3af; margin-bottom: 6px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
+    .badge-active { background-color: #10b98120; color: #10b981; border: 1px solid #10b98140; }
+    .badge-disabled { background-color: #ef444420; color: #ef4444; border: 1px solid #ef444440; }
+    .badge-test { background-color: #f59e0b20; color: #f59e0b; border: 1px solid #f59e0b40; }
+    .badge-live { background-color: #10b98120; color: #10b981; border: 1px solid #10b98140; }
+    .gold-btn { background-color: #f68b1e; color: white; font-weight: 800; font-size: 12px; padding: 9px 18px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.05em; transition: all 0.15s; border: none; cursor: pointer; }
+    .gold-btn:hover { background-color: #e07d0e; }
+    .gold-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .navy-btn { background-color: #142850; color: white; font-weight: 700; font-size: 11px; padding: 8px 14px; border-radius: 6px; transition: all 0.15s; border: none; cursor: pointer; }
+    .navy-btn:hover { background-color: #1e3a6e; }
+    .danger-btn { background-color: #991b1b; color: white; font-weight: 700; font-size: 11px; padding: 6px 12px; border-radius: 6px; transition: all 0.15s; border: none; cursor: pointer; }
+    .danger-btn:hover { background-color: #b91c1c; }
+    .ghost-btn { background: transparent; color: #9ca3af; font-weight: 700; font-size: 11px; padding: 6px 10px; border-radius: 6px; border: 1px solid #142850; cursor: pointer; transition: all 0.15s; }
+    .ghost-btn:hover { color: white; border-color: #f68b1e; }
+    table { width: 100%; font-size: 12px; border-collapse: collapse; }
+    th { text-align: left; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: #6b7280; padding: 12px; border-bottom: 1px solid #142850; }
+    td { padding: 12px; border-bottom: 1px solid #142850; vertical-align: top; }
+    tr:hover td { background-color: #0d1e3d30; }
+    pre { white-space: pre-wrap; word-break: break-all; }
+    .nav-tab { padding: 10px 18px; font-size: 12px; font-weight: 700; cursor: pointer; border-bottom: 2px solid transparent; color: #6b7280; transition: all 0.15s; }
+    .nav-tab:hover { color: #9ca3af; }
+    .nav-tab-active { color: #f68b1e; border-bottom-color: #f68b1e; font-weight: 800; }
+    .modal-backdrop { position: fixed; inset: 0; background-color: rgba(0,0,0,0.7); z-index: 50; display: none; align-items: center; justify-content: center; padding: 20px; }
+    .modal-backdrop.open { display: flex; }
+    .modal { background-color: #0b1a38; border: 1px solid #142850; border-radius: 10px; width: 100%; max-width: 640px; max-height: 90vh; overflow-y: auto; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <script>
+    if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
+      window.location.href = '/admin-login.html';
+    }
+  </script>
+
+  <!-- Header -->
+  <header class="bg-[#0b1a38] border-b border-[#142850] px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-4">
+      <img src="/logo.svg" alt="Valmont Pay" style="height: 36px;">
+      <nav class="flex gap-1 ml-6">
+        <a href="/dashboard.html" class="nav-tab">Dashboard</a>
+        <a href="/tenants.html" class="nav-tab nav-tab-active">Tenants</a>
+        <a href="/admin.html" class="nav-tab">Admin (Legacy)</a>
+      </nav>
+    </div>
+    <div class="flex items-center gap-3">
+      <span id="tenantCount" class="text-xs text-gray-500 font-bold">0 tenants</span>
+      <button onclick="openAddModal()" class="gold-btn">+ Add Tenant</button>
+      <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" class="ghost-btn">Logout</button>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto p-6 space-y-6">
+
+    <!-- Intro -->
+    <div class="card p-5">
+      <h1 class="text-lg font-black text-[#f68b1e]">Tenant Management</h1>
+      <p class="text-xs text-gray-400 mt-1 max-w-3xl">
+        Tenants are registered merchants on the Valmont-Pay gateway. Each tenant gets their own
+        API keys, can receive signed webhooks when payments succeed, and can be linked from
+        <span class="mono text-gray-300">pay.html?tenant=&lt;tenant_id&gt;</span> or
+        <span class="mono text-gray-300">checkout.html?tenant=&lt;tenant_id&gt;</span>.
+        Webhooks are signed with an HMAC-SHA512 secret per tenant — tenants verify the
+        <span class="mono text-gray-300">x-valmontpay-signature</span> header to confirm the POST came from Valmont-Pay.
+      </p>
+      <div class="mt-3 flex gap-2">
+        <button onclick="loadTenants()" class="navy-btn">⟳ Refresh</button>
+        <a href="/webhook-status.html" class="navy-btn">Webhook Delivery Log</a>
+      </div>
+    </div>
+
+    <!-- Tenants Table -->
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Tenant ID / Key</th>
+              <th>Display Name</th>
+              <th>Webhook URL</th>
+              <th>Environment</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th class="text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tenantTableBody">
+            <!-- populated by JS -->
+          </tbody>
+        </table>
+      </div>
+      <div id="tenantEmpty" class="p-10 text-center text-gray-500 text-sm font-medium hidden">
+        No tenants yet. Click <b>+ Add Tenant</b> to register your first merchant.
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Add / Edit Modal -->
+  <div id="tenantModal" class="modal-backdrop">
+    <div class="modal">
+      <div class="p-5 border-b border-[#142850] flex items-center justify-between">
+        <h2 id="modalTitle" class="text-base font-black text-[#f68b1e]">Add Tenant</h2>
+        <button onclick="closeModal()" class="ghost-btn">✕ Close</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <input type="hidden" id="editOriginalKey" value="">
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="input-label">Tenant ID (slug) *</label>
+            <input id="f_key" type="text" placeholder="e.g. valmont-electricals" class="input-field mono" pattern="[a-z0-9-]{2,63}">
+            <p class="text-[10px] text-gray-500 mt-1">Lowercase letters, numbers, hyphens. Used in URLs and API keys.</p>
+          </div>
+          <div>
+            <label class="input-label">Display Name *</label>
+            <input id="f_display_name" type="text" placeholder="e.g. Valmont Electricals" class="input-field">
+          </div>
+        </div>
+
+        <div>
+          <label class="input-label">Webhook URL</label>
+          <input id="f_webhook_url" type="url" placeholder="https://your-site.com/api/valmontpay/webhook" class="input-field mono">
+          <p class="text-[10px] text-gray-500 mt-1">Valmont-Pay POSTs <span class="mono">charge.success</span> events here, signed with HMAC-SHA512.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="input-label">Brand Color (hex)</label>
+            <input id="f_brand_color" type="text" placeholder="#f68b1e" class="input-field" value="#f68b1e">
+          </div>
+          <div>
+            <label class="input-label">Currency</label>
+            <select id="f_currency" class="input-field">
+              <option value="GHS" selected>GHS — Ghana Cedi</option>
+              <option value="NGN">NGN — Nigerian Naira</option>
+              <option value="USD">USD — US Dollar</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="input-label">Paystack Subaccount (optional)</label>
+            <input id="f_paystack_subaccount" type="text" placeholder="ACCT_xxxxx" class="input-field mono">
+            <p class="text-[10px] text-gray-500 mt-1">For automatic split-settlement via Paystack.</p>
+          </div>
+          <div>
+            <label class="input-label">Settlement Account</label>
+            <input id="f_settlement_account" type="text" placeholder="e.g. GCB Bank - 1234567890" class="input-field">
+          </div>
+        </div>
+
+        <div>
+          <label class="input-label">Allowed Domains (comma-separated)</label>
+          <input id="f_allowed_domains" type="text" placeholder="valmontelectricals.com,valmontpay.app,localhost" class="input-field mono">
+          <p class="text-[10px] text-gray-500 mt-1">Domains permitted as callback URLs after payment.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="input-label">Environment</label>
+            <select id="f_environment" class="input-field">
+              <option value="test" selected>Test</option>
+              <option value="live">Live</option>
+            </select>
+          </div>
+          <div>
+            <label class="input-label">Status</label>
+            <select id="f_status" class="input-field">
+              <option value="active" selected>Active</option>
+              <option value="disabled">Disabled</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="secretsBox" class="hidden card p-4 border border-green-800/40 bg-green-950/20">
+          <h3 class="text-xs font-black text-green-400 uppercase tracking-widest mb-2">🔑 Tenant Credentials — Save These Now!</h3>
+          <p class="text-[11px] text-gray-400 mb-3">These are shown ONCE. Copy them to a secure place; the secret key will not be displayed again.</p>
+          <div class="space-y-2 text-[11px]">
+            <div><span class="text-gray-500 font-bold">Secret Key:</span> <span id="sec_secret_key" class="mono text-green-300"></span></div>
+            <div><span class="text-gray-500 font-bold">Public Key:</span> <span id="sec_public_key" class="mono text-green-300"></span></div>
+            <div><span class="text-gray-500 font-bold">Webhook Signing Secret:</span> <span id="sec_webhook_secret" class="mono text-green-300"></span></div>
+          </div>
+        </div>
+
+        <div id="formError" class="hidden text-xs text-red-400 font-bold p-3 bg-red-950/30 border border-red-900/40 rounded"></div>
+      </div>
+      <div class="p-5 border-t border-[#142850] flex justify-end gap-2">
+        <button onclick="closeModal()" class="navy-btn">Cancel</button>
+        <button id="saveBtn" onclick="saveTenant()" class="gold-btn">Save Tenant</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Webhook Edit mini-modal -->
+  <div id="webhookModal" class="modal-backdrop">
+    <div class="modal" style="max-width:520px;">
+      <div class="p-5 border-b border-[#142850] flex items-center justify-between">
+        <h2 class="text-base font-black text-[#f68b1e]">Set Webhook URL</h2>
+        <button onclick="document.getElementById('webhookModal').classList.remove('open')" class="ghost-btn">✕</button>
+      </div>
+      <div class="p-5 space-y-3">
+        <input type="hidden" id="whKey">
+        <p class="text-xs text-gray-400">Tenant: <b id="whName" class="text-white"></b></p>
+        <input id="whUrl" type="url" placeholder="https://your-site.com/api/valmontpay/webhook" class="input-field mono">
+        <div id="whError" class="hidden text-xs text-red-400 font-bold"></div>
+      </div>
+      <div class="p-5 border-t border-[#142850] flex justify-end gap-2">
+        <button onclick="document.getElementById('webhookModal').classList.remove('open')" class="navy-btn">Cancel</button>
+        <button onclick="saveWebhookFromModal()" class="gold-btn">Save URL</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ─── Helpers ──────────────────────────────────────────────────────────
+    function esc(v) {
+      return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function fmtDate(d) {
+      if (!d) return '—';
+      try { return new Date(d).toLocaleString(); } catch(_) { return String(d); }
+    }
+    function showError(msg) {
+      const el = document.getElementById('formError');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+    function clearError() {
+      document.getElementById('formError').classList.add('hidden');
+    }
+
+    // ─── Load ────────────────────────────────────────────────────────────
+    async function loadTenants() {
+      const tbody = document.getElementById('tenantTableBody');
+      const empty = document.getElementById('tenantEmpty');
+      tbody.innerHTML = '<tr><td colspan="7" class="p-6 text-center text-gray-500">Loading…</td></tr>';
+      try {
+        const res = await fetch('/api/admin/tenants');
+        const json = await res.json();
+        const tenants = (json.data || []);
+        document.getElementById('tenantCount').textContent = tenants.length + ' tenant' + (tenants.length === 1 ? '' : 's');
+
+        if (!tenants.length) {
+          tbody.innerHTML = '';
+          empty.classList.remove('hidden');
+          return;
+        }
+        empty.classList.add('hidden');
+
+        tbody.innerHTML = tenants.map(t => `
+          <tr>
+            <td>
+              <div class="flex items-center gap-2">
+                <span class="h-3 w-3 rounded-full inline-block" style="background-color:${esc(t.brand_color || '#f68b1e')}"></span>
+                <span class="font-black mono text-gray-200">${esc(t.key)}</span>
+              </div>
+            </td>
+            <td class="text-gray-200 font-semibold">${esc(t.display_name)}</td>
+            <td>
+              ${t.webhook_url
+                ? `<span class="mono text-gray-300 text-[11px]">${esc(t.webhook_url)}</span>`
+                : `<span class="text-gray-600 italic text-[11px]">(not set)</span>`}
+            </td>
+            <td><span class="badge ${t.environment === 'live' ? 'badge-live' : 'badge-test'}">${esc(t.environment || 'test')}</span></td>
+            <td><span class="badge ${t.status === 'active' ? 'badge-active' : 'badge-disabled'}">${esc(t.status || 'active')}</span></td>
+            <td class="text-gray-500 text-[11px]">${fmtDate(t.created_at)}</td>
+            <td class="text-right whitespace-nowrap">
+              <div class="flex gap-1 justify-end flex-wrap">
+                <button onclick="openEditModal('${esc(t.key)}')" class="ghost-btn">Edit</button>
+                <button onclick="openWebhookModal('${esc(t.key)}','${esc(t.display_name)}','${esc(t.webhook_url || '')}')" class="ghost-btn">Webhook</button>
+                ${t.status === 'active'
+                  ? `<button onclick="toggleStatus('${esc(t.key)}','disable')" class="ghost-btn">Disable</button>`
+                  : `<button onclick="toggleStatus('${esc(t.key)}','enable')" class="ghost-btn" style="color:#10b981;border-color:#10b98140;">Enable</button>`}
+                <button onclick="rotateKeys('${esc(t.key)}')" class="ghost-btn">Rotate Keys</button>
+                <button onclick="deleteTenant('${esc(t.key)}','${esc(t.display_name)}')" class="danger-btn">Delete</button>
+              </div>
+            </td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-red-400">Error: ${esc(err.message)}</td></tr>`;
+      }
+    }
+
+    // ─── Add / Edit Modal ────────────────────────────────────────────────
+    function resetForm() {
+      document.getElementById('editOriginalKey').value = '';
+      document.getElementById('f_key').value = '';
+      document.getElementById('f_display_name').value = '';
+      document.getElementById('f_webhook_url').value = '';
+      document.getElementById('f_brand_color').value = '#f68b1e';
+      document.getElementById('f_currency').value = 'GHS';
+      document.getElementById('f_paystack_subaccount').value = '';
+      document.getElementById('f_settlement_account').value = '';
+      document.getElementById('f_allowed_domains').value = 'localhost';
+      document.getElementById('f_environment').value = 'test';
+      document.getElementById('f_status').value = 'active';
+      document.getElementById('f_key').disabled = false;
+      document.getElementById('secretsBox').classList.add('hidden');
+      clearError();
+    }
+
+    function openAddModal() {
+      resetForm();
+      document.getElementById('modalTitle').textContent = '+ Add Tenant';
+      document.getElementById('saveBtn').textContent = 'Create Tenant';
+      document.getElementById('tenantModal').classList.add('open');
+      setTimeout(() => document.getElementById('f_key').focus(), 50);
+    }
+
+    async function openEditModal(key) {
+      resetForm();
+      document.getElementById('modalTitle').textContent = 'Edit Tenant: ' + key;
+      document.getElementById('saveBtn').textContent = 'Save Changes';
+      try {
+        const res = await fetch('/api/tenants/' + encodeURIComponent(key));
+        const json = await res.json();
+        if (!json.data) { showError('Tenant not found'); return; }
+        const t = json.data;
+        document.getElementById('editOriginalKey').value = t.key;
+        document.getElementById('f_key').value = t.key;
+        document.getElementById('f_key').disabled = true; // key is immutable
+        document.getElementById('f_display_name').value = t.display_name || '';
+        document.getElementById('f_webhook_url').value = t.webhook_url || '';
+        document.getElementById('f_brand_color').value = t.brand_color || '#f68b1e';
+        document.getElementById('f_currency').value = t.currency || 'GHS';
+        document.getElementById('f_paystack_subaccount').value = t.paystack_subaccount || '';
+        document.getElementById('f_settlement_account').value = t.settlement_account || '';
+        document.getElementById('f_allowed_domains').value = (t.allowed_domains || []).join(',');
+        document.getElementById('f_environment').value = t.environment || 'test';
+        document.getElementById('f_status').value = t.status || (t.disabled ? 'disabled' : 'active');
+        document.getElementById('tenantModal').classList.add('open');
+      } catch (err) {
+        alert('Error loading tenant: ' + err.message);
+      }
+    }
+
+    function closeModal() {
+      document.getElementById('tenantModal').classList.remove('open');
+    }
+
+    async function saveTenant() {
+      clearError();
+      const originalKey = document.getElementById('editOriginalKey').value;
+      const key = document.getElementById('f_key').value.trim().toLowerCase();
+      const display_name = document.getElementById('f_display_name').value.trim();
+      const webhook_url = document.getElementById('f_webhook_url').value.trim();
+      const brand_color = document.getElementById('f_brand_color').value.trim() || '#f68b1e';
+      const currency = document.getElementById('f_currency').value;
+      const paystack_subaccount = document.getElementById('f_paystack_subaccount').value.trim();
+      const settlement_account = document.getElementById('f_settlement_account').value.trim();
+      const allowed_domains = document.getElementById('f_allowed_domains').value
+        .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      const environment = document.getElementById('f_environment').value;
+      const status = document.getElementById('f_status').value;
+
+      if (!key) return showError('Tenant ID is required');
+      if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(key)) return showError('Tenant ID must be lowercase letters/numbers/hyphens, 2-63 chars (e.g. valmont-electricals)');
+      if (!display_name) return showError('Display Name is required');
+      if (webhook_url) {
+        try { new URL(webhook_url); } catch(_) { return showError('Webhook URL must be a valid https:// URL'); }
+      }
+
+      const btn = document.getElementById('saveBtn');
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+
+      try {
+        let res, json;
+        if (originalKey) {
+          // Update
+          res = await fetch('/api/admin/tenants/' + encodeURIComponent(originalKey), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, environment, status })
+          });
+        } else {
+          // Create
+          res = await fetch('/api/admin/tenants', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key, display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, environment, status })
+          });
+        }
+        json = await res.json();
+        if (!json.status) {
+          showError(json.message || 'Failed to save');
+          btn.disabled = false;
+          btn.textContent = originalKey ? 'Save Changes' : 'Create Tenant';
+          return;
+        }
+
+        // If created, show the secrets ONCE
+        if (!originalKey && json.secrets) {
+          document.getElementById('sec_secret_key').textContent = json.secrets.secret_key_1;
+          document.getElementById('sec_public_key').textContent = json.secrets.public_key;
+          document.getElementById('sec_webhook_secret').textContent = json.secrets.webhook_signing_secret;
+          document.getElementById('secretsBox').classList.remove('hidden');
+          btn.textContent = 'Done';
+          btn.onclick = () => { closeModal(); btn.onclick = saveTenant; loadTenants(); };
+          btn.disabled = false;
+          return;
+        }
+
+        closeModal();
+        loadTenants();
+      } catch (err) {
+        showError('Network error: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = originalKey ? 'Save Changes' : 'Create Tenant';
+      }
+    }
+
+    // ─── Webhook quick-edit ──────────────────────────────────────────────
+    function openWebhookModal(key, name, currentUrl) {
+      document.getElementById('whKey').value = key;
+      document.getElementById('whName').textContent = name + ' (' + key + ')';
+      document.getElementById('whUrl').value = currentUrl || '';
+      document.getElementById('whError').classList.add('hidden');
+      document.getElementById('webhookModal').classList.add('open');
+      setTimeout(() => document.getElementById('whUrl').focus(), 50);
+    }
+
+    async function saveWebhookFromModal() {
+      const key = document.getElementById('whKey').value;
+      const url = document.getElementById('whUrl').value.trim();
+      const errEl = document.getElementById('whError');
+      if (!url) { errEl.textContent = 'URL is required'; errEl.classList.remove('hidden'); return; }
+      try { new URL(url); } catch(_) { errEl.textContent = 'Invalid URL format'; errEl.classList.remove('hidden'); return; }
+
+      try {
+        const res = await fetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ webhook_url: url })
+        });
+        const json = await res.json();
+        if (!json.status) { errEl.textContent = json.message || 'Error'; errEl.classList.remove('hidden'); return; }
+        document.getElementById('webhookModal').classList.remove('open');
+        loadTenants();
+      } catch (err) {
+        errEl.textContent = err.message; errEl.classList.remove('hidden');
+      }
+    }
+
+    // ─── Actions ─────────────────────────────────────────────────────────
+    async function toggleStatus(key, action) {
+      const verb = action === 'disable' ? 'disable' : 'enable';
+      if (!confirm('Are you sure you want to ' + verb + ' tenant "' + key + '"?')) return;
+      try {
+        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key) + '/' + action, { method: 'POST' });
+        const json = await res.json();
+        if (!json.status) { alert('Error: ' + json.message); return; }
+        loadTenants();
+      } catch (err) { alert('Error: ' + err.message); }
+    }
+
+    async function rotateKeys(key) {
+      if (!confirm('Rotate API keys for "' + key + '"?\n\nThe current secret_key_1 will become secret_key_2 (still valid during transition), and a new secret_key_1 will be issued.')) return;
+      try {
+        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key) + '/rotate-keys', { method: 'POST' });
+        const json = await res.json();
+        if (!json.status) { alert('Error: ' + json.message); return; }
+        alert(
+          'Keys rotated successfully!\n\n' +
+          'New secret_key_1: ' + json.data.secret_key_1 + '\n' +
+          'Previous secret (now secret_key_2): ' + (json.data.secret_key_2 || '(none)') + '\n\n' +
+          'Update your integration with the new key. Both keys remain valid during the transition.'
+        );
+        loadTenants();
+      } catch (err) { alert('Error: ' + err.message); }
+    }
+
+    async function deleteTenant(key, name) {
+      if (!confirm('Permanently DELETE tenant "' + name + '" (' + key + ')?\n\nThis cannot be undone. Built-in tenants (valmont-electricals, valmontweb) are protected and cannot be deleted — disable them instead.')) return;
+      try {
+        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key), { method: 'DELETE' });
+        const json = await res.json();
+        if (!json.status) { alert('Error: ' + json.message); return; }
+        loadTenants();
+      } catch (err) { alert('Error: ' + err.message); }
+    }
+
+    // ─── Boot ────────────────────────────────────────────────────────────
+    loadTenants();
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeModal();
+        document.getElementById('webhookModal').classList.remove('open');
+      }
+    });
+  </script>
+</body>
+</html>
