@@ -11,6 +11,8 @@ import supabaseModule from '../lib/supabase.js';
 import transactionStore from '../lib/transaction-store.js';
 import webhookLog from '../lib/webhook-log.js';
 import notifierModule from '../lib/notifier.js';
+import tenantsModule from '../lib/tenants.js';
+import tenantWebhookForwarderModule from '../lib/tenant-webhook-forwarder.js';
 
 const { getSupabaseClient, supabaseConfigState } = supabaseModule;
 const { saveTransaction } = transactionStore;
@@ -46,14 +48,14 @@ function failure(requestId, stage, message, error) {
 /**
  * The secret Paystack signs webhooks with.
  *
- * Paystack computes the `x-paystack-signature` HMAC using YOUR PAYSTACK SECRET
- * KEY, so WEBHOOK_SECRET is really just an override for deployments that set it
- * explicitly. Prefer WEBHOOK_SECRET, then fall back to PAYSTACK_SECRET_KEY —
- * otherwise a project that only sets PAYSTACK_SECRET_KEY rejects every real
- * Paystack webhook.
+ * Paystack computes `x-paystack-signature` with the Paystack secret key that
+ * owns the transaction. That credential is authoritative whenever configured;
+ * WEBHOOK_SECRET is retained only as a legacy fallback for local/custom events.
+ * A stale test WEBHOOK_SECRET can therefore never make a live Paystack event
+ * fail verification.
  */
 export function getWebhookSecret() {
-  return process.env.WEBHOOK_SECRET || process.env.PAYSTACK_SECRET_KEY || '';
+  return process.env.PAYSTACK_SECRET_KEY || process.env.WEBHOOK_SECRET || '';
 }
 
 // Vercel must not parse/re-serialize the payload before signature verification.
@@ -230,10 +232,10 @@ function configurationState() {
   const supabase = supabaseConfigState();
   return {
     webhookSecretConfigured: Boolean(getWebhookSecret()),
-    webhookSecretSource: process.env.WEBHOOK_SECRET
-      ? 'WEBHOOK_SECRET'
-      : process.env.PAYSTACK_SECRET_KEY
-        ? 'PAYSTACK_SECRET_KEY'
+    webhookSecretSource: process.env.PAYSTACK_SECRET_KEY
+      ? 'PAYSTACK_SECRET_KEY'
+      : process.env.WEBHOOK_SECRET
+        ? 'WEBHOOK_SECRET (legacy fallback)'
         : null,
     supabaseUrlConfigured: supabase.urlConfigured,
     supabaseKeyConfigured: supabase.keyConfigured,
@@ -245,7 +247,11 @@ function configurationState() {
  * Factory exported for an offline integration test. Production uses the shared
  * Supabase client; tests can inject a client without contacting Supabase.
  */
-export function createWebhookHandler({ supabaseClient } = {}) {
+export function createWebhookHandler({
+  supabaseClient,
+  tenantRegistry = tenantsModule,
+  tenantWebhookForwarder = tenantWebhookForwarderModule
+} = {}) {
   return async function webhookHandler(req, res) {
     const requestId = newRequestId();
     const startedAt = Date.now();
@@ -441,8 +447,8 @@ export function createWebhookHandler({ supabaseClient } = {}) {
           requestId,
           'STEP 5/9 SIGNATURE',
           signature
-            ? 'signature mismatch. Either the signing secret differs from the Paystack key that sent this event ' +
-                '(check WEBHOOK_SECRET vs PAYSTACK_SECRET_KEY, and Test vs Live mode), or the body was modified in transit.'
+            ? 'signature mismatch. Either PAYSTACK_SECRET_KEY is from the wrong Paystack mode/account, ' +
+                'or the body was modified in transit.'
             : 'no x-paystack-signature header was sent. A real Paystack webhook always includes one — this request ' +
                 'probably did not come from Paystack.'
         );
@@ -582,6 +588,61 @@ export function createWebhookHandler({ supabaseClient } = {}) {
           'supabase-write-failed',
           { supabaseError: persistence.error || null }
         );
+      }
+
+      // ------------------------------------------ TENANT WEBHOOK FORWARDING
+      // Vercel routes /api/webhook to this serverless module (not server.js),
+      // so forwarding must happen here as well. Resolve the exact same effective
+      // tenant object used by /api/tenants: env > DB > built-in default.
+      try {
+        if (tenantRegistry && typeof tenantRegistry.refreshFromDb === 'function') {
+          await tenantRegistry.refreshFromDb({ client });
+        }
+
+        const metadata = data.metadata && typeof data.metadata === 'object' ? data.metadata : {};
+        const merchantIdentifier = metadata.tenant_key || metadata.merchant || transaction.merchant_name;
+        const tenant = tenantRegistry && typeof tenantRegistry.getTenantByIdentifier === 'function'
+          ? tenantRegistry.getTenantByIdentifier(merchantIdentifier)
+          : null;
+
+        if (tenant && tenant.webhook_url) {
+          step(
+            requestId,
+            'STEP 8/9 TENANT-FWD',
+            `forwarding ${eventName} for ${transaction.reference} to ${tenant.key} @ ${tenant.webhook_url}`
+          );
+          const delivery = await tenantWebhookForwarder.dispatchWebhook(
+            tenant,
+            eventName,
+            {
+              reference: transaction.reference,
+              status: eventName === 'charge.success' ? 'success' : 'failed',
+              amount: transaction.amount,
+              currency: data.currency || tenant.currency || 'GHS',
+              channel: data.channel || transaction.payment_method || 'Unknown',
+              paid_at: transaction.paid_at || data.created_at || new Date().toISOString(),
+              merchant: tenant.key,
+              gateway_reference: transaction.reference
+            },
+            transaction.reference
+          );
+          step(requestId, 'STEP 8/9 TENANT-FWD', 'initial delivery completed', {
+            tenant: tenant.key,
+            ok: Boolean(delivery && delivery.ok),
+            statusCode: delivery && delivery.statusCode ? delivery.statusCode : 0,
+            retryScheduled: Boolean(delivery && !delivery.ok && !delivery.skipped)
+          });
+        } else if (tenant) {
+          step(requestId, 'STEP 8/9 TENANT-FWD', `tenant ${tenant.key} has no effective webhook URL; skipping`);
+        } else {
+          step(requestId, 'STEP 8/9 TENANT-FWD', 'merchant metadata did not resolve to a tenant; skipping', {
+            merchantIdentifier: merchantIdentifier || null
+          });
+        }
+      } catch (error) {
+        // The Paystack event is already durable. A receiver outage must not make
+        // Paystack retry the original event; the forwarder owns receiver retries.
+        failure(requestId, 'STEP 8/9 TENANT-FWD', 'tenant webhook delivery failed', error);
       }
 
       // ------------------------------------------------- NOTIFY (receipt)

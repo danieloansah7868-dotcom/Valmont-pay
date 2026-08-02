@@ -165,12 +165,13 @@ check(byId['events-selected'].status === 'pass', 'check: charge.success and char
 check(byId['supabase-configured'].status === 'pass', 'check: Supabase is configured with the service role key');
 check(report.summary.failures === 0, 'a correctly configured deployment reports no blocking failures');
 
-// A MISMATCHED WEBHOOK_SECRET is the classic silent killer — it must fail loudly.
+// A stale WEBHOOK_SECRET must never override the Paystack credential. This is
+// the exact production combination that previously rejected live callbacks.
 process.env.WEBHOOK_SECRET = 'something-completely-different';
 const mismatched = diagnostics.configurationChecks({ headers: { host: 'valmont-pay.vercel.app' } });
 const mismatchCheck = mismatched.find(c => c.id === 'webhook-secret-matches-paystack-key');
-check(mismatchCheck.status === 'fail', 'check: a WEBHOOK_SECRET that differs from PAYSTACK_SECRET_KEY FAILS');
-check(typeof mismatchCheck.fix === 'string', 'the mismatch check explains how to fix it');
+check(mismatchCheck.status === 'pass', 'check: a differing WEBHOOK_SECRET is safely ignored');
+check(mismatchCheck.fix === null, 'the authoritative Paystack key needs no remediation');
 delete process.env.WEBHOOK_SECRET;
 
 // A live key must be reported as live so test-mode payments are not expected.

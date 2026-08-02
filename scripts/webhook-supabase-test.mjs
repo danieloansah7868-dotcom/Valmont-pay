@@ -38,7 +38,37 @@ const fakeSupabase = {
   }
 };
 
-const handler = createWebhookHandler({ supabaseClient: fakeSupabase });
+const forwarded = [];
+const effectiveTenant = {
+  key: 'valmont-electricals',
+  display_name: 'Valmont Electricals',
+  currency: 'GHS',
+  webhook_url: 'https://valmontelectricals.com/api/valmontpay/webhook',
+  webhook_signing_secret: 'offline-tenant-signing-secret'
+};
+const fakeTenantRegistry = {
+  async refreshFromDb({ client }) {
+    assert.equal(client, fakeSupabase);
+    return 1;
+  },
+  getTenantByIdentifier(identifier) {
+    return ['Valmont Electricals', 'valmont-electricals'].includes(identifier)
+      ? effectiveTenant
+      : undefined;
+  }
+};
+const fakeTenantForwarder = {
+  async dispatchWebhook(tenant, eventName, data, reference) {
+    forwarded.push({ tenant, eventName, data, reference });
+    return { ok: true, statusCode: 200 };
+  }
+};
+
+const handler = createWebhookHandler({
+  supabaseClient: fakeSupabase,
+  tenantRegistry: fakeTenantRegistry,
+  tenantWebhookForwarder: fakeTenantForwarder
+});
 
 function sign(rawBody) {
   return crypto
@@ -119,6 +149,11 @@ assert.deepEqual(insertedRows[0], {
   status: 'SUCCESS',
   paid_at: '2026-07-28T08:00:00.000Z'
 });
+assert.equal(forwarded.length, 1, 'the Vercel webhook must invoke the tenant forwarder');
+assert.equal(forwarded[0].tenant.webhook_url, 'https://valmontelectricals.com/api/valmontpay/webhook');
+assert.equal(forwarded[0].eventName, 'charge.success');
+assert.equal(forwarded[0].reference, 'VP-WEBHOOK-TEST-1');
+assert.equal(forwarded[0].data.amount, 125.5);
 
 nextInsertResult = {
   data: null,
@@ -140,4 +175,4 @@ assert.equal(res.body.error, 'Failed to save transaction');
 assert.equal(insertedRows[1].amount, 50);
 assert.equal(insertedRows[1].paid_at, null);
 
-console.log('✓ Vercel webhook signature, body parsing, Supabase mapping, and error handling passed');
+console.log('✓ Vercel webhook signature, persistence, effective-tenant forwarding, and errors passed');

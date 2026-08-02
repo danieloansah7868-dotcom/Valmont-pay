@@ -3,7 +3,14 @@ const cors = require('cors');
 const path = require('path');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
-const { initializePayment, verifyPayment, generateReference, toSubunits } = require('./lib/paystack');
+const {
+  initializePayment,
+  initializePaymentWithKey,
+  verifyPayment,
+  verifyPaymentWithKey,
+  generateReference,
+  toSubunits
+} = require('./lib/paystack');
 const ledger = require('./lib/ledger');
 const { handleWebhookEvent, toLedgerRecord } = require('./lib/webhook');
 const { isSupabaseConfigured, supabaseConfigState, getSupabaseClient } = require('./lib/supabase');
@@ -507,7 +514,7 @@ app.get('/api/health', (req, res) => {
   const supabase = supabaseConfigState();
   const paystackConfigured = Boolean(process.env.PAYSTACK_SECRET_KEY);
   const webhookSecretConfigured = Boolean(
-    process.env.WEBHOOK_SECRET || process.env.PAYSTACK_SECRET_KEY
+    process.env.PAYSTACK_SECRET_KEY || process.env.WEBHOOK_SECRET
   );
 
   const missing = [];
@@ -522,7 +529,7 @@ app.get('/api/health', (req, res) => {
     );
   }
   if (!process.env.WEBHOOK_SECRET && paystackConfigured) {
-    warnings.push('WEBHOOK_SECRET is unset — falling back to PAYSTACK_SECRET_KEY (this is fine for Paystack).');
+    warnings.push('WEBHOOK_SECRET is unset — PAYSTACK_SECRET_KEY is used directly (recommended for Paystack).');
   }
 
   res.set('Cache-Control', 'no-store');
@@ -559,9 +566,9 @@ app.post('/api/webhook', async (req, res) => {
   console.log(`[WEBHOOK ${requestId}] STEP 2/6 HEADERS —`, JSON.stringify(req.headers, null, 2));
   console.log(`[WEBHOOK ${requestId}] STEP 3/6 BODY — ${Buffer.byteLength(rawBody, 'utf8')} byte(s):`, rawBody || '(empty)');
   console.log(`[WEBHOOK ${requestId}] STEP 4/6 ENV —`, JSON.stringify({
-    signingSecretConfigured: Boolean(process.env.WEBHOOK_SECRET || process.env.PAYSTACK_SECRET_KEY),
-    signingSecretSource: process.env.WEBHOOK_SECRET ? 'WEBHOOK_SECRET'
-      : process.env.PAYSTACK_SECRET_KEY ? 'PAYSTACK_SECRET_KEY' : null,
+    signingSecretConfigured: Boolean(process.env.PAYSTACK_SECRET_KEY || process.env.WEBHOOK_SECRET),
+    signingSecretSource: process.env.PAYSTACK_SECRET_KEY ? 'PAYSTACK_SECRET_KEY'
+      : process.env.WEBHOOK_SECRET ? 'WEBHOOK_SECRET (legacy fallback)' : null,
     supabase: supabaseConfigState()
   }, null, 2));
 
@@ -594,7 +601,7 @@ app.post('/api/webhook', async (req, res) => {
   }, null, 2));
 
   if (!signatureAccepted) {
-    console.error(`[WEBHOOK ${requestId}] STEP 5/6 SIGNATURE — ✗ signature mismatch. Check that WEBHOOK_SECRET (if set) equals PAYSTACK_SECRET_KEY, and that the key mode (test/live) matches the Paystack dashboard mode that sent this event.`);
+    console.error(`[WEBHOOK ${requestId}] STEP 5/6 SIGNATURE — ✗ signature mismatch. Check that PAYSTACK_SECRET_KEY belongs to the Paystack account/mode (test/live) that sent this event.`);
   }
 
 
@@ -633,42 +640,31 @@ app.post('/api/webhook', async (req, res) => {
       // appropriate tenant's webhook URL.
       if (result.body && result.body.transaction) {
         const trxRecord = result.body.transaction;
-        const merchantKey = trxRecord.merchant
-          ? String(trxRecord.merchant).toLowerCase()
-          : null;
+        const data = req.body && req.body.data ? req.body.data : {};
+        const metadata = data.metadata && typeof data.metadata === 'object' ? data.metadata : {};
+        const merchantIdentifier = metadata.tenant_key || metadata.merchant || trxRecord.tenant_key || trxRecord.merchant;
+        const tenant = tenants.getTenantByIdentifier(merchantIdentifier);
 
-        // Try to find the merchant in metadata
-        let tenantKey = merchantKey;
-        if (!tenantKey && req.body && req.body.data && req.body.data.metadata) {
-          tenantKey = req.body.data.metadata.merchant
-            ? String(req.body.data.metadata.merchant).toLowerCase()
-            : null;
-        }
+        if (tenant && tenant.webhook_url) {
+          const eventName = req.body && req.body.event ? String(req.body.event) : 'charge.success';
+          const reference = trxRecord.reference;
 
-        if (tenantKey) {
-          const tenant = tenants.getTenant(tenantKey);
-          if (tenant && tenant.webhook_url) {
-            const eventName = req.body && req.body.event ? String(req.body.event) : 'charge.success';
-            const data = req.body && req.body.data ? req.body.data : {};
-            const reference = trxRecord.reference;
+          console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — forwarding ${eventName} for ${reference} to ${tenant.key} @ ${tenant.webhook_url}`);
 
-            console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — forwarding ${eventName} for ${reference} to ${tenant.key} @ ${tenant.webhook_url}`);
-
-            webhookForwarder.dispatchWebhook(tenant, eventName, {
-              reference: reference,
-              status: trxRecord.status || 'success',
-              amount: Number(trxRecord.amount) || 0,
-              currency: data.currency || tenant.currency || 'GHS',
-              channel: trxRecord.channel || data.channel || 'Unknown',
-              paid_at: trxRecord.timestamp || data.paid_at || new Date().toISOString(),
-              merchant: tenant.key,
-              gateway_reference: reference
-            }, reference);
-          } else if (tenant) {
-            console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — tenant ${tenant.key} has no webhook URL configured, skipping`);
-          }
+          webhookForwarder.dispatchWebhook(tenant, eventName, {
+            reference,
+            status: trxRecord.status || 'success',
+            amount: Number(trxRecord.amount) || 0,
+            currency: data.currency || tenant.currency || 'GHS',
+            channel: trxRecord.channel || data.channel || 'Unknown',
+            paid_at: trxRecord.timestamp || data.paid_at || new Date().toISOString(),
+            merchant: tenant.key,
+            gateway_reference: reference
+          }, reference);
+        } else if (tenant) {
+          console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — tenant ${tenant.key} has no webhook URL configured, skipping`);
         } else {
-          console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — could not determine tenant from transaction merchant field, skipping`);
+          console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — could not resolve tenant from merchant metadata, skipping`);
         }
       }
     }
@@ -788,7 +784,7 @@ app.get('/api/webhook-status', async (req, res) => {
 // Helps debug webhook delivery issues without needing Paystack dashboard access.
 app.get('/api/webhook-debug', (req, res) => {
   const supabase = supabaseConfigState();
-  const webhookSecret = process.env.WEBHOOK_SECRET || process.env.PAYSTACK_SECRET_KEY || '';
+  const webhookSecret = process.env.PAYSTACK_SECRET_KEY || process.env.WEBHOOK_SECRET || '';
   const paystackKey = process.env.PAYSTACK_SECRET_KEY || '';
 
   const diagnostics = {
@@ -807,9 +803,9 @@ app.get('/api/webhook-debug', (req, res) => {
     },
     webhook: {
       webhookSecretConfigured: Boolean(webhookSecret),
-      webhookSecretSource: process.env.WEBHOOK_SECRET
-        ? 'WEBHOOK_SECRET'
-        : process.env.PAYSTACK_SECRET_KEY ? 'PAYSTACK_SECRET_KEY' : null,
+      webhookSecretSource: process.env.PAYSTACK_SECRET_KEY
+        ? 'PAYSTACK_SECRET_KEY'
+        : process.env.WEBHOOK_SECRET ? 'WEBHOOK_SECRET (legacy fallback)' : null,
       paystackSecretKeyConfigured: Boolean(paystackKey),
       expectedWebhookUrl: process.env.PUBLIC_BASE_URL
         ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/api/webhook`
@@ -1043,24 +1039,18 @@ app.post('/api/transaction/initialize', requireTenantAuth, async (req, res) => {
 
   if (tenant.paystack_secret_key) {
     try {
-      // Use tenant's Paystack key by temporarily overriding env var
-      const originalKey = process.env.PAYSTACK_SECRET_KEY;
-      process.env.PAYSTACK_SECRET_KEY = tenant.paystack_secret_key;
-
-      // We need to call Paystack's initialize with the tenant's key.
-      // The paystack helper reads from process.env.PAYSTACK_SECRET_KEY.
-      paystackResult = await initializePayment({
+      // Credential selection is explicit. tenant.environment is display-only
+      // and never gates test/live routing; the actual sk_test_/sk_live_ key does.
+      paystackResult = await initializePaymentWithKey({
         amount: Number(amount),
         email,
         reference: finalReference,
         callback_url: `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(finalReference)}&merchant=${encodeURIComponent(tenant.key)}`,
         merchant: tenant.key,
         subaccount,
-        currency: finalCurrency
+        currency: finalCurrency,
+        secretKey: tenant.paystack_secret_key
       });
-
-      // Restore original key
-      process.env.PAYSTACK_SECRET_KEY = originalKey || '';
     } catch (error) {
       paystackError = error.message || String(error);
     }
@@ -1172,11 +1162,9 @@ app.get('/api/transaction/verify/:reference', requireTenantAuth, async (req, res
   // Try Paystack verify as a last resort
   if (!trx && tenant.paystack_secret_key) {
     try {
-      const originalKey = process.env.PAYSTACK_SECRET_KEY;
-      process.env.PAYSTACK_SECRET_KEY = tenant.paystack_secret_key;
-
-      const paystackData = await verifyPayment(reference);
-      process.env.PAYSTACK_SECRET_KEY = originalKey || '';
+      // As with initialization, the configured credential — not the cosmetic
+      // tenant.environment label — determines Paystack test/live mode.
+      const paystackData = await verifyPaymentWithKey(reference, tenant.paystack_secret_key);
 
       if (paystackData && paystackData.status && paystackData.data) {
         const pd = paystackData.data;
@@ -1325,16 +1313,20 @@ app.put('/api/tenants/:key/webhook', async (req, res) => {
     return res.status(404).json({ status: false, message: 'Tenant not found' });
   }
 
-  // Persist to Supabase (best effort — if DB is down the in-memory update
-  // still applies for this process lifetime)
-  try {
-    await tenantStore.updateTenant(req.params.key, { webhook_url });
-  } catch (err) {
-    console.log('[WEBHOOK-URL] DB persist failed (memory updated anyway):', err.message);
+  // Persist first, then rebuild the exact effective tenant used by every API
+  // and by the forwarder. Never report success for a process-only change.
+  const result = await tenantStore.updateTenant(req.params.key, { webhook_url });
+  if (!result.ok) {
+    return res.status(503).json({ status: false, message: result.reason });
   }
 
-  tenants.setTenantWebhookUrl(req.params.key, webhook_url);
-  res.status(200).json({ status: true, message: 'Webhook URL updated', webhook_url });
+  const effective = tenants.applyDbTenant(tenantStore.rowToTenant(result.raw));
+  res.status(200).json({
+    status: true,
+    message: 'Webhook URL updated',
+    webhook_url: effective.webhook_url,
+    data: tenants.sanitiseTenant(effective)
+  });
 });
 
 // ─── New: POST /api/tenants/{key}/rotate-keys — rotate API secrets ─────
@@ -1374,9 +1366,16 @@ app.post('/api/tenants/:key/rotate-keys', (req, res) => {
 const tenantStore = require('./lib/tenant-store');
 
 app.get('/api/admin/tenants', async (req, res) => {
-  // First refresh from DB so the UI sees the latest
+  // First refresh from DB so the UI sees the latest. Report fallback state
+  // explicitly; otherwise built-in defaults can be mistaken for database rows.
   await tenants.refreshFromDb();
-  res.status(200).json({ status: true, data: tenants.listAllTenants() });
+  const database = tenants.getDbRefreshState();
+  res.status(200).json({
+    status: true,
+    source: database.ok ? 'database+fallbacks' : 'defaults/env-fallback',
+    database,
+    data: tenants.listAllTenants()
+  });
 });
 
 app.post('/api/admin/tenants', async (req, res) => {
@@ -1385,12 +1384,12 @@ app.post('/api/admin/tenants', async (req, res) => {
   if (!result.ok) {
     return res.status(400).json({ status: false, message: result.reason });
   }
-  // Sync into memory so webhooks work immediately
-  tenants.applyDbTenant(result.raw ? tenantStore.rowToTenant(result.raw) : null);
+  // Sync through the same env > DB > default resolver the forwarder uses.
+  const effective = tenants.applyDbTenant(result.raw ? tenantStore.rowToTenant(result.raw) : null);
   res.status(201).json({
     status: true,
     message: 'Tenant created',
-    data: result.tenant,
+    data: tenants.sanitiseTenant(effective),
     // Send secrets back ONCE so the admin can copy them — they're never shown again
     secrets: result.rawSecrets || null
   });
@@ -1404,8 +1403,12 @@ app.put('/api/admin/tenants/:key', async (req, res) => {
   if (!result.ok) {
     return res.status(400).json({ status: false, message: result.reason });
   }
-  tenants.updateTenantInMemory(key, body);
-  res.status(200).json({ status: true, message: 'Tenant updated', data: result.tenant });
+  const effective = tenants.applyDbTenant(tenantStore.rowToTenant(result.raw));
+  res.status(200).json({
+    status: true,
+    message: 'Tenant updated',
+    data: tenants.sanitiseTenant(effective)
+  });
 });
 
 app.delete('/api/admin/tenants/:key', async (req, res) => {
@@ -1430,16 +1433,24 @@ app.post('/api/admin/tenants/:key/disable', async (req, res) => {
   const key = req.params.key;
   const result = await tenantStore.updateTenant(key, { status: 'disabled' });
   if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
-  tenants.updateTenantInMemory(key, { status: 'disabled', disabled: true });
-  res.status(200).json({ status: true, message: 'Tenant disabled', data: result.tenant });
+  const effective = tenants.applyDbTenant(tenantStore.rowToTenant(result.raw));
+  res.status(200).json({
+    status: true,
+    message: 'Tenant disabled',
+    data: tenants.sanitiseTenant(effective)
+  });
 });
 
 app.post('/api/admin/tenants/:key/enable', async (req, res) => {
   const key = req.params.key;
   const result = await tenantStore.updateTenant(key, { status: 'active' });
   if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
-  tenants.updateTenantInMemory(key, { status: 'active', disabled: false });
-  res.status(200).json({ status: true, message: 'Tenant enabled', data: result.tenant });
+  const effective = tenants.applyDbTenant(tenantStore.rowToTenant(result.raw));
+  res.status(200).json({
+    status: true,
+    message: 'Tenant enabled',
+    data: tenants.sanitiseTenant(effective)
+  });
 });
 
 app.post('/api/admin/tenants/:key/rotate-keys', async (req, res) => {
