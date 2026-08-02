@@ -67,7 +67,7 @@ insert into public.tenants (
   '#f68b1e',
   'GHS',
   'test',
-  'https://valmontelectricals.com/api/valmontpay/webhook',
+  NULL,                              -- webhook_url starts empty; merchant sets it from the dashboard
   null,
   'GCB Bank - 1234567890',
   array['valmontelectricals.com','valmontweb.com','valmontpay.app','localhost'],
@@ -75,6 +75,4 @@ insert into public.tenants (
   'vme_pub_dev_key_1',
   'active'
 )
-on conflict (key) do update set
-  webhook_url = coalesce(public.tenants.webhook_url, excluded.webhook_url),
-  updated_at = now();
+on conflict (key) do nothing;   -- don't overwrite any admin edits on re-run

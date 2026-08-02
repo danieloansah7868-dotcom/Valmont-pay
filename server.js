@@ -1614,6 +1614,14 @@ app.get('/admin.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
+// Tenants admin page (also reachable as /tenants without .html)
+app.get('/tenants', (req, res) => {
+  res.sendFile(path.join(__dirname, 'tenants.html'));
+});
+app.get('/tenants.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'tenants.html'));
+});
+
 // Webhook diagnostic page (also reachable as /webhook-status.html via static).
 app.get('/webhook-status', (req, res) => {
   res.sendFile(path.join(__dirname, 'webhook-status.html'));

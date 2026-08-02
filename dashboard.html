@@ -23,12 +23,18 @@
     }
   </script>
 
-  <!-- Header Navigation -->
-  <header style="background: #0b1a38; padding: 16px 24px; border-bottom: 1px solid rgba(255,255,255,0.1);">
-    <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" style="background:transparent;border:1px solid #f58c14;color:#f58c14;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700;float:right;">Logout</button>
-    <a href="/tenants.html" style="float:right;color:#f58c14;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;margin-right:18px;text-decoration:none;padding:8px 0;border-bottom:2px solid transparent;">Tenants Admin</a>
-    <a href="/dashboard.html" style="float:right;color:#fff;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;margin-right:18px;text-decoration:none;padding:8px 0;border-bottom:2px solid #f58c14;">Dashboard</a>
-    <img src="/logo.svg" alt="Valmont Pay" style="height: 40px; clear:both;">
+  <!-- Header Navigation — Logo first (top), tabs + logout underneath -->
+  <header style="background: #0b1a38; padding: 18px 24px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+    <!-- Row 1: Logo + Logout -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <img src="/logo.svg" alt="Valmont Pay" style="height: 40px;">
+      <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" style="background:transparent;border:1px solid #f58c14;color:#f58c14;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700;">Logout</button>
+    </div>
+    <!-- Row 2: Tabs under the logo -->
+    <nav style="display:flex;gap:4;">
+      <a href="/dashboard.html" style="color:#fff;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;padding:10px 18px;text-decoration:none;border-bottom:2px solid #f58c14;">Dashboard</a>
+      <a href="/tenants.html" style="color:#9ca3af;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;padding:10px 18px;text-decoration:none;border-bottom:2px solid transparent;transition:color 0.15s;">Tenants Admin</a>
+    </nav>
   </header>
 
   <!-- Main Content Layout -->

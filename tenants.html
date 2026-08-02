@@ -51,20 +51,22 @@
   </script>
 
   <!-- Header -->
-  <header class="bg-[#0b1a38] border-b border-[#142850] px-6 py-4 flex items-center justify-between">
-    <div class="flex items-center gap-4">
-      <img src="/logo.svg" alt="Valmont Pay" style="height: 36px;">
-      <nav class="flex gap-1 ml-6">
-        <a href="/dashboard.html" class="nav-tab">Dashboard</a>
-        <a href="/tenants.html" class="nav-tab nav-tab-active">Tenants</a>
-        <a href="/admin.html" class="nav-tab">Admin (Legacy)</a>
-      </nav>
+  <header class="bg-[#0b1a38] border-b border-[#142850] px-6 py-4">
+    <!-- Row 1: Logo + Logout + Add Tenant -->
+    <div class="flex items-center justify-between mb-3">
+      <img src="/logo.svg" alt="Valmont Pay" style="height: 40px;">
+      <div class="flex items-center gap-3">
+        <span id="tenantCount" class="text-xs text-gray-500 font-bold">0 tenants</span>
+        <button onclick="openAddModal()" class="gold-btn">+ Add Tenant</button>
+        <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" class="ghost-btn">Logout</button>
+      </div>
     </div>
-    <div class="flex items-center gap-3">
-      <span id="tenantCount" class="text-xs text-gray-500 font-bold">0 tenants</span>
-      <button onclick="openAddModal()" class="gold-btn">+ Add Tenant</button>
-      <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" class="ghost-btn">Logout</button>
-    </div>
+    <!-- Row 2: Tabs under the logo -->
+    <nav class="flex gap-1">
+      <a href="/dashboard.html" class="nav-tab">Dashboard</a>
+      <a href="/tenants.html" class="nav-tab nav-tab-active">Tenants Admin</a>
+      <a href="/admin.html" class="nav-tab">Admin (Legacy)</a>
+    </nav>
   </header>
 
   <main class="max-w-7xl mx-auto p-6 space-y-6">
