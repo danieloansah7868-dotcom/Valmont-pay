@@ -27,7 +27,7 @@ create table if not exists public.tenants (
   public_key       text,
   paystack_secret_key text,       -- tenant's own Paystack sk (subaccount billing)
   paystack_public_key text,
-  webhook_signing_secret text not null default gen_random_uuid()::text,  -- HMAC secret for x-valmontpay-signature
+  webhook_signing_secret text not null default encode(gen_random_bytes(32), 'hex'),  -- HMAC secret for x-valmontpay-signature
   status           text not null default 'active' check (status in ('active','disabled')),
   created_at       timestamptz not null default now(),
   updated_at       timestamptz not null default now()
@@ -104,3 +104,4 @@ update public.tenants
 set environment = 'live'
 where key in ('valmont-electricals', 'valmontweb')
   and environment is distinct from 'live';
+NOTIFY pgrst, 'reload schema';
