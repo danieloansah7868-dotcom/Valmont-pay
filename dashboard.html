@@ -23,10 +23,18 @@
     }
   </script>
 
-  <!-- Header Navigation -->
-  <header style="background: #0b1a38; padding: 16px 24px; border-bottom: 1px solid rgba(255,255,255,0.1);">
-    <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" style="background:transparent;border:1px solid #f58c14;color:#f58c14;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700;float:right;">Logout</button>
-    <img src="/logo.svg" alt="Valmont Pay" style="height: 40px;">
+  <!-- Header Navigation — Logo first (top), tabs + logout underneath -->
+  <header style="background: #0b1a38; padding: 18px 24px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+    <!-- Row 1: Logo + Logout -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <img src="/logo.svg" alt="Valmont Pay" style="height: 40px;">
+      <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" style="background:transparent;border:1px solid #f58c14;color:#f58c14;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700;">Logout</button>
+    </div>
+    <!-- Row 2: Tabs under the logo -->
+    <nav style="display:flex;gap:4;">
+      <a href="/dashboard.html" style="color:#fff;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;padding:10px 18px;text-decoration:none;border-bottom:2px solid #f58c14;">Dashboard</a>
+      <a href="/tenants.html" style="color:#9ca3af;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;padding:10px 18px;text-decoration:none;border-bottom:2px solid transparent;transition:color 0.15s;">Tenants Admin</a>
+    </nav>
   </header>
 
   <!-- Main Content Layout -->
@@ -35,15 +43,15 @@
     <!-- Balance & Analytics Cards -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
       
-      <!-- Virtual Settled Wallet Balance -->
+      <!-- Total Collected (lifetime audit total — not a withdrawable wallet) -->
       <div class="bg-[#0b1a38] border border-[#142850] p-6 rounded-lg shadow-xl flex flex-col justify-between relative overflow-hidden">
         <div class="absolute -right-8 -bottom-8 h-24 w-24 bg-[#f68b1e]/5 rounded-full"></div>
         <div>
-          <span class="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest">Settled Wallet Balance</span>
+          <span class="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest">Total Collected (Lifetime)</span>
           <h2 class="text-[34px] font-black text-[#f68b1e] mt-2" id="walletBalance">GH₵ 0.00</h2>
-        </div>
-        <div class="mt-4 flex gap-2">
-          <button onclick="requestPayout();" class="bg-[#f68b1e] hover:bg-orange-600 text-white text-[11px] font-black uppercase py-2 px-4 rounded-[4px] transition tracking-wider shadow">Request Payout</button>
+          <p class="text-[10px] text-gray-500 mt-2 font-medium">
+            Sum of all successful payments processed through Valmont-Pay. Funds settle directly to your bank via Paystack — Valmont-Pay never holds money.
+          </p>
         </div>
       </div>
 
@@ -76,6 +84,38 @@
 
     </div>
 
+    <!-- Webhook Settings Panel -->
+    <div class="bg-[#0b1a38] border border-[#142850] p-6 rounded-lg shadow-xl">
+      <div class="flex items-center justify-between border-b border-[#142850] pb-3 mb-4">
+        <div>
+          <h3 class="font-extrabold text-[12px] uppercase text-[#f68b1e] tracking-widest">🔔 Webhook Settings</h3>
+          <p class="text-[11px] text-gray-400 font-medium mt-1">Payment events (charge.success) are automatically POSTed to your webhook URL.</p>
+        </div>
+        <button onclick="loadWebhookSettings();" class="text-[10px] bg-[#142850] hover:bg-[#203c6d] text-white py-1.5 px-3 rounded font-black tracking-wider transition">⟳ Refresh</button>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+        <div class="md:col-span-3">
+          <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Merchant / Tenant</label>
+          <select id="webhookTenant" onchange="loadWebhookSettings();" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e]">
+            <!-- populated by JS -->
+          </select>
+        </div>
+        <div class="md:col-span-7">
+          <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Webhook URL</label>
+          <input id="webhookUrlInput" type="url" placeholder="https://your-site.com/api/valmontpay/webhook" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e] font-mono" />
+        </div>
+        <div class="md:col-span-2">
+          <button id="webhookSaveBtn" onclick="saveWebhookUrl();" class="w-full bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-[12px] uppercase py-3 rounded-[4px] transition tracking-wider shadow">
+            Save URL
+          </button>
+        </div>
+      </div>
+
+      <!-- Status line -->
+      <div id="webhookStatus" class="mt-3 text-[11px] text-gray-500 font-medium"></div>
+    </div>
+
     <!-- Live Transaction Ledger (List) -->
     <div class="bg-[#0b1a38] border border-[#142850] p-6 rounded-lg shadow-xl">
       <div class="flex justify-between items-center border-b border-[#142850] pb-3 mb-4">
@@ -89,7 +129,7 @@
         <span>Customer Email</span>
         <span>Amount (GHS)</span>
         <span>Payment Channel</span>
-        <span class="text-right">Settlement Status</span>
+        <span class="text-right">Payment Status</span>
       </div>
 
       <!-- Injected Rows list. Starts EMPTY - real payments are injected here. -->
@@ -106,10 +146,11 @@
 
   </main>
 
-  <!-- Footer security -->
-  <footer class="bg-[#0b1a38] border-t border-[#142850] py-6 px-4 text-center text-gray-400 text-[11px] font-bold">
+  <!-- Footer -->
+  <footer class="bg-[#0b1a38] border-t border-[#142850] py-6 px-4 text-center text-gray-400 text-[11px] font-medium">
     <div class="max-w-[1200px] mx-auto">
-      VALMONT-PAY MERCHANT NETWORK CORE — CONNECTED SECURELY TO GCB BANK & CHANA INTERBANK SETTLEMENT SYSTEMS
+      Payments securely processed via <span class="text-white font-bold">Paystack</span>.
+      Settlements land in your registered bank account per Paystack's payout schedule — Valmont-Pay does not hold or disburse funds.
     </div>
   </footer>
 
@@ -260,25 +301,113 @@
       });
     }
 
-    function requestPayout() {
-      if (!currentBalance) {
-        alert('There is nothing to settle yet. Your balance is GH₵ 0.00.');
-        return;
-      }
-      // Send the merchant to the payout destination form (Bank / MoMo)
-      // with the settled balance pre-filled — no more mock alert.
-      window.location.href = '/payout.html?amount=' + encodeURIComponent(currentBalance);
-    }
-
     function copyPaymentLink() {
       const link = document.getElementById('paymentLinkUrl').textContent;
       navigator.clipboard.writeText(link);
       alert('Payment link copied to clipboard!');
     }
 
+    // ─── Webhook Settings ──────────────────────────────────────────────
+    async function loadTenantList() {
+      try {
+        const res = await fetch('/api/tenants');
+        const json = await res.json();
+        return (json.data || []);
+      } catch (err) {
+        console.error('Failed to load tenants:', err);
+        return [];
+      }
+    }
+
+    async function populateWebhookTenantSelect() {
+      const tenants = await loadTenantList();
+      const select = document.getElementById('webhookTenant');
+      // Default to valmont-electricals if present
+      const preferred = 'valmont-electricals';
+      select.innerHTML = tenants.map(t => `
+        <option value="${escapeHtml(t.key)}" ${t.key === preferred ? 'selected' : ''}>${escapeHtml(t.display_name)} (${escapeHtml(t.key)})</option>
+      `).join('');
+      if (!tenants.length) {
+        select.innerHTML = '<option value="">(no tenants found)</option>';
+      }
+    }
+
+    async function loadWebhookSettings() {
+      const key = document.getElementById('webhookTenant').value;
+      const status = document.getElementById('webhookStatus');
+      const input = document.getElementById('webhookUrlInput');
+      if (!key) { input.value = ''; status.textContent = ''; return; }
+      status.textContent = 'Loading…';
+      status.className = 'mt-3 text-[11px] text-gray-500 font-medium';
+      try {
+        const res = await fetch('/api/tenants/' + encodeURIComponent(key));
+        const json = await res.json();
+        if (json.data) {
+          input.value = json.data.webhook_url || '';
+          if (json.data.webhook_url) {
+            status.innerHTML = '✅ Current webhook URL loaded. Events will be forwarded to this address.';
+            status.className = 'mt-3 text-[11px] text-green-400 font-medium';
+          } else {
+            status.innerHTML = '⚠️ No webhook URL is set yet. Paste one above and click <b>Save URL</b>.';
+            status.className = 'mt-3 text-[11px] text-amber-400 font-medium';
+          }
+        } else {
+          status.textContent = 'Could not load tenant.';
+          status.className = 'mt-3 text-[11px] text-red-400 font-medium';
+        }
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'mt-3 text-[11px] text-red-400 font-medium';
+      }
+    }
+
+    async function saveWebhookUrl() {
+      const key = document.getElementById('webhookTenant').value;
+      const url = document.getElementById('webhookUrlInput').value.trim();
+      const status = document.getElementById('webhookStatus');
+      const btn = document.getElementById('webhookSaveBtn');
+
+      if (!key) { alert('Select a tenant first.'); return; }
+      if (!url) {
+        alert('Please paste a webhook URL first (e.g. https://valmontelectricals.com/api/valmontpay/webhook)');
+        return;
+      }
+      try { new URL(url); } catch (_) { alert('That doesn\'t look like a valid URL. Make sure it starts with https://'); return; }
+
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      status.textContent = 'Saving…';
+      status.className = 'mt-3 text-[11px] text-gray-500 font-medium';
+
+      try {
+        const res = await fetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ webhook_url: url })
+        });
+        const json = await res.json();
+        if (json.status) {
+          status.innerHTML = `✅ Webhook URL saved! Payment events will be sent to <span class="font-mono">${escapeHtml(url)}</span>`;
+          status.className = 'mt-3 text-[11px] text-green-400 font-medium';
+        } else {
+          status.textContent = '❌ Error: ' + (json.message || 'Unknown error');
+          status.className = 'mt-3 text-[11px] text-red-400 font-medium';
+        }
+      } catch (err) {
+        status.textContent = '❌ Error: ' + err.message;
+        status.className = 'mt-3 text-[11px] text-red-400 font-medium';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save URL';
+      }
+    }
+
     // Render the empty state immediately, then load the real ledger.
     renderDashboard();
     fetchDashboardData();
+
+    // Boot webhook panel
+    populateWebhookTenantSelect().then(() => loadWebhookSettings());
 
     // Poll so a real payment shows up without a manual refresh.
     setInterval(fetchDashboardData, 10000);

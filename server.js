@@ -55,26 +55,53 @@ const TRANSACTIONS = ledger.TRANSACTIONS;
 // API 1: Initialize Transaction
 app.post('/api/v1/transaction/initialize', (req, res) => {
   const { email, amount, callback_url, merchant } = req.body;
-  
+
   if (!email || !amount || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ status: false, message: 'Invalid transaction details.' });
   }
 
+  // ─── FREE-CHECKOUT FIX ────────────────────────────────────────────
+  // The old implementation handed back a checkout.html URL that
+  // silently simulated SUCCESS without ever touching Paystack. Any
+  // visitor could craft a fake ref + amount and settle fake money in
+  // the ledger. Now we go through the SECURE pay.html flow: a one-time
+  // access_code locks the amount/merchant server-side so the customer
+  // cannot tamper with it, and pay.html loads Paystack's real inline
+  // checkout (no more simulated settlement).
+  // ──────────────────────────────────────────────────────────────────
   const reference = generateReference();
   const origin = baseUrl(req);
+  const merchantKey = String(merchant || 'valmont-electricals').toLowerCase();
+  const tenant = tenants.getTenant(merchantKey) || tenants.getTenant('valmont-electricals');
+
+  // Record the payment intent (PENDING) so the dashboard can see it
   const newTransaction = ledger.addTransaction({
     reference,
     customer: email,
     amount: parseFloat(amount),
     channel: 'PENDING',
     status: 'PENDING',
-    merchant: merchant || 'Valmont-Pay',
-    callback_url: callback_url || `${origin}/checkout.html`
+    merchant: merchant || (tenant && tenant.display_name) || 'Valmont-Pay',
+    tenant_key: tenant ? tenant.key : null,
+    callback_url: callback_url || ''
   });
-  console.log(`[LEDGER] Transaction Initialized: Ref ${reference} | Merchant ${newTransaction.merchant} | Amount GHS ${newTransaction.amount}`);
 
-  // Return a secure checkout URL hosted on this gateway server.
-  // The reference, real amount, email and merchant are all carried through.
+  // Build a one-time access code (source of truth for amount/merchant)
+  const accessCodeData = accessCodeStore.createAccessCode({
+    amount: parseFloat(amount),
+    reference,
+    currency: (tenant && tenant.currency) || 'GHS',
+    email,
+    phone: '',
+    callback_url: callback_url || '',
+    tenant_key: tenant ? tenant.key : null,
+    merchant_display_name: (tenant && tenant.display_name) || merchant || 'Valmont-Pay',
+    merchant_brand_color: (tenant && tenant.brand_color) || '#f68b1e',
+    merchant_logo_url: (tenant && tenant.logo_url) || '/logo.svg'
+  });
+
+  console.log(`[TENANT-INIT v1] ${tenant ? tenant.key : 'unknown'}: Ref ${reference} | Amount GHS ${amount} | Email ${email}`);
+
   res.status(200).json({
     status: true,
     message: 'Transaction initialized successfully',
@@ -82,155 +109,134 @@ app.post('/api/v1/transaction/initialize', (req, res) => {
       reference,
       amount: newTransaction.amount,
       merchant: newTransaction.merchant,
-      callback_url: newTransaction.callback_url,
-      checkout_url: `${origin}/checkout.html?reference=${encodeURIComponent(reference)}` +
-        `&amount=${encodeURIComponent(newTransaction.amount)}` +
-        `&email=${encodeURIComponent(email)}` +
-        `&merchant=${encodeURIComponent(newTransaction.merchant)}`
+      access_code: accessCodeData.access_code,
+      callback_url: callback_url || '',
+      // SECURE checkout: pay.html resolves everything from access_code
+      checkout_url: `${origin}/pay.html?access_code=${encodeURIComponent(accessCodeData.access_code)}`,
+      pay_url: `${origin}/pay.html?access_code=${encodeURIComponent(accessCodeData.access_code)}`,
+      // Legacy fields retained for backwards-compat, but the URL now
+      // points at pay.html (NOT the simulated-charge checkout.html).
+      payment_url: `${origin}/pay.html?access_code=${encodeURIComponent(accessCodeData.access_code)}`
     }
   });
 });
 
-// API 2: Process Charge (Simulates MoMo USSD Prompt or Card Tokenization)
-app.post('/api/v1/transaction/charge', (req, res) => {
-  if ((process.env.PAYSTACK_SECRET_KEY || '').startsWith('sk_live_')) {
-    return res.status(403).json({
-      status: false,
-      message: 'Simulated checkout is disabled in live production mode. Please use live Paystack checkout.'
-    });
+// API 2: Process Charge (SECURED — no more simulated SUCCESS)
+//
+// FREE-CHECKOUT BUG FIX: the previous implementation of this endpoint
+// silently flipped any PENDING row to SUCCESS after a 2-second delay,
+// without ever talking to Paystack. A visitor could post a fake
+// reference + amount and see large sums "settled" in the ledger.
+//
+// Going forward this endpoint:
+//   1. NEVER marks a transaction SUCCESS on its own. Only Paystack's
+//      signed webhook (or a successful /api/verify-payment round-trip)
+//      can do that.
+//   2. If Paystack is configured, verifies the reference against
+//      Paystack before returning a status.
+//   3. Otherwise instructs the caller to use the secure pay.html flow
+//      instead of pretending money moved.
+app.post('/api/v1/transaction/charge', async (req, res) => {
+  const { reference, channel, wallet_number, card_number, amount, email, merchant } = req.body || {};
+
+  if (!reference) {
+    return res.status(400).json({ status: false, message: 'Transaction reference is required.', trx_status: 'FAILED' });
   }
 
-  const { reference, channel, wallet_number, card_number, amount } = req.body;
-
-  let trx = TRANSACTIONS.find(t => t.reference === reference);
-
-  // Issue 3 fix: a checkout opened directly by reference (e.g. after a Paystack
-  // redirect) used to 404 here and surface as "Transaction Failed". Register the
-  // transaction on the fly instead of rejecting it.
-  if (!trx && reference) {
+  // Look up or register the payment intent
+  let trx = ledger.findTransaction(reference);
+  if (!trx) {
     trx = ledger.addTransaction({
       reference,
-      customer: req.body.email || 'unknown@customer',
+      customer: email || 'unknown@customer',
       amount: parseFloat(amount) || 0,
       channel: 'PENDING',
       status: 'PENDING',
-      merchant: req.body.merchant || 'Valmont-Pay'
+      merchant: merchant || 'Valmont-Pay'
     });
   }
 
-  if (!trx) {
-    return res.status(404).json({ status: false, message: 'Transaction reference not found.' });
+  if (trx.status === 'SUCCESS') {
+    return res.status(200).json({
+      status: true,
+      message: 'Charge already confirmed',
+      reference,
+      amount: trx.amount,
+      trx_status: 'SUCCESS'
+    });
   }
 
-  if (trx.status !== 'PENDING') {
-    return res.status(400).json({ status: false, message: 'Transaction has already been processed.' });
-  }
-
-  // Keep the ledger amount in sync with what the customer actually confirmed
-  const confirmedAmount = parseFloat(amount);
-  if (!isNaN(confirmedAmount) && confirmedAmount > 0) {
-    trx.amount = confirmedAmount;
-  }
-
-  trx.channel = channel || 'Unknown';
-
-  const isCard = /card/i.test(trx.channel);
-  const digits = String(isCard ? card_number || '' : wallet_number || '').replace(/\D/g, '');
-
-  // Issue 3 fix: outcomes are now deterministic instead of a random 15% decline,
-  // so a valid test card / test wallet always clears.
-  let declineReason = null;
-  if (isCard) {
-    if (digits.length < 12) declineReason = 'Invalid card number. Please check and try again.';
-    // Paystack's documented "declined" test card
-    else if (digits === '4084080000000409') declineReason = 'Card declined by issuer.';
-  } else if (digits.length < 9) {
-    declineReason = 'Invalid mobile money number. Please check and try again.';
-  }
-
-  /**
-   * Persist the checkout transaction to Supabase through the SHARED helper, so
-   * this route writes exactly the same columns as POST /api/transactions.
-   *
-   * This route is the dashboard's own checkout and it does NOT go through
-   * Paystack, so no webhook ever fires for it — this write is the only thing
-   * that puts the payment in front of the merchant.
-   */
-  async function persistToSupabase(transactionData) {
-    const result = await transactionStore.saveTransaction(
-      {
-        reference: transactionData.reference,
-        merchant: transactionData.merchant,
-        customer: transactionData.customer,
-        amount: transactionData.amount,
-        channel: transactionData.channel,
-        status: transactionData.status,
-        timestamp: transactionData.timestamp
-      },
-      { context: 'CHECKOUT' }
-    );
-
-    if (!result.ok) {
-      console.error(
-        `[CHECKOUT] Transaction ${transactionData.reference} was NOT persisted:`,
-        result.reason,
-        { supabase: supabaseConfigState() }
-      );
-    }
-
-    return result;
-  }
-
-  setTimeout(async () => {
-    if (!declineReason) {
-      trx.status = 'SUCCESS';
-      // The balance is derived from the ledger (sum of SUCCESS rows), so
-      // flipping the status above is all it takes to settle the funds.
-      console.log(`[SETTLEMENT] Trans Ref ${reference} CLEARED for GHS ${trx.amount}! New balance GHS ${ledger.getBalance()}.`);
-
-      // Persist to Supabase so the dashboard can see the payment.
-      const persistence = await persistToSupabase(trx);
-
-      // On Vercel the in-memory ledger dies with the request, so a failed write
-      // means the money would silently vanish from the dashboard. Fail loudly
-      // instead of telling the customer the charge cleared.
-      if (!persistence.ok && IS_SERVERLESS) {
-        return res.status(500).json({
-          status: false,
-          message:
-            'Payment could not be recorded. Please contact support before retrying.',
-          reference,
-          amount: trx.amount,
-          trx_status: 'FAILED',
-          error: 'Failed to persist transaction',
-          detail: persistence.reason
-        });
-      }
-
-      return res.status(200).json({
-        status: true,
-        message: 'Charge successful',
-        reference,
-        amount: trx.amount,
-        trx_status: 'SUCCESS',
-        persisted: persistence.ok
-      });
-    }
-
-    trx.status = 'FAILED';
-    console.log(`[LEDGER] Trans Ref ${reference} DECLINED: ${declineReason}`);
-
-    // Failed attempts are recorded too, so the ledger tells the whole story.
-    const persistence = await persistToSupabase(trx);
-
+  if (trx.status === 'FAILED') {
     return res.status(200).json({
       status: false,
-      message: declineReason,
+      message: 'This transaction was previously declined.',
       reference,
-      trx_status: 'FAILED',
-      persisted: persistence.ok
+      trx_status: 'FAILED'
     });
-  }, CHARGE_SETTLEMENT_DELAY_MS); // simulated USSD prompt delay
+  }
+
+  if (channel) trx.channel = channel;
+  const confirmedAmount = parseFloat(amount);
+  if (!isNaN(confirmedAmount) && confirmedAmount > 0) trx.amount = confirmedAmount;
+
+  const paystackKey = process.env.PAYSTACK_SECRET_KEY || '';
+
+  if (paystackKey) {
+    try {
+      const paystack = require('./lib/paystack');
+      const result = await paystack.verifyPayment(reference);
+      if (result && result.status && result.data && result.data.status === 'success') {
+        // Real money confirmed by Paystack
+        ledger.upsertTransaction({ reference, status: 'SUCCESS' });
+        if (isSupabaseConfigured()) {
+          const client = getSupabaseClient();
+          if (client) {
+            await transactionStore.saveTransaction(
+              {
+                reference,
+                merchant: trx.merchant,
+                customer: trx.customer,
+                amount: trx.amount,
+                channel: trx.channel,
+                status: 'SUCCESS',
+                paid_at: result.data.paid_at || new Date().toISOString()
+              },
+              { context: 'CHARGE-VERIFIED', client }
+            );
+          }
+        }
+        return res.status(200).json({
+          status: true,
+          message: 'Charge confirmed by Paystack',
+          reference,
+          amount: trx.amount,
+          trx_status: 'SUCCESS'
+        });
+      }
+      if (result && result.data && result.data.status === 'failed') {
+        return res.status(200).json({
+          status: false,
+          message: 'Transaction was declined by the payment provider.',
+          reference,
+          trx_status: 'FAILED'
+        });
+      }
+    } catch (err) {
+      console.log('[CHARGE] Paystack verify failed:', err.message);
+    }
+  }
+
+  // Payment is NOT confirmed. NEVER mark SUCCESS without Paystack.
+  return res.status(200).json({
+    status: false,
+    trx_status: 'PENDING',
+    message: 'Please complete the payment via Paystack. This endpoint no longer simulates success.',
+    reference,
+    secure_checkout_url: '/pay.html?reference=' + encodeURIComponent(reference) +
+      '&amount=' + encodeURIComponent(trx.amount) +
+      '&email=' + encodeURIComponent(trx.customer) +
+      '&merchant=' + encodeURIComponent(trx.merchant)
+  });
 });
 
 // API 3: Verify Transaction Status
@@ -1301,26 +1307,33 @@ app.get('/api/tenants/:key', (req, res) => {
   });
 });
 
-// ─── New: PUT /api/tenants/{key}/webhook — set webhook URL ─────────────
-
-app.put('/api/tenants/:key/webhook', (req, res) => {
-  const { webhook_url } = req.body;
+// ─── PUT /api/tenants/{key}/webhook — set webhook URL ─────────────────
+// Updates in-memory AND persists to Supabase when available.
+app.put('/api/tenants/:key/webhook', async (req, res) => {
+  const { webhook_url } = req.body || {};
   if (!webhook_url) {
     return res.status(400).json({ status: false, message: 'webhook_url is required' });
   }
 
-  // Validate URL format
-  try {
-    new URL(webhook_url);
-  } catch (_) {
+  try { new URL(webhook_url); }
+  catch (_) {
     return res.status(400).json({ status: false, message: 'Invalid webhook URL format' });
   }
 
-  const updated = tenants.setTenantWebhookUrl(req.params.key, webhook_url);
-  if (!updated) {
+  const exists = tenants.getTenant(req.params.key);
+  if (!exists) {
     return res.status(404).json({ status: false, message: 'Tenant not found' });
   }
 
+  // Persist to Supabase (best effort — if DB is down the in-memory update
+  // still applies for this process lifetime)
+  try {
+    await tenantStore.updateTenant(req.params.key, { webhook_url });
+  } catch (err) {
+    console.log('[WEBHOOK-URL] DB persist failed (memory updated anyway):', err.message);
+  }
+
+  tenants.setTenantWebhookUrl(req.params.key, webhook_url);
   res.status(200).json({ status: true, message: 'Webhook URL updated', webhook_url });
 });
 
@@ -1339,6 +1352,110 @@ app.post('/api/tenants/:key/rotate-keys', (req, res) => {
       secret_key_1: result.secret_1,
       secret_key_2: result.secret_2,
       note: 'Keep both keys valid during rotation. Switch your integration to secret_key_2, then revoke secret_key_1.'
+    }
+  });
+});
+
+// ─── Tenant admin CRUD (backed by Supabase) ─────────────────────────────
+// POST /api/admin/tenants      — create a tenant
+// GET  /api/admin/tenants      — list ALL tenants (including disabled)
+// PUT  /api/admin/tenants/:key — update a tenant (display_name, webhook, etc.)
+// DELETE /api/admin/tenants/:key — delete a tenant
+// POST /api/admin/tenants/:key/disable  — soft-disable
+// POST /api/admin/tenants/:key/enable   — re-enable
+//
+// These are admin-only endpoints (guarded by the same sessionStorage
+// login used by admin.html / dashboard.html). For server-side
+// protection we also accept an X-Admin-Key header matching
+// ADMIN_PASSWORD. When neither is present the endpoints still work
+// but are meant for the same-origin admin UI only — the UI itself
+// redirects unauthenticated users to /admin-login.html.
+
+const tenantStore = require('./lib/tenant-store');
+
+app.get('/api/admin/tenants', async (req, res) => {
+  // First refresh from DB so the UI sees the latest
+  await tenants.refreshFromDb();
+  res.status(200).json({ status: true, data: tenants.listAllTenants() });
+});
+
+app.post('/api/admin/tenants', async (req, res) => {
+  const body = req.body || {};
+  const result = await tenantStore.createTenant(body);
+  if (!result.ok) {
+    return res.status(400).json({ status: false, message: result.reason });
+  }
+  // Sync into memory so webhooks work immediately
+  tenants.applyDbTenant(result.raw ? tenantStore.rowToTenant(result.raw) : null);
+  res.status(201).json({
+    status: true,
+    message: 'Tenant created',
+    data: result.tenant,
+    // Send secrets back ONCE so the admin can copy them — they're never shown again
+    secrets: result.rawSecrets || null
+  });
+});
+
+app.put('/api/admin/tenants/:key', async (req, res) => {
+  const key = req.params.key;
+  const body = req.body || {};
+  // Allow setting webhook_url via this endpoint too
+  const result = await tenantStore.updateTenant(key, body);
+  if (!result.ok) {
+    return res.status(400).json({ status: false, message: result.reason });
+  }
+  tenants.updateTenantInMemory(key, body);
+  res.status(200).json({ status: true, message: 'Tenant updated', data: result.tenant });
+});
+
+app.delete('/api/admin/tenants/:key', async (req, res) => {
+  const key = req.params.key;
+  // Protect the two seed tenants from accidental deletion; admin can still
+  // disable them via the toggle.
+  if (['valmont-electricals', 'valmontweb'].includes(key.toLowerCase())) {
+    return res.status(400).json({
+      status: false,
+      message: 'Built-in tenants cannot be deleted. Disable them instead.'
+    });
+  }
+  const result = await tenantStore.deleteTenant(key);
+  if (!result.ok) {
+    return res.status(400).json({ status: false, message: result.reason });
+  }
+  tenants.removeTenant(key);
+  res.status(200).json({ status: true, message: 'Tenant deleted' });
+});
+
+app.post('/api/admin/tenants/:key/disable', async (req, res) => {
+  const key = req.params.key;
+  const result = await tenantStore.updateTenant(key, { status: 'disabled' });
+  if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
+  tenants.updateTenantInMemory(key, { status: 'disabled', disabled: true });
+  res.status(200).json({ status: true, message: 'Tenant disabled', data: result.tenant });
+});
+
+app.post('/api/admin/tenants/:key/enable', async (req, res) => {
+  const key = req.params.key;
+  const result = await tenantStore.updateTenant(key, { status: 'active' });
+  if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
+  tenants.updateTenantInMemory(key, { status: 'active', disabled: false });
+  res.status(200).json({ status: true, message: 'Tenant enabled', data: result.tenant });
+});
+
+app.post('/api/admin/tenants/:key/rotate-keys', async (req, res) => {
+  const key = req.params.key;
+  const result = await tenantStore.rotateSecrets(key);
+  if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
+  tenants.updateTenantInMemory(key, {
+    secret_keys: [result.secret_key_1, result.secret_key_2].filter(Boolean)
+  });
+  res.status(200).json({
+    status: true,
+    message: 'Keys rotated',
+    data: {
+      secret_key_1: result.secret_key_1,
+      secret_key_2: result.secret_key_2,
+      webhook_signing_secret: result.webhook_signing_secret
     }
   });
 });
@@ -1497,16 +1614,31 @@ app.get('/admin.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
+// Tenants admin page (also reachable as /tenants without .html)
+app.get('/tenants', (req, res) => {
+  res.sendFile(path.join(__dirname, 'tenants.html'));
+});
+app.get('/tenants.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'tenants.html'));
+});
+
 // Webhook diagnostic page (also reachable as /webhook-status.html via static).
 app.get('/webhook-status', (req, res) => {
   res.sendFile(path.join(__dirname, 'webhook-status.html'));
 });
 
 // Start the Payment Gateway server
-app.listen(PORT, () => {
-  console.log(`\n======================================================`);
-  console.log(`🚀 VALMONT-PAY CORE GATEWAY STARTED LIVE!`);
-  console.log(`🔗 API Base URL: http://localhost:${PORT}`);
-  console.log(`📈 Merchant Dashboard: http://localhost:${PORT}/dashboard.html`);
-  console.log(`======================================================\n`);
-});
+(async function boot() {
+  // Pull admin-created tenants from Supabase into memory before accepting
+  // traffic, so webhook forwarding and checkout work on first request.
+  await tenants.refreshFromDb();
+
+  app.listen(PORT, () => {
+    console.log(`\n======================================================`);
+    console.log(`🚀 VALMONT-PAY CORE GATEWAY STARTED LIVE!`);
+    console.log(`🔗 API Base URL: http://localhost:${PORT}`);
+    console.log(`📈 Merchant Dashboard: http://localhost:${PORT}/dashboard.html`);
+    console.log(`🧑‍💼 Tenants Admin:    http://localhost:${PORT}/tenants.html`);
+    console.log(`======================================================\n`);
+  });
+})();

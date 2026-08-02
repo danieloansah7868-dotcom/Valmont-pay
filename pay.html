@@ -168,7 +168,8 @@
 
     // Accept either access_code (new secure flow) or legacy params
     const accessCode = urlParams.get('access_code');
-    const merchantFromUrl = urlParams.get('merchant');
+    // Support ?tenant=valmont-electricals as the canonical param (merchant is an alias)
+    const merchantFromUrl = urlParams.get('merchant') || urlParams.get('tenant');
     const amountFromUrl = parseFloat(urlParams.get('amount')) || 0;
     // Storefront integrations send `reference`; older links used `ref`.
     const refFromUrl = urlParams.get('reference') || urlParams.get('ref');

@@ -134,29 +134,78 @@
 
   <script>
     // ---------------------------------------------------------------
-    // Issue 1 + 2: reference, merchant AND amount all come from the URL.
-    // e.g. checkout.html?reference=VP-123456&merchant=Valmont+Electricals&amount=50
-    // The old hardcoded fallback amount has been removed.
+    // SECURITY FIX: The old checkout.html used to POST to a simulated
+    // charge endpoint that marked transactions SUCCESS without ever
+    // touching Paystack (the "free-checkout" bug). This legacy URL
+    // (checkout.html?reference=...&amount=...) now REDIRECTS to the
+    // secure pay.html flow, which uses a server-side access_code
+    // (tamper-proof amount/merchant) and opens Paystack's real
+    // inline checkout. No more simulated USSD, no more fake success.
     // ---------------------------------------------------------------
     const urlParams = new URLSearchParams(window.location.search);
-    const reference = urlParams.get('reference') || 'VP-' + Math.floor(100000 + Math.random() * 900000);
-    const merchant = urlParams.get('merchant') || 'Valmont-Pay';
+    const reference = urlParams.get('reference') || '';
+    const merchant = urlParams.get('merchant') || 'valmont-electricals';
     const amount = parseFloat(urlParams.get('amount')) || 0;
     const email = urlParams.get('email') || '';
-    // Issue 3 fix: honor per-transaction callback_url.
-    // NO dashboard fallback — dashboard.html bounces unauthenticated
-    // customers to the ADMIN LOGIN page, which customers must never see.
     const callbackUrl = urlParams.get('callback_url') || '';
+    const accessCode = urlParams.get('access_code') || '';
 
-    document.getElementById('merchant-name').textContent = merchant;
-    document.getElementById('successMerchantDesc').textContent =
-      `Your payment to ${merchant} has been settled successfully. You will receive an invoice receipt shortly.`;
-    document.title = 'Pay ' + merchant + ' — Valmont-Pay';
+    // If we already have an access_code the link is properly formed —
+    // go straight to pay.html.
+    if (accessCode) {
+      window.location.replace('/pay.html?access_code=' + encodeURIComponent(accessCode));
+      throw new Error('redirecting');
+    }
 
-    document.getElementById('checkoutRef').textContent = reference;
-    document.getElementById('amount-display').textContent = 'GH₵ ' + amount.toFixed(2);
-    document.getElementById('checkoutEmail').textContent = email || 'No email provided';
-    document.getElementById('btnPay').textContent = 'Pay GH₵ ' + amount.toFixed(2);
+    // Legacy ?reference=&amount=&merchant= link → ask the server for a
+    // secure access_code, then redirect to pay.html. This is async so we
+    // show a brief "Redirecting to secure checkout…" message first.
+    (async function () {
+      document.getElementById('merchant-name').textContent = merchant;
+      document.getElementById('amount-display').textContent = 'GH₵ ' + amount.toFixed(2);
+      document.getElementById('checkoutEmail').textContent = email || 'customer';
+      document.getElementById('checkoutRef').textContent = reference || '---';
+
+      // Show a processing-style message while we redirect
+      const form = document.getElementById('paymentFormStage');
+      const procStage = document.getElementById('processingStage');
+      form.classList.add('hidden');
+      document.getElementById('btnPay').classList.add('hidden');
+      procStage.classList.remove('hidden');
+      document.getElementById('processingTitle').textContent = 'Redirecting to Secure Checkout…';
+      document.getElementById('processingDesc').textContent =
+        'Taking you to Valmont-Pay\'s secure Paystack-powered checkout page.';
+
+      try {
+        const res = await fetch('/api/v1/transaction/initialize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: email || 'customer@checkout.local',
+            amount: amount || 1,
+            merchant: merchant,
+            callback_url: callbackUrl
+          })
+        });
+        const json = await res.json();
+        if (json && json.status && json.data && json.data.pay_url) {
+          window.location.replace(json.data.pay_url);
+          return;
+        }
+        // Fallback: build the pay.html URL with legacy params
+        const fallback = '/pay.html?reference=' + encodeURIComponent(reference || '') +
+          '&amount=' + encodeURIComponent(amount) +
+          '&email=' + encodeURIComponent(email || '') +
+          '&merchant=' + encodeURIComponent(merchant) +
+          (callbackUrl ? '&callback_url=' + encodeURIComponent(callbackUrl) : '');
+        window.location.replace(fallback);
+      } catch (err) {
+        procStage.classList.add('hidden');
+        document.getElementById('failedStage').classList.remove('hidden');
+        document.getElementById('failedDesc').textContent =
+          'Could not start secure checkout. Please go back and try again.';
+      }
+    })();
 
     let currentChannel = 'momo';
 
