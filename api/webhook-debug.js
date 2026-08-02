@@ -59,15 +59,15 @@ async function checkSupabaseConnectivity() {
  * Check webhook configuration state.
  */
 function getWebhookConfigState() {
-  const webhookSecret = process.env.WEBHOOK_SECRET || process.env.PAYSTACK_SECRET_KEY || '';
+  const webhookSecret = process.env.PAYSTACK_SECRET_KEY || process.env.WEBHOOK_SECRET || '';
   const paystackKey = process.env.PAYSTACK_SECRET_KEY || '';
 
   return {
     webhookSecretConfigured: Boolean(webhookSecret),
-    webhookSecretSource: process.env.WEBHOOK_SECRET
-      ? 'WEBHOOK_SECRET'
-      : process.env.PAYSTACK_SECRET_KEY
-        ? 'PAYSTACK_SECRET_KEY'
+    webhookSecretSource: process.env.PAYSTACK_SECRET_KEY
+      ? 'PAYSTACK_SECRET_KEY'
+      : process.env.WEBHOOK_SECRET
+        ? 'WEBHOOK_SECRET (legacy fallback)'
         : null,
     paystackSecretKeyConfigured: Boolean(paystackKey),
     paystackSecretKeyPrefix: paystackKey ? `${paystackKey.substring(0, 12)}...` : null,

@@ -2,10 +2,10 @@
 -- Valmont-Pay — Tenants table migration
 -- Run this in the Supabase SQL editor once per project.
 --
--- The `tenants` table is the admin-controlled registry of every merchant
--- on the gateway. Rows here override the env-var / in-code defaults in
--- lib/tenants.js, so an admin can add/edit/disable a tenant without a
--- redeploy.
+-- Effective tenant configuration uses one explicit precedence everywhere:
+--   non-empty TENANT__... env var > non-null DB value > in-code default.
+-- The database remains the admin-editable source; deployment env vars are
+-- intentional operator overrides, while defaults make a clean deploy usable.
 -- ═══════════════════════════════════════════════════════════════════════
 
 create table if not exists public.tenants (
@@ -15,6 +15,8 @@ create table if not exists public.tenants (
   brand_color      text not null default '#f68b1e',
   logo_url         text not null default '/logo.svg',
   currency         text not null default 'GHS',
+  -- Display/admin metadata only. This value NEVER selects Paystack credentials;
+  -- payment mode is determined by the actual configured sk_test_/sk_live_ key.
   environment      text not null default 'test' check (environment in ('test','live')),
   webhook_url      text,
   paystack_subaccount text,       -- optional ACCT_xxx code for Paystack split payout
@@ -53,26 +55,52 @@ drop policy if exists "tenants service-role only" on public.tenants;
 create policy "tenants service-role only" on public.tenants
   for all using (auth.role() = 'service_role') with check (auth.role() = 'service_role');
 
--- Seed the first tenant: valmont-electricals.
--- Conflict = DO UPDATE so the migration is idempotent (running it twice
--- won't overwrite an admin's changes).
-insert into public.tenants (
+-- Seed both built-in tenants. The Electricals receiver is operational by
+-- default; Valmont Web has no receiver contract yet, so its URL remains NULL.
+--
+-- On re-run, an existing non-null webhook_url wins so prior admin edits are
+-- preserved. The built-in environment labels are intentionally corrected to
+-- LIVE below; environment is display-only and does not route Paystack traffic.
+insert into public.tenants as existing (
   key, display_name, brand_color, currency, environment,
   webhook_url, paystack_subaccount, settlement_account,
   allowed_domains,
   secret_key_1, public_key, status
-) values (
+) values
+(
   'valmont-electricals',
   'Valmont Electricals',
   '#f68b1e',
   'GHS',
-  'test',
-  NULL,                              -- webhook_url starts empty; merchant sets it from the dashboard
+  'live',
+  'https://valmontelectricals.com/api/valmontpay/webhook',
   null,
   'GCB Bank - 1234567890',
   array['valmontelectricals.com','valmontweb.com','valmontpay.app','localhost'],
   'vme_secret_dev_key_1',
   'vme_pub_dev_key_1',
   'active'
+),
+(
+  'valmontweb',
+  'Valmont Web',
+  '#2563eb',
+  'GHS',
+  'live',
+  null,
+  null,
+  'GCB Bank - 0987654321',
+  array['valmontweb.com','valmontpay.app','localhost'],
+  'vmw_secret_dev_key_1',
+  'vmw_pub_dev_key_1',
+  'active'
 )
-on conflict (key) do nothing;   -- don't overwrite any admin edits on re-run
+on conflict (key) do update set
+  webhook_url = coalesce(existing.webhook_url, excluded.webhook_url);
+
+-- Correct rows created by the original seed, which labelled production
+-- built-ins as TEST. This is safe because the label is not a payment-mode gate.
+update public.tenants
+set environment = 'live'
+where key in ('valmont-electricals', 'valmontweb')
+  and environment is distinct from 'live';

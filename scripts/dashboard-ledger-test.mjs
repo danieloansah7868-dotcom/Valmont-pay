@@ -158,16 +158,19 @@ const charge = await post('/api/v1/transaction/charge', {
   wallet_number: '0000000000',
   amount: 75.5
 });
-check(charge.trx_status === 'SUCCESS', 'a valid charge clears');
+check(
+  charge.trx_status === 'PENDING' && charge.secure_checkout_url,
+  'an unverified charge stays PENDING and points to secure Paystack checkout'
+);
 
 snapshot = await get('/api/transactions');
-check(snapshot.transactions.length === 1, 'the real transaction is on the dashboard ledger');
+check(snapshot.transactions.length === 1, 'the payment intent remains on the dashboard ledger');
 check(snapshot.transactions[0].reference === reference, 'the ledger row carries the real reference');
-check(snapshot.balance === 75.5, 'the balance is calculated from the real successful payment');
+check(snapshot.balance === 0, 'an unverified payment never changes the balance');
 
 const legacy = await get('/api/v1/merchant/dashboard');
-check(legacy.data.balance === 75.5 && legacy.data.transactions.length === 1,
-  'the legacy dashboard endpoint reads from the same single ledger');
+check(legacy.data.balance === 0 && legacy.data.transactions.length === 1,
+  'the legacy dashboard endpoint reads the same safe PENDING ledger');
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

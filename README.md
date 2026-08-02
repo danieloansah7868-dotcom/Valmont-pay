@@ -74,6 +74,30 @@ curl -X POST http://localhost:3000/api/initialize-payment \
 curl "http://localhost:3000/api/verify-payment?reference=VP-123456"
 ```
 
+### Tenant configuration precedence
+
+Every tenant consumer resolves one effective configuration object in
+`lib/tenants.js` — the tenant-list/admin APIs, Tenants UI, Dashboard Webhook
+Settings and outbound webhook forwarder cannot disagree:
+
+1. A non-empty tenant env var, e.g.
+   `TENANT__VALMONT_ELECTRICALS__WEBHOOK_URL` (operator override)
+2. A non-null row value in `public.tenants` (admin-editable source)
+3. The in-code built-in default
+
+`TENANTS_JSON` is also an environment source; a tenant-specific `TENANT__...`
+variable wins if both define a field. A `NULL` DB `webhook_url` is absent rather
+than an instruction to erase the default, so Valmont Electricals falls back to
+`https://valmontelectricals.com/api/valmontpay/webhook`. The SQL migration in
+`scripts/supabase-tenants-schema.sql` seeds the same URL and preserves any
+existing non-null admin value when re-run.
+
+The tenant `environment` field is **display-only metadata**. It labels rows as
+Test or Live in the admin UI but never chooses a Paystack credential. Payment
+initialization/verification uses the configured tenant Paystack secret (or the
+global `PAYSTACK_SECRET_KEY` fallback); the credential's own `sk_test_` or
+`sk_live_` prefix determines which Paystack mode receives the request.
+
 ### Database (Supabase) — where transactions actually live
 
 The dashboard reads `/api/transactions`, which is backed by the Supabase
@@ -122,10 +146,10 @@ telling the customer the payment cleared.
 ### Webhook (real payments -> dashboard)
 
 Point your Paystack dashboard webhook URL at `https://<your-domain>/api/webhook`.
-Signature verification prefers `WEBHOOK_SECRET` and **falls back to
-`PAYSTACK_SECRET_KEY`**, because Paystack signs the `x-paystack-signature` header
-with your Paystack secret key — so a project that only sets `PAYSTACK_SECRET_KEY`
-still works. The HMAC is always computed over the **exact raw request bytes**,
+Signature verification uses `PAYSTACK_SECRET_KEY` authoritatively, because that
+is the key Paystack uses for the `x-paystack-signature` HMAC. `WEBHOOK_SECRET`
+is only a legacy fallback when no Paystack key exists, so a stale test webhook
+secret cannot reject live callbacks. The HMAC is always computed over the **exact raw request bytes**,
 never a re-serialized payload. The handler converts pesewas back to GH₵ and
 upserts the transaction into Supabase through the same shared helper the
 dashboard checkout uses.
@@ -286,7 +310,7 @@ authentic payment is not dropped over formatting.
 
 | Question | Answer |
 |---|---|
-| Should `WEBHOOK_SECRET` equal `PAYSTACK_SECRET_KEY`? | **Leave `WEBHOOK_SECRET` unset.** Paystack signs with the secret key. If it *is* set and differs, every event is rejected with `400`. |
+| Should `WEBHOOK_SECRET` equal `PAYSTACK_SECRET_KEY`? | Leave it unset unless a legacy/local custom event needs it. Paystack verification always uses `PAYSTACK_SECRET_KEY` when present, so a stale `WEBHOOK_SECRET` cannot override the live key. |
 | Webhook URL | Exactly `https://valmont-pay.vercel.app/api/webhook` — https, no trailing slash. Preview deployment URLs never receive production webhooks. |
 | Test vs Live mode | Each mode has its **own** webhook URL field and its **own** secret key. An `sk_test_` deployment only ever receives Test Mode events. |
 | `charge.success` / `charge.failed` | Paystack has no per-event subscription UI — it POSTs **every** event to your one URL. This handler processes those two and returns `200 (ignored)` for the rest, so Paystack never retries or disables the endpoint. |
@@ -382,8 +406,8 @@ npm test
 | `SUPABASE_URL` | **Required** | Supabase project URL. Without it the dashboard cannot load or store transactions. |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Required (preferred)** | Trusted server-side writes. Bypasses Row Level Security so checkout/webhook writes are never silently rejected. |
 | `SUPABASE_ANON_KEY` | Fallback only | Works **only** when the `transactions` table has explicit RLS insert/select policies. |
-| `PAYSTACK_SECRET_KEY` | **Required** | Paystack API calls, and the fallback webhook signing secret. |
-| `WEBHOOK_SECRET` | Optional | Overrides the webhook signing secret. Omit it and `PAYSTACK_SECRET_KEY` is used, which is what Paystack actually signs with. |
+| `PAYSTACK_SECRET_KEY` | **Required** | Paystack API calls and authoritative inbound Paystack webhook verification. |
+| `WEBHOOK_SECRET` | Optional | Legacy fallback only when no Paystack key is configured; it never overrides `PAYSTACK_SECRET_KEY`. |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Optional | Admin dashboard login. |
 | `WHATSAPP_WEBHOOK_URL` | Optional | WhatsApp receipt hook. Receives POST `{ phone, message, reference }` for every SUCCESS payment. |
 | `SMS_WEBHOOK_URL` | Optional | Generic SMS receipt hook. Same JSON payload shape as the WhatsApp hook. |

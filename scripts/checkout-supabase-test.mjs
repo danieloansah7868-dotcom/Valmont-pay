@@ -18,7 +18,7 @@
  *   3. A successful charge is persisted, and reappears through /api/transactions.
  *   4. A returned Supabase `{ error }` (e.g. an RLS denial) is NOT ignored.
  *   5. /api/transactions surfaces read errors and missing configuration.
- *   6. The webhook prefers WEBHOOK_SECRET and falls back to PAYSTACK_SECRET_KEY.
+ *   6. Paystack webhook verification uses PAYSTACK_SECRET_KEY authoritatively.
  */
 
 import assert from 'node:assert/strict';
@@ -76,6 +76,24 @@ const fakeSupabase = {
 
 const store = require('../lib/transaction-store.js');
 store.setSupabaseClient(fakeSupabase);
+
+// server.js also refreshes tenant configuration during boot. Keep that lookup
+// offline too; tenant persistence has its own focused test suite.
+const tenantStore = require('../lib/tenant-store.js');
+tenantStore.setSupabaseClient({
+  from(table) {
+    assert.equal(table, 'tenants');
+    return {
+      select() {
+        return {
+          async order() {
+            return { data: [], error: null };
+          }
+        };
+      }
+    };
+  }
+});
 
 // -------------------------------------------------- 1. exact column mapping
 console.log('\n# Supabase column mapping');
@@ -259,66 +277,27 @@ const charge = await post('/api/v1/transaction/charge', {
   channel: 'Momo (MTN)',
   wallet_number: '0244000000'
 });
-check(charge.trx_status === 'SUCCESS', 'the dashboard checkout charge clears');
-check(charge.persisted === true, 'the charge response reports the transaction was persisted');
+check(
+  charge.trx_status === 'PENDING' && charge.secure_checkout_url,
+  'an unverified dashboard charge stays PENDING and returns secure checkout'
+);
+check(
+  !upsertedRows.some(row => row.reference === reference),
+  'an unverified charge is never persisted as SUCCESS'
+);
 
-const chargeRow = upsertedRows.find(r => r.reference === reference);
-check(Boolean(chargeRow), 'the charge wrote a row to Supabase (no webhook involved)');
-check(
-  chargeRow && Object.keys(chargeRow).sort().join(',') ===
-    ['amount', 'customer_email', 'merchant_name', 'paid_at', 'payment_method', 'reference', 'status'].join(','),
-  'the charge row uses EXACTLY the 7 required columns'
-);
-check(chargeRow && !('updated_at' in chargeRow), 'the charge row does NOT include updated_at');
-check(chargeRow && chargeRow.status === 'SUCCESS', 'the charge row is marked SUCCESS');
-check(chargeRow && chargeRow.amount === 120.25, 'the charge row carries the confirmed amount');
-check(
-  chargeRow && chargeRow.customer_email === 'dashboard-buyer@example.com',
-  'the charge row carries the customer email'
-);
-check(
-  chargeRow && chargeRow.merchant_name === 'Valmont Electricals',
-  'the charge row carries the merchant name'
-);
-check(chargeRow && typeof chargeRow.paid_at === 'string', 'the charge row has a paid_at timestamp');
-
-// THE ACTUAL BUG: does it come back out through /api/transactions?
+// Supabase is still the durable feed; the server merges the fresh in-memory
+// PENDING intent so it remains visible without inflating collected balance.
 const feed = await get('/api/transactions');
 check(feed.success === true, 'GET /api/transactions succeeds');
 check(feed.source === 'supabase', '/api/transactions reads from Supabase when configured');
 const listed = feed.transactions.find(t => t.reference === reference);
-check(Boolean(listed), 'the dashboard checkout transaction APPEARS in /api/transactions');
-check(listed && listed.status === 'SUCCESS', 'it is listed as SUCCESS');
+check(Boolean(listed), 'the PENDING payment intent appears in /api/transactions');
+check(listed && listed.status === 'PENDING', 'it remains listed as PENDING');
 check(listed && listed.amount === 120.25, 'it is listed with the right amount');
 check(listed && listed.customer === 'dashboard-buyer@example.com', 'it is listed with the customer');
-check(listed && listed.channel === 'Momo (MTN)', 'it is listed with the payment channel');
-check(feed.balance === 120.25, 'the dashboard balance reflects the checkout payment');
-check(feed.count >= 1, 'the dashboard no longer shows zero transactions');
-
-// A declined charge is recorded too.
-const declined = await post('/api/v1/transaction/charge', {
-  reference: 'VP-DECLINED-1',
-  amount: 40,
-  merchant: 'Valmont Electricals',
-  email: 'declined@example.com',
-  channel: 'Card',
-  card_number: '4084080000000409'
-});
-check(declined.trx_status === 'FAILED', 'a declined card is reported as FAILED');
-const declinedRow = upsertedRows.find(r => r.reference === 'VP-DECLINED-1');
-check(Boolean(declinedRow), 'the declined charge is persisted for the record');
-check(declinedRow && declinedRow.status === 'FAILED', 'the declined row is marked FAILED');
-check(declinedRow && declinedRow.paid_at === null, 'the declined row has paid_at = null');
-check(
-  declinedRow && !('updated_at' in declinedRow),
-  'the declined row does NOT include updated_at'
-);
-
-const feedAfterDecline = await get('/api/transactions');
-check(
-  feedAfterDecline.balance === 120.25,
-  'a declined payment never inflates the dashboard balance'
-);
+check(feed.balance === 0, 'an unverified payment never inflates the dashboard balance');
+check(feed.count >= 1, 'the dashboard no longer shows zero payment intents');
 
 // A Supabase read failure must surface through the endpoint, not look empty.
 nextReadResult = { data: null, error: { message: 'permission denied for table transactions' } };
@@ -331,20 +310,6 @@ check(
   'the Supabase read error reaches the client'
 );
 nextReadResult = null;
-
-// Ensure simulated checkout is blocked when PAYSTACK_SECRET_KEY is a live key
-const savedPaystackKeyForCharge = process.env.PAYSTACK_SECRET_KEY;
-process.env.PAYSTACK_SECRET_KEY = 'sk_live_test_key_abc';
-const liveBlockedRes = await fetch(base + '/api/v1/transaction/charge', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ reference: 'VP-LIVE-BLOCK', amount: '50.00', channel: 'mobile_money', wallet_number: '0244123456' })
-});
-check(liveBlockedRes.status === 403, 'POST /api/v1/transaction/charge returns 403 in live production mode (sk_live_)');
-const liveBlockedBody = await liveBlockedRes.json();
-check(liveBlockedBody.status === false && liveBlockedBody.message.includes('live production mode'), 'blocked charge reports helpful live production mode error message');
-if (savedPaystackKeyForCharge === undefined) delete process.env.PAYSTACK_SECRET_KEY;
-else process.env.PAYSTACK_SECRET_KEY = savedPaystackKeyForCharge;
 
 // ----------------------------------------------------- 6b. deployment health
 console.log('\n# /api/health environment verification');
@@ -371,15 +336,20 @@ const { getWebhookSecret, verifySignature } = await import('../api/webhook.js');
 const savedWebhookSecret = process.env.WEBHOOK_SECRET;
 const savedPaystackKey = process.env.PAYSTACK_SECRET_KEY;
 
-process.env.WEBHOOK_SECRET = 'explicit-webhook-secret';
+process.env.WEBHOOK_SECRET = 'stale-test-webhook-secret';
 process.env.PAYSTACK_SECRET_KEY = 'sk_test_paystack';
-check(getWebhookSecret() === 'explicit-webhook-secret', 'WEBHOOK_SECRET is preferred');
-
-delete process.env.WEBHOOK_SECRET;
 check(
   getWebhookSecret() === 'sk_test_paystack',
-  'PAYSTACK_SECRET_KEY is the fallback (Paystack signs with the secret key)'
+  'PAYSTACK_SECRET_KEY is authoritative even when WEBHOOK_SECRET differs'
 );
+
+delete process.env.PAYSTACK_SECRET_KEY;
+check(
+  getWebhookSecret() === 'stale-test-webhook-secret',
+  'WEBHOOK_SECRET remains available only as a legacy fallback'
+);
+delete process.env.WEBHOOK_SECRET;
+process.env.PAYSTACK_SECRET_KEY = 'sk_test_paystack';
 
 const body = JSON.stringify({ event: 'charge.success', data: { reference: 'VP-SIG' } });
 const paystackSignature = crypto
@@ -396,6 +366,7 @@ check(
 );
 
 delete process.env.PAYSTACK_SECRET_KEY;
+delete process.env.WEBHOOK_SECRET;
 check(getWebhookSecret() === '', 'no secret configured yields an empty secret');
 
 if (savedWebhookSecret === undefined) delete process.env.WEBHOOK_SECRET;
