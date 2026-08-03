@@ -20,6 +20,10 @@
       "dest": "/api/verify-payment.js"
     },
     {
+      "src": "/api/log/bad-amount",
+      "dest": "/api/log-bad-amount.js"
+    },
+    {
       "src": "/api/webhook",
       "dest": "/api/webhook.js"
     },

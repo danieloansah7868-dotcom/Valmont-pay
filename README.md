@@ -25,23 +25,38 @@ Your gateway prototype contains the following master-built systems:
 
 Both `pay.html` and `checkout.html` are fully dynamic — nothing is hardcoded.
 
-| Page | Example URL | Reads |
+> **⚠️ Amounts are in CEDIS (major units), never pesewas.** Send
+> `amount=23.50` for GH₵23.50 — sending `amount=2300` will charge
+> GH₵2,300 instead, and pay.html will refuse to render the form and
+> audit the bad URL. The full integration contract — every parameter,
+> every unit, every error state — is in
+> **[`docs/tenant-integration.md`](docs/tenant-integration.md)**. Read
+> it before wiring a new storefront.
+
+| Page | Example URL (cedis) | Reads |
 |---|---|---|
-| `pay.html` | `pay.html?amount=50&merchant=Valmont+Electricals` | `merchant`, `amount` |
-| `checkout.html` | `checkout.html?reference=VP-123456&merchant=Valmont+Electricals&amount=50&email=buyer@example.com` | `reference`, `merchant`, `amount`, `email`, `callback_url` |
+| `pay.html` | `pay.html?amount=50.00&merchant=valmont-electricals` | `merchant`, `amount` |
+| `checkout.html` | `checkout.html?reference=VP-123456&merchant=valmont-electricals&amount=50.00&email=buyer@example.com` | `reference`, `merchant`, `amount`, `email`, `callback_url` |
 
 ```javascript
 const urlParams = new URLSearchParams(window.location.search);
-const merchant = urlParams.get('merchant') || 'Valmont-Pay';
+const merchant = urlParams.get('merchant') || 'valmont-electricals';
+// amount is cedis (e.g. 23.50 for GH₵23.50). Never multiply by 100.
 const amount = parseFloat(urlParams.get('amount')) || 0;
 
 document.getElementById('merchant-name').textContent = merchant;
-document.getElementById('amount-display').textContent = 'GH₵ ' + amount.toFixed(2);
+document.getElementById('amount-display').textContent = 'GH\u20b5 ' + amount.toFixed(2);
 ```
 
-If `merchant` is absent it falls back to `Valmont-Pay`; if `amount` is absent it falls back to `0.00`
-(never a hardcoded figure). In the dashboard, the **Merchant Name** field starts empty so you can type
-any merchant name you like.
+If `merchant` is absent it falls back to `valmont-electricals`; if `amount` is absent or fails
+the unit-mismatch guard, pay.html shows the *Payment Link Unavailable* card and POSTs the
+offending URL to `/api/log/bad-amount` (logged as
+`[VALMONT-PAY][BAD-AMOUNT] unit=mismatch reason=looks-like-pesewas`). In the dashboard, the
+**Merchant Name** field starts empty so you can type any merchant name you like.
+
+For a tenant-authenticated server-to-server flow that never carries the amount in the URL,
+use `POST /api/transaction/initialize` instead — see
+[`docs/tenant-integration.md` § 2](docs/tenant-integration.md#2-secure-flow-recommended--step-by-step).
 
 ---
 
@@ -65,6 +80,8 @@ export ADMIN_PASSWORD=your-strong-password
 |---|---|---|
 | `/api/initialize-payment` | POST | Initializes a Paystack transaction. Forwards your `reference` and converts the amount to **pesewas (x100)**. |
 | `/api/verify-payment?reference=VP-123456` | GET | Verifies a transaction with Paystack and returns the raw payload plus a flattened `summary`. |
+| `/api/transaction/initialize` | POST | **Tenant-authenticated** initializer (Bearer token). Returns a one-time `access_code` so the amount is server-resolved and the customer can never edit it. Use this for new integrations. |
+| `/api/log/bad-amount` | POST | Audit endpoint hit by pay.html when a URL's `amount` looks like pesewas. Best-effort, always returns 200. |
 
 ```bash
 curl -X POST http://localhost:3000/api/initialize-payment \

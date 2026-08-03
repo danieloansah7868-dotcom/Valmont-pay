@@ -1267,6 +1267,48 @@ app.get('/api/transaction/access/:access_code', (req, res) => {
   });
 });
 
+// ─── POST /api/log/bad-amount — pay.html unit-mismatch audit endpoint ────
+//
+// Best-effort audit log. pay.html calls this via navigator.sendBeacon
+// when the URL's `amount` parameter looks like pesewas (e.g. `amount=2300`
+// for a GH₵23 cart) so we can see which client site is mis-configured.
+// Always returns 200 — see api/log-bad-amount.js for the full contract.
+app.all('/api/log/bad-amount', (req, res, next) => {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ success: false, error: 'Method not allowed' });
+  }
+  return next();
+});
+
+app.post('/api/log/bad-amount', (req, res) => {
+  try {
+    const body = req.body || {};
+    const rawAmount = typeof body.rawAmount === 'string' ? body.rawAmount.slice(0, 32) : null;
+    const reason = typeof body.reason === 'string' ? body.reason.slice(0, 64) : null;
+    const suspectUnit = typeof body.suspectUnit === 'string' ? body.suspectUnit.slice(0, 16) : null;
+    const merchant = typeof body.merchant === 'string' ? body.merchant.slice(0, 64) : null;
+    const ref = typeof body.ref === 'string' ? body.ref.slice(0, 64) : null;
+    const url = typeof body.url === 'string' ? body.url.slice(0, 512) : null;
+    const userAgent = typeof body.userAgent === 'string' ? body.userAgent.slice(0, 256) : null;
+    const path = typeof body.path === 'string' ? body.path.slice(0, 64) : null;
+
+    if (reason === 'looks-like-pesewas' && rawAmount) {
+      console.warn(
+        `[VALMONT-PAY][BAD-AMOUNT] unit=mismatch reason=${reason} ` +
+        `rawAmount=${rawAmount} suspectUnit=${suspectUnit || 'pesewas'} ` +
+        `merchant=${merchant || 'unknown'} ref=${ref || 'none'} ` +
+        `path=${path || 'unknown'} url=${url || 'unknown'} ` +
+        `ua=${userAgent || 'unknown'}`
+      );
+    }
+  } catch (err) {
+    console.warn('[VALMONT-PAY][BAD-AMOUNT] malformed body (ignored):', err && err.message ? err.message : err);
+  }
+  res.set('Cache-Control', 'no-store');
+  return res.status(200).json({ success: true });
+});
+
 // ─── Update existing Paystack webhook to also forward to tenant ─────────
 
 // We patch the existing webhook handler by wrapping the success path.
