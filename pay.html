@@ -44,9 +44,9 @@
     </div>
     <div class="p-8 text-center">
       <div class="h-16 w-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center text-3xl font-black mx-auto mb-4">✕</div>
-      <h2 class="text-xl font-black text-gray-800 mb-2">Payment Link Invalid</h2>
+      <h2 id="errorTitle" class="text-xl font-black text-gray-800 mb-2">Payment Link Invalid</h2>
       <p id="errorMessage" class="text-gray-500 font-medium text-sm">This payment link is invalid or has expired.</p>
-      <p class="text-gray-400 text-xs mt-4">Please contact the merchant for a new payment link.</p>
+      <p id="errorHint" class="text-gray-400 text-xs mt-4">Please contact the merchant for a new payment link.</p>
     </div>
   </div>
 
@@ -159,18 +159,44 @@
   </div>
 
   <script>
-    // ---------------------------------------------------------------
-    // SECURE PAYMENT PAGE
-    // amount, merchant, reference are all RESOLVED SERVER-SIDE from
-    // the access_code. The customer can never edit the amount.
-    // ---------------------------------------------------------------
+    // ===============================================================
+    // VALMONT-PAY SECURE PAYMENT PAGE
+    // ===============================================================
+    //
+    // AMOUNT UNIT CONTRACT (enforced below — see validateAmountUrl):
+    //   pay.html?amount= is ALWAYS in CEDIS (major units) — the same
+    //   unit the gateway server, Paystack's downstream conversion, the
+    //   Supabase transactions.amount column, the dashboard, and the
+    //   Nanahemaa Market checkout all speak.
+    //
+    //   Send  `amount=23`     for GH₵23
+    //   Send  `amount=23.50`  for GH₵23.50
+    //   Send  `amount=1500.00` for GH₵1,500  (the trailing .00 is required
+    //                                        to disambiguate from pesewas)
+    //
+    //   Never send `amount=2300` (pesewas) — pay.html will REFUSE to
+    //   render the payment form and will log the rejection server-side
+    //   so the offending client site is auditable.
+    //
+    //   Full contract: docs/tenant-integration.md
+    //
+    // The amount on the access-code path (the recommended flow) is
+    // server-resolved and can never be edited by the customer. The
+    // validation below only guards the legacy ?amount=&merchant= link
+    // form, which storefronts historically used before the access-code
+    // flow existed.
+    // ===============================================================
+
     const urlParams = new URLSearchParams(window.location.search);
 
     // Accept either access_code (new secure flow) or legacy params
     const accessCode = urlParams.get('access_code');
     // Support ?tenant=valmont-electricals as the canonical param (merchant is an alias)
     const merchantFromUrl = urlParams.get('merchant') || urlParams.get('tenant');
-    const amountFromUrl = parseFloat(urlParams.get('amount')) || 0;
+    // `amount` is read as a RAW STRING so we can distinguish "23" from
+    // "23.00" and "23.5" — the unit validator needs the original form to
+    // detect a pesewas-style integer like "2300" or "1500".
+    const amountRawFromUrl = urlParams.get('amount');
     // Storefront integrations send `reference`; older links used `ref`.
     const refFromUrl = urlParams.get('reference') || urlParams.get('ref');
     // Paystack subaccount code → automatic split settlement (98%/2% for
@@ -179,6 +205,127 @@
 
     let paymentData = null;
     let tenantData = null;
+
+    // ---------------------------------------------------------------
+    // AMOUNT UNIT VALIDATION
+    //
+    // Reject any amount that looks like pesewas (Paystack's smallest-
+    // currency-unit convention) when the client is expected to send
+    // cedis. The contract is documented in docs/tenant-integration.md
+    // and at the top of this file.
+    //
+    // Heuristic: a plain integer ≥ 1000 with no decimal point is almost
+    // certainly pesewas — a real cedis value of GH₵1,500 is sent as
+    // "1500.00" by every correctly-integrated client. The threshold of
+    // 1000 is deliberately well above any realistic cart total in cedis
+    // and is the smallest number that would round-trip to 100× when
+    // mis-classified.
+    //
+    // Returns {ok, amount, error, raw, suspectUnit}. Exposed on
+    // window.ValmontPayAmount so the regression test can exercise it
+    // without instantiating a full DOM.
+    // ---------------------------------------------------------------
+    function validateAmountUrl(raw) {
+      if (raw === null || raw === undefined || String(raw).trim() === '') {
+        return { ok: false, amount: 0, error: 'missing', raw, suspectUnit: null };
+      }
+
+      const trimmed = String(raw).trim();
+
+      // Acceptable numeric forms. We forbid leading + and disallow
+      // scientific notation, currency symbols, and whitespace inside the
+      // number — the gateway's contract is plain decimal.
+      if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+        return {
+          ok: false,
+          amount: 0,
+          error: 'not-numeric',
+          raw: trimmed,
+          suspectUnit: null,
+          message: 'Amount must be a plain decimal number in cedis, e.g. 23 or 23.50.'
+        };
+      }
+
+      const hasDecimal = trimmed.includes('.');
+      const value = Number(trimmed);
+      if (!Number.isFinite(value) || value <= 0) {
+        return {
+          ok: false,
+          amount: 0,
+          error: 'not-positive',
+          raw: trimmed,
+          suspectUnit: null
+        };
+      }
+
+      // Upper bound: GH₵ 1,000,000. Bigger amounts use the dashboard's
+      // checkout-link generator, which goes through the access-code flow
+      // and never carries the amount in the URL.
+      if (value > 1_000_000) {
+        return {
+          ok: false,
+          amount: 0,
+          error: 'too-large',
+          raw: trimmed,
+          suspectUnit: null,
+          message: 'Amount is above the maximum supported by URL links (GH₵ 1,000,000). Use the secure checkout-link generator instead.'
+        };
+      }
+
+      // The pesewas heuristic: integer ≥ 1000, no decimal. We always
+      // round to 2 decimal places for the gateway, so any value sent
+      // without a decimal at this magnitude is almost certainly
+      // mistakenly-typed pesewas.
+      if (!hasDecimal && Math.floor(value) >= 1000) {
+        return {
+          ok: false,
+          amount: 0,
+          error: 'looks-like-pesewas',
+          raw: trimmed,
+          suspectUnit: 'pesewas',
+          message:
+            'Amount looks like pesewas. This gateway expects cedis (major units) — ' +
+            'e.g. amount=' + (value / 100).toFixed(2) +
+            ' not amount=' + trimmed + '. Contact the merchant site.'
+        };
+      }
+
+      return { ok: true, amount: value, error: null, raw: trimmed, suspectUnit: null };
+    }
+
+    // Expose for tests (and so the dashboard / future tools can reuse
+    // the same unit-detection logic without copy-paste).
+    window.ValmontPayAmount = { validateAmountUrl, PESEWAS_INTEGER_THRESHOLD: 1000 };
+
+    // Fire-and-forget audit log for rejected amounts. The server-side
+    // endpoint is best-effort: a failed POST never blocks rendering.
+    function reportBadAmount(rejection) {
+      try {
+        const payload = {
+          path: window.location.pathname,
+          url: window.location.href,
+          rawAmount: rejection.raw,
+          reason: rejection.error,
+          suspectUnit: rejection.suspectUnit,
+          merchant: merchantFromUrl || null,
+          ref: refFromUrl || null,
+          userAgent: navigator.userAgent
+        };
+        // sendBeacon is the right tool here: the page may be navigating
+        // away, the body is small, and we don't need a response.
+        if (navigator.sendBeacon) {
+          const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+          navigator.sendBeacon('/api/log/bad-amount', blob);
+        } else {
+          fetch('/api/log/bad-amount', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            keepalive: true
+          }).catch(() => {});
+        }
+      } catch (_) { /* never let audit logging break the page */ }
+    }
 
     // Try to resolve from access_code first
     async function loadPaymentDetails() {
@@ -211,10 +358,38 @@
         return;
       }
 
-      // Legacy flow: amount and merchant come from URL (less secure)
-      if (merchantFromUrl && amountFromUrl > 0) {
+      // Legacy flow: amount and merchant come from URL (less secure).
+      // The unit validator below is the gate that prevents the
+      // "Electricals bug" (amount=2300 charging GH₵2,300 for a GH₵23
+      // cart) from ever reaching /api/initialize-payment.
+      if (merchantFromUrl && amountRawFromUrl !== null && amountRawFromUrl !== '') {
+        const validation = validateAmountUrl(amountRawFromUrl);
+
+        if (!validation.ok) {
+          if (validation.suspectUnit === 'pesewas') {
+            // Specifically the unit-mismatch case. The page must NOT
+            // render a payment form — the customer must not be one tap
+            // away from a 100× charge.
+            console.warn(
+              '[VALMONT-PAY] Rejected pay.html URL: amount=' + validation.raw +
+              ' looks like pesewas. Cedis expected. ' +
+              '(merchant=' + (merchantFromUrl || '?') + ', ref=' + (refFromUrl || '?') + ')'
+            );
+            reportBadAmount(validation);
+            showUnitError(validation);
+            return;
+          }
+          if (validation.message) {
+            showError(validation.message);
+            return;
+          }
+          showError('This payment link has an invalid amount. Please contact the merchant for a new link.');
+          return;
+        }
+
+        // Unit check passed. Build paymentData and continue.
         paymentData = {
-          amount: amountFromUrl,
+          amount: validation.amount,
           reference: refFromUrl || ('VP-' + Math.floor(100000 + Math.random() * 900000)),
           currency: 'GHS',
           email: urlParams.get('email') || '',
@@ -262,7 +437,7 @@
       document.getElementById('merchantLabel').textContent = displayName;
       document.getElementById('merchantName').innerHTML = safeName;
 
-      const locked = amountFromUrl > 0;
+      const locked = paymentData && paymentData.amount > 0;
       if (locked) {
         document.getElementById('lockedInfo').classList.remove('hidden');
         document.getElementById('lockedRef').textContent = refFromUrl || paymentData.reference || '---';
@@ -289,7 +464,9 @@
       const header = document.getElementById('merchantHeader');
       header.style.backgroundColor = brandColor;
 
-      // Set amount (server-resolved)
+      // Set amount (server-resolved). The display line is always in
+      // cedis — the gateway, the database, the customer's bank
+      // statement, and the merchant's invoice all use cedis.
       const currency = paymentData.currency || 'GHS';
       const symbol = currency === 'GHS' ? 'GH₵' : currency === 'NGN' ? '₦' : currency + ' ';
       document.getElementById('amountDisplay').textContent = symbol + ' ' + Number(paymentData.amount).toFixed(2);
@@ -329,10 +506,34 @@
     }
 
     function showError(message) {
+      const titleEl = document.getElementById('errorTitle');
+      if (titleEl) titleEl.textContent = 'Payment Link Invalid';
+      const hintEl = document.getElementById('errorHint');
+      if (hintEl) hintEl.textContent = 'Please contact the merchant for a new payment link.';
       document.getElementById('loadingState').classList.add('hidden');
       document.getElementById('paymentCard').classList.add('hidden');
       document.getElementById('errorState').classList.remove('hidden');
       document.getElementById('errorMessage').textContent = message || 'This payment link is invalid or has expired.';
+    }
+
+    // Specialised error variant for the unit-mismatch case. Uses the
+    // dedicated errorState card with a more specific title so the
+    // customer (and any screenshot they share) makes the unit problem
+    // obvious. The audit log has already been written by
+    // reportBadAmount() before this runs.
+    function showUnitError(rejection) {
+      const titleEl = document.getElementById('errorTitle');
+      if (titleEl) titleEl.textContent = 'Payment Link Unavailable';
+      const hintEl = document.getElementById('errorHint');
+      if (hintEl) {
+        hintEl.innerHTML =
+          'This gateway expects amounts in <strong>cedis</strong> (major units), not pesewas. ' +
+          'The merchant site is sending the wrong unit — please contact them and share this URL so they can fix their integration.';
+      }
+      document.getElementById('loadingState').classList.add('hidden');
+      document.getElementById('paymentCard').classList.add('hidden');
+      document.getElementById('errorState').classList.remove('hidden');
+      document.getElementById('errorMessage').textContent = rejection.message;
     }
 
     // ---------------------------------------------------------------
@@ -387,7 +588,9 @@
         return;
       }
 
-      // 2. Otherwise initialize the transaction in the BACKEND and get a fresh access code
+      // 2. Otherwise initialize the transaction in the BACKEND and get a fresh access code.
+      //    The amount sent here is ALWAYS cedis (validateAmountUrl enforced
+      //    that in the legacy path; the access-code path is server-resolved).
       try {
         const res = await fetch('/api/initialize-payment', {
           method: 'POST',
