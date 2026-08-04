@@ -631,45 +631,42 @@ app.post('/api/webhook', async (req, res) => {
         error: persistence.error || null
       }, null, 2));
 
-      if (!persistence.ok) {
-        console.error(`[WEBHOOK ${requestId}] STEP 6/6 SUPABASE — ✗ Supabase rejected ${record.reference}: ${persistence.reason}. Common causes: Row Level Security blocking the anon key (use SUPABASE_SERVICE_ROLE_KEY), a missing column, or a type mismatch.`);
-      }
-
-      // ─── MULTI-TENANT: Forward webhook to the tenant's registered URL ───
-      // After persisting to Supabase, also dispatch the event to the
-      // appropriate tenant's webhook URL.
-      if (result.body && result.body.transaction) {
-        const trxRecord = result.body.transaction;
-        const data = req.body && req.body.data ? req.body.data : {};
-        const metadata = data.metadata && typeof data.metadata === 'object' ? data.metadata : {};
-        const merchantIdentifier = metadata.tenant_key || metadata.merchant || trxRecord.tenant_key || trxRecord.merchant;
-        const tenant = tenants.getTenantByIdentifier(merchantIdentifier);
-
-        if (tenant && tenant.webhook_url) {
-          const eventName = req.body && req.body.event ? String(req.body.event) : 'charge.success';
-          const reference = trxRecord.reference;
-
-          console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — forwarding ${eventName} for ${reference} to ${tenant.key} @ ${tenant.webhook_url}`);
-
-          webhookForwarder.dispatchWebhook(tenant, eventName, {
-            reference,
-            status: trxRecord.status || 'success',
-            amount: Number(trxRecord.amount) || 0,
-            currency: data.currency || tenant.currency || 'GHS',
-            channel: trxRecord.channel || data.channel || 'Unknown',
-            paid_at: trxRecord.timestamp || data.paid_at || new Date().toISOString(),
-            merchant: tenant.key,
-            gateway_reference: reference
-          }, reference);
-        } else if (tenant) {
-          console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — tenant ${tenant.key} has no webhook URL configured, skipping`);
-        } else {
-          console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — could not resolve tenant from merchant metadata, skipping`);
-        }
-      }
     }
   } else if (result.statusCode === 200) {
     console.log(`[WEBHOOK ${requestId}] STEP 6/6 SUPABASE — skipped (no transaction to save, or Supabase is not configured)`);
+  }
+
+  // ─── MULTI-TENANT: Forward webhook to the tenant's registered URL ───
+  // After attempting to persist to Supabase, also dispatch the event to the
+  // appropriate tenant's webhook URL.
+  if (result.statusCode === 200 && result.body && result.body.transaction) {
+    const trxRecord = result.body.transaction;
+    const data = req.body && req.body.data ? req.body.data : {};
+    const metadata = data.metadata && typeof data.metadata === 'object' ? data.metadata : {};
+    const merchantIdentifier = metadata.tenant_key || metadata.merchant || trxRecord.tenant_key || trxRecord.merchant;
+    const tenant = tenants.getTenantByIdentifier(merchantIdentifier);
+
+    if (tenant && tenant.webhook_url) {
+      const eventName = req.body && req.body.event ? String(req.body.event) : 'charge.success';
+      const reference = trxRecord.reference;
+
+      console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — forwarding ${eventName} for ${reference} to ${tenant.key} @ ${tenant.webhook_url}`);
+
+      webhookForwarder.dispatchWebhook(tenant, eventName, {
+        reference,
+        status: trxRecord.status || 'success',
+        amount: Number(trxRecord.amount) || 0,
+        currency: data.currency || tenant.currency || 'GHS',
+        channel: trxRecord.channel || data.channel || 'Unknown',
+        paid_at: trxRecord.timestamp || data.paid_at || new Date().toISOString(),
+        merchant: tenant.key,
+        gateway_reference: reference
+      }, reference);
+    } else if (tenant) {
+      console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — tenant ${tenant.key} has no webhook URL configured, skipping`);
+    } else {
+      console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — could not resolve tenant from merchant metadata, skipping`);
+    }
   }
 
   // ─── NOTIFY: instant SMS/WhatsApp receipt to customer + merchant ───────
