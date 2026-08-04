@@ -21,6 +21,11 @@
     if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
       window.location.href = '/admin-login.html';
     }
+    // Mutating admin APIs are guarded server-side. Attach the key captured
+    // at login (see admin-login.html) as the X-Admin-Key header.
+    function adminHeaders(extra) {
+      return Object.assign({ 'X-Admin-Key': sessionStorage.getItem('valmontAdminKey') || '' }, extra || {});
+    }
   </script>
 
   <!-- Header Navigation — Logo first (top), tabs + logout underneath -->
@@ -28,7 +33,7 @@
     <!-- Row 1: Logo + Logout -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
       <img src="/logo.svg" alt="Valmont Pay" style="height: 40px;">
-      <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" style="background:transparent;border:1px solid #f58c14;color:#f58c14;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700;">Logout</button>
+      <button onclick="sessionStorage.removeItem('adminLoggedIn'); sessionStorage.removeItem('valmontAdminKey'); window.location.href='/admin-login.html'" style="background:transparent;border:1px solid #f58c14;color:#f58c14;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700;">Logout</button>
     </div>
     <!-- Row 2: Tabs under the logo -->
     <nav style="display:flex;gap:4;">
@@ -77,9 +82,11 @@
         </form>
         <!-- Initted link presentation -->
         <div id="initResult" class="mt-4 p-3 bg-[#050d24] border border-[#142850] rounded-[4px] text-[12px] hidden justify-between items-center gap-2">
-          <span class="font-medium text-gray-400 truncate">Payment Link: <a href="#" id="paymentLinkUrl" target="_blank" class="text-[#f68b1e] font-bold underline hover:text-orange-300">https://valmont-pay.vercel.app/...</a></span>
+          <span class="font-medium text-gray-400 truncate">Payment Link: <a href="#" id="paymentLinkUrl" target="_blank" class="text-[#f68b1e] font-bold underline hover:text-orange-300">https://valmontpay.app/...</a></span>
           <button onclick="copyPaymentLink();" class="text-[10px] bg-[#142850] hover:bg-[#203c6d] text-white py-1 px-2 rounded font-black tracking-wider transition shrink-0">COPY</button>
         </div>
+        <p id="initResultMeta" class="text-gray-500 text-[10px] font-medium mt-1.5 hidden"></p>
+        <p id="initError" class="text-red-400 text-[11px] font-bold mt-1.5 hidden"></p>
       </div>
 
     </div>
@@ -282,6 +289,11 @@
         return;
       }
 
+      const errorEl = document.getElementById('initError');
+      const metaEl = document.getElementById('initResultMeta');
+      errorEl.classList.add('hidden');
+      metaEl.classList.add('hidden');
+
       fetch('/api/v1/transaction/initialize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -295,8 +307,25 @@
           document.getElementById('paymentLinkUrl').textContent = url;
           document.getElementById('initResult').classList.remove('hidden');
           document.getElementById('initResult').classList.add('flex');
+          // Tell the operator how long the link stays valid for the client.
+          if (res.data.link_expires_at) {
+            const expiry = new Date(res.data.link_expires_at);
+            metaEl.textContent = (res.data.link_durable
+              ? '✅ Link saved — stays valid until '
+              : '⚠️ Link valid (this server only) until ') +
+              expiry.toLocaleString() +
+              (res.data.link_durable ? ' — safe to send to your client now.' : '.');
+            metaEl.classList.remove('hidden');
+          }
           fetchDashboardData();
+        } else {
+          errorEl.textContent = '❌ ' + (res.message || 'Could not generate the payment link. Check the server logs.');
+          errorEl.classList.remove('hidden');
         }
+      })
+      .catch(err => {
+        errorEl.textContent = '❌ Network error: ' + err.message;
+        errorEl.classList.remove('hidden');
       });
     }
 
@@ -381,7 +410,7 @@
       try {
         const res = await fetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: adminHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ webhook_url: url })
         });
         const json = await res.json();

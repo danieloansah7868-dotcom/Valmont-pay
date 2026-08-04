@@ -60,6 +60,40 @@ use `POST /api/transaction/initialize` instead — see
 
 ---
 
+## 🔗 Payment links you can send to a client (durable)
+
+The dashboard's **Quick Launch Payment Link Generator** (`/dashboard.html` →
+email + amount → *Generate link*) returns a `pay.html?access_code=…` URL you
+can WhatsApp or email to a client. The client opens it, sees the amount locked
+server-side, and pays with MoMo or card via the embedded Paystack checkout.
+
+**Durability:** payment intents are persisted to the Supabase `payment_links`
+table, so a link keeps working after serverless cold starts, across instances
+and restarts — it is NOT the old 30-minute in-memory code. Links live for
+`PAYMENT_LINK_TTL_HOURS` hours (default **30 days**). Tenant API checkout
+sessions keep their documented 30-minute TTL.
+
+> ⚠️ **One-time setup required:** run
+> [`scripts/supabase-payment-links-schema.sql`](scripts/supabase-payment-links-schema.sql)
+> in your Supabase project (SQL Editor → Run). If the table is missing, the
+> generator refuses to hand out links (HTTP 502 with instructions) rather
+> than giving you a link that will 404 for your client.
+
+**URLs are host-first:** generated links always use the domain the request
+actually arrived on (allowlisted hosts only), so a stale `PUBLIC_BASE_URL`
+env var can never send customers to a dead domain again. Keep
+`PUBLIC_BASE_URL=https://valmontpay.app` set in Vercel as the non-HTTP
+fallback.
+
+**Admin API guard:** `/api/admin/*`, tenant key rotation, webhook-URL updates,
+`POST /api/manual-transaction`, `POST /api/webhook-debug` and terminal-status
+order writes (`PAID`/`CANCELLED`/…) now require the `X-Admin-Key` header
+matching `ADMIN_PASSWORD` (the admin pages attach it automatically after
+login). Storefront order creation with non-terminal statuses
+(`PENDING_MOMO`) stays public by design.
+
+---
+
 ## 💳 Paystack Integration
 
 Set your secret key before starting the server (copy `.env.example` to `.env`):

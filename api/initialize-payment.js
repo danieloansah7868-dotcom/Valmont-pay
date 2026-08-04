@@ -1,17 +1,14 @@
 import paystack from '../lib/paystack.js';
+import baseUrlModule from '../lib/base-url.js';
 
 const { initializePayment, generateReference } = paystack;
+const { publicBaseUrl } = baseUrlModule;
 
-// Build absolute URLs from the incoming request
+// Build absolute URLs from the incoming request. The (allowlisted) request
+// host always wins over PUBLIC_BASE_URL so a stale env var can never send
+// customers to a dead domain (see lib/base-url.js).
 function baseUrl(req) {
-  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/$/, '');
-  const headers = req.headers || {};
-  const proto = headers['x-forwarded-proto'] || req.protocol || 'http';
-  const host =
-    headers['x-forwarded-host'] ||
-    (typeof req.get === 'function' ? req.get('host') : null) ||
-    'localhost:3000';
-  return `${proto}://${host}`;
+  return publicBaseUrl(req);
 }
 
 export default async function handler(req, res) {
@@ -61,7 +58,7 @@ export default async function handler(req, res) {
       subaccount,
       callback_url:
         callbackUrl ||
-        `https://valmont-pay.vercel.app/checkout.html?reference=${encodeURIComponent(reference)}` +
+        `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(reference)}` +
           `&merchant=${encodeURIComponent(merchant || 'Valmont-Pay')}`
     });
 

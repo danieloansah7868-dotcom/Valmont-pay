@@ -14,9 +14,11 @@
 
 import supabaseModule from '../lib/supabase.js';
 import transactionStore from '../lib/transaction-store.js';
+import adminAuthModule from '../lib/admin-auth.js';
 
 const { isSupabaseConfigured, missingSupabaseEnvMessage, supabaseConfigState } = supabaseModule;
 const { saveTransaction, fetchTransactions, buildLedgerPayload } = transactionStore;
+const { isAuthorizedAdmin, unauthorizedPayload } = adminAuthModule;
 
 export default async function handler(req, res) {
   // Cross-origin support: the Nanahemaa Market storefront (nanahemaamarket.com)
@@ -26,7 +28,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', requestOrigin || '*');
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-valmontpay-signature');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-valmontpay-signature, x-admin-key');
   res.setHeader('Access-Control-Max-Age', '86400');
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
@@ -82,6 +84,16 @@ export default async function handler(req, res) {
 
     if (!body.reference) {
       return res.status(400).json({ success: false, error: 'Reference is required' });
+    }
+
+    // Terminal-status writes change what the dashboard counts as settled
+    // money. Public storefronts may only ever create/amend NON-terminal
+    // rows (PENDING, PENDING_MOMO); marking an order PAID/CANCELLED/etc.
+    // requires the admin key. Mirrors server.js POST /api/transactions.
+    const TERMINAL_STATUSES = ['SUCCESS', 'SUCCESSFUL', 'PAID', 'COMPLETED', 'FAILED', 'CANCELLED', 'REFUNDED'];
+    const requestedStatus = String(body.status || 'PENDING').toUpperCase();
+    if (TERMINAL_STATUSES.includes(requestedStatus) && !isAuthorizedAdmin(req)) {
+      return res.status(401).json(unauthorizedPayload());
     }
 
     const result = await saveTransaction(body, { context: 'TRANSACTIONS' });

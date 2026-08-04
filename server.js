@@ -21,6 +21,9 @@ const tenants = require('./lib/tenants');
 const accessCodeStore = require('./lib/access-code-store');
 const webhookForwarder = require('./lib/tenant-webhook-forwarder');
 const notifier = require('./lib/notifier');
+const paymentLinkStore = require('./lib/payment-link-store');
+const { publicBaseUrl } = require('./lib/base-url');
+const { requireAdmin, isAuthorizedAdmin, unauthorizedPayload, adminAuthEnforced } = require('./lib/admin-auth');
 
 // Vercel runs the dashboard checkout (POST /api/v1/transaction/charge) in a
 // serverless function whose memory disappears between requests, so a payment
@@ -36,12 +39,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Build absolute URLs from the incoming request instead of hardcoding the
-// production domain, so links work locally AND on Vercel.
+// production domain AND instead of blindly trusting PUBLIC_BASE_URL: the
+// request's (allowlisted) host always wins, so a stale/misconfigured env
+// var can never again send customers to a dead domain. See lib/base-url.js.
 function baseUrl(req) {
-  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/$/, '');
-  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
-  const host = req.headers['x-forwarded-host'] || req.get('host');
-  return `${proto}://${host}`;
+  return publicBaseUrl(req);
 }
 
 // Enable Cross-Origin Resource Sharing & JSON Parsing
@@ -59,8 +61,13 @@ app.use(express.static(__dirname));
 // settled balance is always derived by summing SUCCESSFUL transactions.
 const TRANSACTIONS = ledger.TRANSACTIONS;
 
-// API 1: Initialize Transaction
-app.post('/api/v1/transaction/initialize', (req, res) => {
+// API 1: Initialize Transaction — the dashboard "Generate link" button.
+// The returned pay.html?access_code=… link must survive serverless cold
+// starts and multi-instance routing, so the payment intent is persisted
+// durably (Supabase payment_links table) in addition to the in-memory
+// access-code store. When Supabase is configured but the write fails, we
+// return an error rather than hand out a link that will 404 for the client.
+app.post('/api/v1/transaction/initialize', async (req, res) => {
   const { email, amount, callback_url, merchant } = req.body;
 
   if (!email || !amount || isNaN(amount) || amount <= 0) {
@@ -109,6 +116,29 @@ app.post('/api/v1/transaction/initialize', (req, res) => {
 
   console.log(`[TENANT-INIT v1] ${tenant ? tenant.key : 'unknown'}: Ref ${reference} | Amount GHS ${amount} | Email ${email}`);
 
+  // Durable persistence: a payment link a merchant sends to a client must
+  // keep working after cold starts and across serverless instances. The
+  // in-memory access-code store alone cannot promise that on Vercel.
+  const persistence = await paymentLinkStore.persistPaymentLink({
+    accessCode: accessCodeData.access_code,
+    payment: accessCodeData.payment,
+    ttlMs: paymentLinkStore.linkTtlMs()
+  });
+
+  if (!persistence.ok) {
+    console.error('[LINK-GEN] ✗ payment link was NOT persisted — refusing to hand out a dead link:', persistence.reason);
+    return res.status(502).json({
+      status: false,
+      message: 'The payment link could not be saved durably, so it was not generated. ' +
+        'If this persists, apply scripts/supabase-payment-links-schema.sql to your Supabase project.',
+      detail: persistence.reason
+    });
+  }
+
+  if (!persistence.durable) {
+    console.warn(`[LINK-GEN] ${reference}: link is memory-only (Supabase not configured); it will not survive a restart.`);
+  }
+
   res.status(200).json({
     status: true,
     message: 'Transaction initialized successfully',
@@ -118,6 +148,8 @@ app.post('/api/v1/transaction/initialize', (req, res) => {
       merchant: newTransaction.merchant,
       access_code: accessCodeData.access_code,
       callback_url: callback_url || '',
+      link_expires_at: persistence.expiresAt || null,
+      link_durable: Boolean(persistence.durable),
       // SECURE checkout: pay.html resolves everything from access_code
       checkout_url: `${origin}/pay.html?access_code=${encodeURIComponent(accessCodeData.access_code)}`,
       pay_url: `${origin}/pay.html?access_code=${encodeURIComponent(accessCodeData.access_code)}`,
@@ -465,6 +497,17 @@ app.post('/api/transactions', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Reference is required' });
   }
 
+  // Terminal-status writes change what the dashboard counts as settled
+  // money. Public storefronts may only ever create/amend NON-terminal
+  // rows (PENDING, PENDING_MOMO); marking an order PAID/CANCELLED/etc.
+  // requires the admin key. Otherwise anyone could inject fake SUCCESS
+  // rows and inflate the merchant's books.
+  const TERMINAL_STATUSES = ['SUCCESS', 'SUCCESSFUL', 'PAID', 'COMPLETED', 'FAILED', 'CANCELLED', 'REFUNDED'];
+  const requestedStatus = String(body.status || 'PENDING').toUpperCase();
+  if (TERMINAL_STATUSES.includes(requestedStatus) && !isAuthorizedAdmin(req)) {
+    return res.status(401).json(unauthorizedPayload());
+  }
+
   // Without Supabase (local dev / demo) persist to the in-memory ledger so the
   // storefront → admin order loop still works end-to-end.
   if (!isSupabaseConfigured()) {
@@ -807,9 +850,8 @@ app.get('/api/webhook-debug', (req, res) => {
         ? 'PAYSTACK_SECRET_KEY'
         : process.env.WEBHOOK_SECRET ? 'WEBHOOK_SECRET (legacy fallback)' : null,
       paystackSecretKeyConfigured: Boolean(paystackKey),
-      expectedWebhookUrl: process.env.PUBLIC_BASE_URL
-        ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/api/webhook`
-        : 'https://<your-vercel-domain>/api/webhook'
+      // Host-first: never recommend a webhook URL on a stale env-var domain.
+      expectedWebhookUrl: `${baseUrl(req)}/api/webhook`
     },
     recommendations: []
   };
@@ -832,7 +874,7 @@ app.get('/api/webhook-debug', (req, res) => {
   return res.status(200).json(diagnostics);
 });
 
-app.post('/api/webhook-debug', async (req, res) => {
+app.post('/api/webhook-debug', requireAdmin, async (req, res) => {
   if (!isSupabaseConfigured()) {
     return res.status(500).json({ success: false, error: 'Supabase is not configured' });
   }
@@ -885,8 +927,11 @@ app.post('/api/webhook-debug', async (req, res) => {
 });
 
 // API 6c: Manual transaction endpoint — POST /api/manual-transaction
-// Temporary workaround that inserts a transaction directly into Supabase.
-app.post('/api/manual-transaction', async (req, res) => {
+// Admin-guarded: this inserts arbitrary rows (including status SUCCESS)
+// straight into the ledger. Left open, it lets ANY internet visitor
+// inflate the dashboard "Total Collected" with fake settled money — a
+// bookkeeping-integrity hole on a live-money system.
+app.post('/api/manual-transaction', requireAdmin, async (req, res) => {
   if (!isSupabaseConfigured()) {
     return res.status(500).json({ success: false, error: 'Supabase is not configured' });
   }
@@ -1095,6 +1140,24 @@ app.post('/api/transaction/initialize', requireTenantAuth, async (req, res) => {
 
   console.log(`[TENANT-INIT] ${tenant.key}: Ref ${finalReference} | Amount ${finalCurrency} ${amount} | Email ${email}`);
 
+  // Persist the checkout session so it survives cold starts. Same 30-minute
+  // TTL as the in-memory store — the documented tenant contract (docs/
+  // tenant-integration.md) is unchanged. Best-effort on purpose: a
+  // persistence hiccup must not break tenant integrations — pay.html can
+  // still complete via paystack_authorization_url — but the failure IS
+  // logged loudly so a dropped link never looks like "the gateway ate it".
+  paymentLinkStore.persistPaymentLink({
+    accessCode: accessCodeData.access_code,
+    payment: accessCodeData.payment,
+    ttlMs: accessCodeStore.EXPIRY_MS
+  }).then(result => {
+    if (!result.ok) {
+      console.error(`[TENANT-INIT] session persistence failed for ${tenant.key}/${finalReference}: ${result.reason}`);
+    }
+  }).catch(err => {
+    console.error(`[TENANT-INIT] session persistence threw for ${tenant.key}/${finalReference}:`, err && err.message ? err.message : err);
+  });
+
   // Return access_code — this is what pay.html reads
   res.status(200).json({
     status: true,
@@ -1231,15 +1294,20 @@ app.get('/api/transaction/verify/:reference', requireTenantAuth, async (req, res
 /**
  * Resolve an access_code to payment details. Used by pay.html to render
  * the payment form with server-side amounts (not user-editable).
+ *
+ * Looks in the in-memory hot cache first, then falls back to the durable
+ * payment_links table — so a link keeps working on a cold serverless
+ * instance or a different warm one than the instance that created it.
  */
-app.get('/api/transaction/access/:access_code', (req, res) => {
+app.get('/api/transaction/access/:access_code', async (req, res) => {
   const { access_code } = req.params;
 
   if (!access_code) {
     return res.status(400).json({ status: false, message: 'Access code is required' });
   }
 
-  const payment = accessCodeStore.peekAccessCode(access_code);
+  const resolved = await paymentLinkStore.resolvePaymentLink(access_code);
+  const payment = resolved.payment;
   if (!payment) {
     return res.status(404).json({ status: false, message: 'Invalid or expired access code' });
   }
@@ -1339,7 +1407,9 @@ app.get('/api/tenants/:key', (req, res) => {
 
 // ─── PUT /api/tenants/{key}/webhook — set webhook URL ─────────────────
 // Updates in-memory AND persists to Supabase when available.
-app.put('/api/tenants/:key/webhook', async (req, res) => {
+// Admin-guarded: a tenant's webhook URL controls where payment events
+// (with amounts + customer references) are forwarded. Was previously open.
+app.put('/api/tenants/:key/webhook', requireAdmin, async (req, res) => {
   const { webhook_url } = req.body || {};
   if (!webhook_url) {
     return res.status(400).json({ status: false, message: 'webhook_url is required' });
@@ -1372,8 +1442,11 @@ app.put('/api/tenants/:key/webhook', async (req, res) => {
 });
 
 // ─── New: POST /api/tenants/{key}/rotate-keys — rotate API secrets ─────
+// CRITICAL: this endpoint returns freshly minted VALID tenant API secrets
+// in its response. It was previously unauthenticated — a full credential-
+// takeover primitive for any tenant. Admin-guarded now.
 
-app.post('/api/tenants/:key/rotate-keys', (req, res) => {
+app.post('/api/tenants/:key/rotate-keys', requireAdmin, (req, res) => {
   const result = tenants.rotateTenantSecrets(req.params.key);
   if (!result) {
     return res.status(404).json({ status: false, message: 'Tenant not found' });
@@ -1398,14 +1471,19 @@ app.post('/api/tenants/:key/rotate-keys', (req, res) => {
 // POST /api/admin/tenants/:key/disable  — soft-disable
 // POST /api/admin/tenants/:key/enable   — re-enable
 //
-// These are admin-only endpoints (guarded by the same sessionStorage
-// login used by admin.html / dashboard.html). For server-side
-// protection we also accept an X-Admin-Key header matching
-// ADMIN_PASSWORD. When neither is present the endpoints still work
-// but are meant for the same-origin admin UI only — the UI itself
-// redirects unauthenticated users to /admin-login.html.
+// These are admin-only endpoints. The admin HTML pages sit behind a
+// login, but the API itself is now ACTUALLY guarded server-side: every
+// /api/admin/* route requires the X-Admin-Key header to match
+// ADMIN_PASSWORD (lib/admin-auth.js). Previously these were wide open —
+// anyone could rotate tenant keys or create tenants without any credential.
+// When ADMIN_PASSWORD is unset (local dev) the guard warns and passes.
 
 const tenantStore = require('./lib/tenant-store');
+
+if (!adminAuthEnforced()) {
+  console.warn('[ADMIN-AUTH] ADMIN_PASSWORD is not set — admin API endpoints are OPEN. Set it before deploying.');
+}
+app.use('/api/admin', requireAdmin);
 
 app.get('/api/admin/tenants', async (req, res) => {
   // First refresh from DB so the UI sees the latest. Report fallback state
@@ -1526,8 +1604,10 @@ app.get('/api/webhook-deliveries', (req, res) => {
 });
 
 // ─── New: POST /api/webhook-deliveries/{reference}/replay ──────────────
+// Admin-guarded: re-POSTs a payment event to a tenant's webhook URL;
+// left open it is a spoofed-event cannon aimed at tenant backends.
 
-app.post('/api/webhook-deliveries/:reference/replay', (req, res) => {
+app.post('/api/webhook-deliveries/:reference/replay', requireAdmin, (req, res) => {
   const { reference } = req.params;
   const { tenant_key } = req.body;
 

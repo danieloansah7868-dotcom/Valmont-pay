@@ -20,13 +20,19 @@
  *   }
  *
  * NOTE: This endpoint skips real signature verification so it can be used for
- * testing. It is intended for development/debugging only — remove or protect
- * in production.
+ * testing. The POST is therefore guarded by the X-Admin-Key header (see
+ * lib/admin-auth.js) — when ADMIN_PASSWORD is configured, simulated events
+ * require admin authorization.
  */
 
 import crypto from 'node:crypto';
 import supabaseModule from '../lib/supabase.js';
 import transactionStore from '../lib/transaction-store.js';
+import baseUrlModule from '../lib/base-url.js';
+import adminAuthModule from '../lib/admin-auth.js';
+
+const { publicBaseUrl } = baseUrlModule;
+const { isAuthorizedAdmin, unauthorizedPayload } = adminAuthModule;
 
 const { getSupabaseClient, isSupabaseConfigured, supabaseConfigState, missingSupabaseEnvMessage } = supabaseModule;
 const { saveTransaction, fetchTransactions } = transactionStore;
@@ -58,7 +64,7 @@ async function checkSupabaseConnectivity() {
 /**
  * Check webhook configuration state.
  */
-function getWebhookConfigState() {
+function getWebhookConfigState(req) {
   const webhookSecret = process.env.PAYSTACK_SECRET_KEY || process.env.WEBHOOK_SECRET || '';
   const paystackKey = process.env.PAYSTACK_SECRET_KEY || '';
 
@@ -71,9 +77,9 @@ function getWebhookConfigState() {
         : null,
     paystackSecretKeyConfigured: Boolean(paystackKey),
     paystackSecretKeyPrefix: paystackKey ? `${paystackKey.substring(0, 12)}...` : null,
-    expectedWebhookUrl: process.env.PUBLIC_BASE_URL
-      ? `${process.env.PUBLIC_BASE_URL.replace(/\/$/, '')}/api/webhook`
-      : 'Set PUBLIC_BASE_URL or construct from your Vercel domain: https://<project>.vercel.app/api/webhook'
+    // Host-first: a stale PUBLIC_BASE_URL (e.g. a dead .vercel.app hostname)
+    // must never be recommended as the Paystack webhook URL again.
+    expectedWebhookUrl: `${publicBaseUrl(req)}/api/webhook`
   };
 }
 
@@ -81,7 +87,7 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     // Diagnostic GET — show configuration and connectivity status
     const supabaseConfig = supabaseConfigState();
-    const webhookConfig = getWebhookConfigState();
+    const webhookConfig = getWebhookConfigState(req);
     const supabaseConnection = await checkSupabaseConnectivity();
 
     const diagnostics = {
@@ -158,6 +164,13 @@ export default async function handler(req, res) {
         error: 'Supabase is not configured',
         message
       });
+    }
+
+    // Admin-guarded: this POST simulates webhook events and writes SUCCESS
+    // rows straight into the ledger. Open over the internet it lets anyone
+    // inflate the dashboard with fake settled money.
+    if (!isAuthorizedAdmin(req)) {
+      return res.status(401).json(unauthorizedPayload());
     }
 
     let body;
