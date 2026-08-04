@@ -86,7 +86,15 @@ app.post('/api/v1/transaction/initialize', async (req, res) => {
   const reference = generateReference();
   const origin = baseUrl(req);
   const merchantKey = String(merchant || 'valmont-electricals').toLowerCase();
-  const tenant = tenants.getTenant(merchantKey) || tenants.getTenant('valmont-electricals');
+  const matchedTenant = tenants.getTenant(merchantKey);
+  // Infrastructure/routing falls back to the default tenant when the typed
+  // name is not a tenant key — but the BRANDING the customer sees must be
+  // what the operator typed. Previously "Daniel" silently displayed as
+  // "Valmont Electricals" because the fallback tenant's display_name won.
+  const tenant = matchedTenant || tenants.getTenant('valmont-electricals');
+  const displayName = matchedTenant
+    ? matchedTenant.display_name
+    : (merchant ? String(merchant).trim() : '') || (tenant && tenant.display_name) || 'Valmont-Pay';
 
   // Record the payment intent (PENDING) so the dashboard can see it
   const newTransaction = ledger.addTransaction({
@@ -109,7 +117,7 @@ app.post('/api/v1/transaction/initialize', async (req, res) => {
     phone: '',
     callback_url: callback_url || '',
     tenant_key: tenant ? tenant.key : null,
-    merchant_display_name: (tenant && tenant.display_name) || merchant || 'Valmont-Pay',
+    merchant_display_name: displayName,
     merchant_brand_color: (tenant && tenant.brand_color) || '#f68b1e',
     merchant_logo_url: (tenant && tenant.logo_url) || '/logo.svg'
   });
@@ -145,7 +153,7 @@ app.post('/api/v1/transaction/initialize', async (req, res) => {
     data: {
       reference,
       amount: newTransaction.amount,
-      merchant: newTransaction.merchant,
+      merchant: newTransaction.merchant || displayName,
       access_code: accessCodeData.access_code,
       callback_url: callback_url || '',
       link_expires_at: persistence.expiresAt || null,
@@ -1323,9 +1331,11 @@ app.get('/api/transaction/access/:access_code', async (req, res) => {
       phone: payment.phone,
       callback_url: payment.callback_url,
       merchant: payment.tenant_key,
-      merchant_display_name: tenant ? tenant.display_name : payment.merchant_display_name,
-      merchant_brand_color: tenant ? tenant.brand_color : payment.merchant_brand_color,
-      merchant_logo_url: tenant ? tenant.logo_url : payment.merchant_logo_url,
+      // Branding captured at link-creation wins (that's what the operator
+      // typed / the tenant API set); tenant config only fills in gaps.
+      merchant_display_name: payment.merchant_display_name || (tenant ? tenant.display_name : '') || 'Valmont-Pay',
+      merchant_brand_color: payment.merchant_brand_color || (tenant ? tenant.brand_color : '#f68b1e'),
+      merchant_logo_url: payment.merchant_logo_url || (tenant ? tenant.logo_url : '/logo.svg'),
       paystack_authorization_url: payment.paystack_authorization_url,
       paystack_access_code: payment.paystack_access_code
     }
