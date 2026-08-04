@@ -175,6 +175,11 @@
     </section>
 
     <section class="panel">
+      <h2>Webhook Delivery Log (Fan-out to Tenants)</h2>
+      <div id="fanOutLogs"></div>
+    </section>
+
+    <section class="panel">
       <h2>Inbound requests seen by this server instance</h2>
       <p class="empty" id="hitsNote"></p>
       <div id="hits"></div>
@@ -353,6 +358,48 @@
         </details>`).join('');
     }
 
+    function renderFanOutLogs(data) {
+      const logs = data.fanOutLogs || [];
+      if (!logs.length) {
+        $('fanOutLogs').innerHTML = '<p class="empty">No tenants found.</p>';
+        return;
+      }
+
+      $('fanOutLogs').innerHTML = logs.map(tenantLog => {
+        const deliveries = tenantLog.deliveries || [];
+        let table = '';
+
+        if (!deliveries.length) {
+          table = '<p class="empty">No deliveries recorded for this tenant.</p>';
+        } else {
+          table = `<table>
+            <thead><tr>
+              <th>Timestamp</th><th>Reference</th><th>Target URL</th><th>Payload</th><th>Status</th><th>Time</th><th>Retry</th>
+            </tr></thead>
+            <tbody>${deliveries.map(d => {
+              const statusClass = (d.response_status >= 200 && d.response_status < 300) ? 'pass' : (d.response_status >= 400 || d.response_status === 0) ? 'fail' : 'unknown';
+              const statusLabel = d.response_status === 0 ? 'FAIL/ERR' : d.response_status;
+              const bodyTruncated = d.request_body ? (d.request_body.length > 50 ? d.request_body.slice(0, 50) + '...' : d.request_body) : '—';
+
+              return `<tr>
+                <td>${esc(new Date(d.created_at).toLocaleString())}</td>
+                <td><code>${esc(d.reference)}</code></td>
+                <td><small>${esc(d.url)}</small></td>
+                <td><details><summary>View</summary><pre>${esc(d.request_body)}</pre></details></td>
+                <td><span class="pill ${statusClass}">${esc(statusLabel)}</span></td>
+                <td>${esc(d.response_time_ms)}ms</td>
+                <td>${esc(d.retry_count)}</td>
+              </tr>`;
+            }).join('')}</tbody></table>`;
+        }
+
+        return `<h3>${esc(tenantLog.displayName)} (<code>${esc(tenantLog.tenantKey)}</code>)</h3>
+          <p class="sub">URL: ${tenantLog.webhookUrl ? esc(tenantLog.webhookUrl) : '<em>none configured</em>'}</p>
+          ${tenantLog.error ? `<p class="pill fail">Error fetching logs: ${esc(tenantLog.error)}</p>` : ''}
+          ${table}`;
+      }).join('<hr style="border: 0; border-top: 1px solid var(--border); margin: 20px 0;">');
+    }
+
     async function load() {
       $('refreshBtn').disabled = true;
       try {
@@ -369,6 +416,7 @@
         renderEnv(data);
         renderDeliveries(data);
         renderHits(data);
+        renderFanOutLogs(data);
       } catch (error) {
         $('verdict').innerHTML = `<div class="dot" style="background:var(--red)"></div>
           <div><strong>Could not load diagnostics</strong><span>${esc(error.message)}</span></div>`;
