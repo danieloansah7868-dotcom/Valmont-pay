@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "verify:modules": "node scripts/verify-module-graph.mjs",
-    "test": "node scripts/verify-module-graph.mjs && node scripts/tenant-configuration-test.mjs && node scripts/api-smoke-test.mjs && node scripts/dashboard-ledger-test.mjs && node scripts/webhook-supabase-test.mjs && node scripts/checkout-supabase-test.mjs && node scripts/webhook-diagnostics-test.mjs && node scripts/notifier-test.mjs && node scripts/pay-html-amount-validation.test.mjs"
+    "test": "node scripts/verify-module-graph.mjs && node scripts/tenant-configuration-test.mjs && node scripts/api-smoke-test.mjs && node scripts/dashboard-ledger-test.mjs && node scripts/webhook-supabase-test.mjs && node scripts/checkout-supabase-test.mjs && node scripts/webhook-diagnostics-test.mjs && node scripts/notifier-test.mjs && node scripts/pay-html-amount-validation.test.mjs && node scripts/payment-link-store-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.109.0",

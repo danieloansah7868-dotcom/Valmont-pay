@@ -44,6 +44,11 @@
     if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
       window.location.href = '/admin-login.html';
     }
+    // Mutating admin APIs are guarded server-side. Attach the key captured
+    // at login (see admin-login.html) as the X-Admin-Key header.
+    function adminHeaders(extra) {
+      return Object.assign({ 'X-Admin-Key': sessionStorage.getItem('valmontAdminKey') || '' }, extra || {});
+    }
   </script>
 
   <!-- Header -->
@@ -54,7 +59,7 @@
     </div>
     <div class="flex items-center gap-3">
       <span id="tenantCount" class="text-xs text-gray-500 font-bold">0 tenants</span>
-      <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" class="text-xs text-gray-400 hover:text-white font-bold transition">Logout</button>
+      <button onclick="sessionStorage.removeItem('adminLoggedIn'); sessionStorage.removeItem('valmontAdminKey'); window.location.href='/admin-login.html'" class="text-xs text-gray-400 hover:text-white font-bold transition">Logout</button>
     </div>
   </header>
 
@@ -369,7 +374,7 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
 
       fetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ webhook_url: newUrl.trim() })
       })
       .then(r => r.json())
@@ -389,7 +394,8 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
       if (!confirm('Rotate API keys for ' + key + '?\n\nBoth current and new keys will remain valid during the transition period.')) return;
 
       fetch('/api/tenants/' + encodeURIComponent(key) + '/rotate-keys', {
-        method: 'POST'
+        method: 'POST',
+        headers: adminHeaders()
       })
       .then(r => r.json())
       .then(json => {
@@ -681,7 +687,7 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
       try {
         const res = await fetch('/api/transactions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: adminHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(body)
         });
         savedOnServer = res.ok;

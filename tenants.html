@@ -48,6 +48,11 @@
     if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
       window.location.href = '/admin-login.html';
     }
+    // Mutating admin APIs are guarded server-side. Attach the key captured
+    // at login (see admin-login.html) as the X-Admin-Key header.
+    function adminHeaders(extra) {
+      return Object.assign({ 'X-Admin-Key': sessionStorage.getItem('valmontAdminKey') || '' }, extra || {});
+    }
   </script>
 
   <!-- Header -->
@@ -58,7 +63,7 @@
       <div class="flex items-center gap-3">
         <span id="tenantCount" class="text-xs text-gray-500 font-bold">0 tenants</span>
         <button onclick="openAddModal()" class="gold-btn">+ Add Tenant</button>
-        <button onclick="sessionStorage.removeItem('adminLoggedIn'); window.location.href='/admin-login.html'" class="ghost-btn">Logout</button>
+        <button onclick="sessionStorage.removeItem('adminLoggedIn'); sessionStorage.removeItem('valmontAdminKey'); window.location.href='/admin-login.html'" class="ghost-btn">Logout</button>
       </div>
     </div>
     <!-- Row 2: Tabs under the logo -->
@@ -404,14 +409,14 @@
           // Update
           res = await fetch('/api/admin/tenants/' + encodeURIComponent(originalKey), {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: adminHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, environment, status })
           });
         } else {
           // Create
           res = await fetch('/api/admin/tenants', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: adminHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ key, display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, environment, status })
           });
         }
@@ -464,7 +469,7 @@
       try {
         const res = await fetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: adminHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ webhook_url: url })
         });
         const json = await res.json();
@@ -481,7 +486,7 @@
       const verb = action === 'disable' ? 'disable' : 'enable';
       if (!confirm('Are you sure you want to ' + verb + ' tenant "' + key + '"?')) return;
       try {
-        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key) + '/' + action, { method: 'POST' });
+        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key) + '/' + action, { method: 'POST', headers: adminHeaders() });
         const json = await res.json();
         if (!json.status) { alert('Error: ' + json.message); return; }
         loadTenants();
@@ -491,7 +496,7 @@
     async function rotateKeys(key) {
       if (!confirm('Rotate API keys for "' + key + '"?\n\nThe current secret_key_1 will become secret_key_2 (still valid during transition), and a new secret_key_1 will be issued.')) return;
       try {
-        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key) + '/rotate-keys', { method: 'POST' });
+        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key) + '/rotate-keys', { method: 'POST', headers: adminHeaders() });
         const json = await res.json();
         if (!json.status) { alert('Error: ' + json.message); return; }
         alert(
@@ -507,7 +512,7 @@
     async function deleteTenant(key, name) {
       if (!confirm('Permanently DELETE tenant "' + name + '" (' + key + ')?\n\nThis cannot be undone. Built-in tenants (valmont-electricals, valmontweb) are protected and cannot be deleted — disable them instead.')) return;
       try {
-        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key), { method: 'DELETE' });
+        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key), { method: 'DELETE', headers: adminHeaders() });
         const json = await res.json();
         if (!json.status) { alert('Error: ' + json.message); return; }
         loadTenants();

@@ -45,10 +45,28 @@ const upsertedRows = [];
 let nextWriteResult = null; // { data, error }
 let nextReadResult = null; // { data, error }
 const storedRows = [];
+const storedLinkRows = []; // payment_links table
 
 const fakeSupabase = {
   from(table) {
-    assert.equal(table, 'transactions', 'writes must target the transactions table');
+    assert.ok(
+      table === 'transactions' || table === 'payment_links',
+      'writes must target a known table (transactions / payment_links)'
+    );
+
+    // The durable payment-link store: plain awaited upsert, no .select() chain.
+    if (table === 'payment_links') {
+      return {
+        async upsert(row, options) {
+          assert.deepEqual(options, { onConflict: 'access_code' }, 'payment links upsert on access_code');
+          const index = storedLinkRows.findIndex(r => r.access_code === row.access_code);
+          if (index >= 0) storedLinkRows[index] = { ...row };
+          else storedLinkRows.push({ ...row });
+          return { data: [row], error: null };
+        }
+      };
+    }
+
     return {
       upsert(row, options) {
         assert.deepEqual(options, { onConflict: 'reference' }, 'must upsert on reference');
@@ -76,6 +94,11 @@ const fakeSupabase = {
 
 const store = require('../lib/transaction-store.js');
 store.setSupabaseClient(fakeSupabase);
+
+// The dashboard link generator also persists into payment_links; keep that
+// offline too (in-memory hot cache + this stub).
+const paymentLinkStore = require('../lib/payment-link-store.js');
+paymentLinkStore.setSupabaseClient(fakeSupabase);
 
 // server.js also refreshes tenant configuration during boot. Keep that lookup
 // offline too; tenant persistence has its own focused test suite.

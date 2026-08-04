@@ -113,6 +113,11 @@
 
      if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD) {
         sessionStorage.setItem('adminLoggedIn', 'true');
+        // The admin APIs are guarded server-side (X-Admin-Key must match
+        // ADMIN_PASSWORD). Keep the key in sessionStorage so the admin
+        // pages can attach it to their mutating API calls. It is only ever
+        // the operator's own password, on their own browser, same-origin.
+        sessionStorage.setItem('valmontAdminKey', password);
         window.location.href = '/dashboard.html';
       } else {
         errorMessage.textContent = 'Invalid email or password';
