@@ -107,7 +107,7 @@ MOD  admin-login/admin/tenants/dashboard .html  attach admin key; link expiry sh
 MOD  README.md, .env.example          documented
 ```
 
-`npm test`: **all suites green** (9 files, incl. the new link-store test). The local smoke test verified: link generation with 30-day expiry, access-code resolution, 404s for unknown codes, host-header-injection rejection, 401s for all guarded endpoints, and public storefront orders still working.
+`npm test`: **all suites green** (9 files, incl. the new link-store test). The local smoke test verified: link generation with 30-day expiry, access-code resolution, 404s for unknown codes, host-header-injection rejection, 401s for all guarded endpoints, the open-posture local-dev fallback with a loud warning, and public storefront orders still working. The branch was re-verified end-to-end after merging `main@385d9b8` (PR #37, durable webhook-delivery log) — both feature sets intact (one conflict: shared requires block, resolved).
 
 ---
 
@@ -115,6 +115,8 @@ MOD  README.md, .env.example          documented
 
 1. **Merge the PR** from `arena/019fcb9d-valmont-pay` → `main`. Vercel redeploys automatically.
 2. **Supabase** → SQL Editor → run `scripts/supabase-payment-links-schema.sql` (one paste).
+   (This branch also integrates main's webhook-delivery-log feature — run
+   `scripts/supabase-webhook-deliveries-schema.sql` there too if you haven't.)
 3. **Vercel** → Project Settings → Environment Variables (Production):
    - `PUBLIC_BASE_URL` = `https://valmontpay.app`
    - **Delete** `WEBHOOK_SECRET` (it's a stale test key)
