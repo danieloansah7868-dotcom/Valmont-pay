@@ -262,7 +262,20 @@
       const empty = document.getElementById('tenantEmpty');
       tbody.innerHTML = '<tr><td colspan="7" class="p-6 text-center text-gray-500">Loading…</td></tr>';
       try {
-        const res = await fetch('/api/admin/tenants');
+        const res = await fetch('/api/admin/tenants', { headers: adminHeaders() });
+        if (res.status === 401) {
+          tbody.innerHTML = '<tr><td colspan="7" class="p-6 text-center text-red-400">Authorization failed. Please <a href="/admin-login.html" class="underline">log in again</a>.</td></tr>';
+          document.getElementById('tenantSourceWarning').textContent = 'Admin session expired or invalid. Reload the page and log in again.';
+          document.getElementById('tenantSourceWarning').classList.remove('hidden');
+          return;
+        }
+        if (!res.ok) {
+          const text = await res.text().catch(() => 'Unknown error');
+          tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-red-400">Failed to load tenants: ${esc(text)}</td></tr>`;
+          document.getElementById('tenantSourceWarning').textContent = 'Failed to load tenants from the API (HTTP ' + res.status + '). Showing last known state.';
+          document.getElementById('tenantSourceWarning').classList.remove('hidden');
+          return;
+        }
         const json = await res.json();
         const tenants = (json.data || []);
         const sourceWarning = document.getElementById('tenantSourceWarning');

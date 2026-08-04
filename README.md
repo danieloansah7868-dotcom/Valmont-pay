@@ -322,7 +322,7 @@ The dumbest possible receiver: no signature check, no database, no validation,
 that fails, so a failure here means the request never arrived.
 
 ```bash
-curl -i -X POST https://valmont-pay.vercel.app/api/test-webhook \
+curl -i -X POST https://valmontpay.app/api/test-webhook \
   -H 'Content-Type: application/json' \
   -d '{"event":"charge.success","data":{"reference":"TEST-1"}}'
 ```
@@ -362,7 +362,7 @@ authentic payment is not dropped over formatting.
 | Question | Answer |
 |---|---|
 | Should `WEBHOOK_SECRET` equal `PAYSTACK_SECRET_KEY`? | Leave it unset unless a legacy/local custom event needs it. Paystack verification always uses `PAYSTACK_SECRET_KEY` when present, so a stale `WEBHOOK_SECRET` cannot override the live key. |
-| Webhook URL | Exactly `https://valmont-pay.vercel.app/api/webhook` — https, no trailing slash. Preview deployment URLs never receive production webhooks. |
+| Webhook URL | Exactly `https://valmontpay.app/api/webhook` — https, no trailing slash. Preview deployment URLs never receive production webhooks. |
 | Test vs Live mode | Each mode has its **own** webhook URL field and its **own** secret key. An `sk_test_` deployment only ever receives Test Mode events. |
 | `charge.success` / `charge.failed` | Paystack has no per-event subscription UI — it POSTs **every** event to your one URL. This handler processes those two and returns `200 (ignored)` for the rest, so Paystack never retries or disables the endpoint. |
 
@@ -380,7 +380,7 @@ For a signed request without involving Paystack:
 ```bash
 BODY='{"event":"charge.success","data":{"reference":"VP-MANUAL-1","amount":5000,"channel":"card","customer":{"email":"t@example.com"}}}'
 SIG=$(node -e "console.log(require('crypto').createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(process.argv[1]).digest('hex'))" "$BODY")
-curl -i -X POST https://valmont-pay.vercel.app/api/webhook \
+curl -i -X POST https://valmontpay.app/api/webhook \
   -H 'Content-Type: application/json' -H "x-paystack-signature: $SIG" -d "$BODY"
 ```
 

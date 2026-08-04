@@ -1,0 +1,57 @@
+diff --git a/README.md b/README.md
+index e81032f..44035ae 100644
+--- a/README.md
++++ b/README.md
+@@ -322,7 +322,7 @@ The dumbest possible receiver: no signature check, no database, no validation,
+ that fails, so a failure here means the request never arrived.
+ 
+ ```bash
+-curl -i -X POST https://valmont-pay.vercel.app/api/test-webhook \
++curl -i -X POST https://valmontpay.app/api/test-webhook \
+   -H 'Content-Type: application/json' \
+   -d '{"event":"charge.success","data":{"reference":"TEST-1"}}'
+ ```
+@@ -362,7 +362,7 @@ authentic payment is not dropped over formatting.
+ | Question | Answer |
+ |---|---|
+ | Should `WEBHOOK_SECRET` equal `PAYSTACK_SECRET_KEY`? | Leave it unset unless a legacy/local custom event needs it. Paystack verification always uses `PAYSTACK_SECRET_KEY` when present, so a stale `WEBHOOK_SECRET` cannot override the live key. |
+-| Webhook URL | Exactly `https://valmont-pay.vercel.app/api/webhook` — https, no trailing slash. Preview deployment URLs never receive production webhooks. |
++| Webhook URL | Exactly `https://valmontpay.app/api/webhook` — https, no trailing slash. Preview deployment URLs never receive production webhooks. |
+ | Test vs Live mode | Each mode has its **own** webhook URL field and its **own** secret key. An `sk_test_` deployment only ever receives Test Mode events. |
+ | `charge.success` / `charge.failed` | Paystack has no per-event subscription UI — it POSTs **every** event to your one URL. This handler processes those two and returns `200 (ignored)` for the rest, so Paystack never retries or disables the endpoint. |
+ 
+@@ -380,7 +380,7 @@ For a signed request without involving Paystack:
+ ```bash
+ BODY='{"event":"charge.success","data":{"reference":"VP-MANUAL-1","amount":5000,"channel":"card","customer":{"email":"t@example.com"}}}'
+ SIG=$(node -e "console.log(require('crypto').createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(process.argv[1]).digest('hex'))" "$BODY")
+-curl -i -X POST https://valmont-pay.vercel.app/api/webhook \
++curl -i -X POST https://valmontpay.app/api/webhook \
+   -H 'Content-Type: application/json' -H "x-paystack-signature: $SIG" -d "$BODY"
+ ```
+ 
+diff --git a/tenants.html b/tenants.html
+index 89f27b8..e3e8d03 100644
+--- a/tenants.html
++++ b/tenants.html
+@@ -262,7 +262,20 @@
+       const empty = document.getElementById('tenantEmpty');
+       tbody.innerHTML = '<tr><td colspan="7" class="p-6 text-center text-gray-500">Loading…</td></tr>';
+       try {
+-        const res = await fetch('/api/admin/tenants');
++        const res = await fetch('/api/admin/tenants', { headers: adminHeaders() });
++        if (res.status === 401) {
++          tbody.innerHTML = '<tr><td colspan="7" class="p-6 text-center text-red-400">Authorization failed. Please <a href="/admin-login.html" class="underline">log in again</a>.</td></tr>';
++          document.getElementById('tenantSourceWarning').textContent = 'Admin session expired or invalid. Reload the page and log in again.';
++          document.getElementById('tenantSourceWarning').classList.remove('hidden');
++          return;
++        }
++        if (!res.ok) {
++          const text = await res.text().catch(() => 'Unknown error');
++          tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-red-400">Failed to load tenants: ${esc(text)}</td></tr>`;
++          document.getElementById('tenantSourceWarning').textContent = 'Failed to load tenants from the API (HTTP ' + res.status + '). Showing last known state.';
++          document.getElementById('tenantSourceWarning').classList.remove('hidden');
++          return;
++        }
+         const json = await res.json();
+         const tenants = (json.data || []);
+         const sourceWarning = document.getElementById('tenantSourceWarning');
