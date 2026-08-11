@@ -1773,12 +1773,28 @@ app.get('/webhook-status', (req, res) => {
   // traffic, so webhook forwarding and checkout work on first request.
   await tenants.refreshFromDb();
 
-  app.listen(PORT, () => {
+  const http = require('http');
+  const httpServer = http.createServer(app);
+
+  // Attach Valmont Messenger (WebSocket chat) to the HTTP server
+  const messenger = require('./lib/messenger');
+  messenger.attach(httpServer, app);
+
+  // Serve the messenger frontend
+  app.get('/messenger', (req, res) => {
+    res.sendFile(path.join(__dirname, 'messenger.html'));
+  });
+  app.get('/messenger.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'messenger.html'));
+  });
+
+  httpServer.listen(PORT, () => {
     console.log(`\n======================================================`);
     console.log(`🚀 VALMONT-PAY CORE GATEWAY STARTED LIVE!`);
     console.log(`🔗 API Base URL: http://localhost:${PORT}`);
     console.log(`📈 Merchant Dashboard: http://localhost:${PORT}/dashboard.html`);
     console.log(`🧑‍💼 Tenants Admin:    http://localhost:${PORT}/tenants.html`);
+    console.log(`💬 Messenger:        http://localhost:${PORT}/messenger.html`);
     console.log(`======================================================\n`);
   });
 })();
