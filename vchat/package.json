@@ -1,0 +1,19 @@
+{
+  "name": "vchat",
+  "version": "1.0.0",
+  "description": "VChat — Real-time messaging app with rooms, DMs, file sharing, and recycle bin",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": ["chat", "messaging", "real-time", "socketio"],
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "socket.io": "^4.7.5",
+    "uuid": "^9.0.1"
+  }
+}
