@@ -334,7 +334,7 @@ app.post('/api/initialize-payment', async (req, res) => {
       subaccount,
       callback_url:
         callback_url ||
-        `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(reference)}` +
+        `${baseUrl(req)}/pay.html?reference=${encodeURIComponent(reference)}` +
           `&merchant=${encodeURIComponent(merchant || 'Valmont-Pay')}`
     });
 
@@ -490,32 +490,28 @@ app.get('/api/transactions', async (req, res) => {
   });
 });
 
-// POST /api/transactions — write side of the shared ledger.
+// POST /api/transactions — admin-only ledger write.
 // Mirrors api/transactions.js (the Vercel serverless function) so local and
 // deployed behavior are identical.
 //
-// Used by the storefront checkout to record Cash on
-// Delivery / Manual MoMo orders (status PENDING_MOMO) and by the admin panel to reconcile them (PENDING_MOMO → PAID) and to advance
-// fulfillment status (PAID → SHIPPED / CANCELLED). Upserts by `reference`.
+// PURE GATEWAY: only admins may write arbitrary transaction rows.
+// All customer-facing payment creation must go through the authenticated
+// initialize endpoints (POST /api/transaction/initialize, POST /api/v1/transaction/initialize)
+// or the Paystack webhook. Upserts by `reference`.
 app.post('/api/transactions', async (req, res) => {
   const body = req.body || {};
   if (!body.reference) {
     return res.status(400).json({ success: false, error: 'Reference is required' });
   }
 
-  // Terminal-status writes change what the dashboard counts as settled
-  // money. Public storefronts may only ever create/amend NON-terminal
-  // rows (PENDING, PENDING_MOMO); marking an order PAID/CANCELLED/etc.
-  // requires the admin key. Otherwise anyone could inject fake SUCCESS
-  // rows and inflate the merchant's books.
-  const TERMINAL_STATUSES = ['SUCCESS', 'SUCCESSFUL', 'PAID', 'COMPLETED', 'FAILED', 'CANCELLED', 'REFUNDED'];
-  const requestedStatus = String(body.status || 'PENDING').toUpperCase();
-  if (TERMINAL_STATUSES.includes(requestedStatus) && !isAuthorizedAdmin(req)) {
+  // PURE GATEWAY: every write is admin-only. Gateway transactions
+  // originate only from Paystack webhook or tenant-auth initialize.
+  // Public PENDING / PENDING order injection is blocked.
+  if (!isAuthorizedAdmin(req)) {
     return res.status(401).json(unauthorizedPayload());
   }
 
-  // Without Supabase (local dev / demo) persist to the in-memory ledger so the
-  // storefront → admin order loop still works end-to-end.
+  // Without Supabase (local dev) persist to the in-memory ledger for gateway-local testing.
   if (!isSupabaseConfigured()) {
     const row = ledger.upsertTransaction({
       reference: body.reference,
@@ -1079,7 +1075,7 @@ app.post('/api/transaction/initialize', requireTenantAuth, async (req, res) => {
     : `${tenant.key.toUpperCase().replace(/-/g, '_')}-${Date.now().toString(36).toUpperCase()}-${Math.floor(10000 + Math.random() * 90000)}`;
 
   const finalCurrency = currency || tenant.currency || 'GHS';
-  const finalCallbackUrl = callback_url || `${baseUrl(req)}/checkout.html`;
+  const finalCallbackUrl = callback_url || '';
 
   // Initialize with Paystack using the tenant's own keys
   let paystackResult = null;
@@ -1093,7 +1089,7 @@ app.post('/api/transaction/initialize', requireTenantAuth, async (req, res) => {
         amount: Number(amount),
         email,
         reference: finalReference,
-        callback_url: `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(finalReference)}&merchant=${encodeURIComponent(tenant.key)}`,
+        callback_url: finalCallbackUrl || `${baseUrl(req)}/pay.html?reference=${encodeURIComponent(finalReference)}&merchant=${encodeURIComponent(tenant.key)}`,
         merchant: tenant.key,
         subaccount,
         currency: finalCurrency,
@@ -1178,10 +1174,7 @@ app.post('/api/transaction/initialize', requireTenantAuth, async (req, res) => {
         ? paystackResult.data.authorization_url
         : null,
       callback_url: finalCallbackUrl,
-      checkout_url: `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(finalReference)}` +
-        `&amount=${encodeURIComponent(Number(amount))}` +
-        `&email=${encodeURIComponent(email)}` +
-        `&merchant=${encodeURIComponent(tenant.key)}`,
+      checkout_url: `${baseUrl(req)}/pay.html?access_code=${encodeURIComponent(accessCodeData.access_code)}`,
       pay_url: `${baseUrl(req)}/pay.html?access_code=${encodeURIComponent(accessCodeData.access_code)}`
     }
   });
