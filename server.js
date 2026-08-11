@@ -1776,7 +1776,7 @@ app.get('/webhook-status', (req, res) => {
   const http = require('http');
   const httpServer = http.createServer(app);
 
-  // Attach Valmont Messenger (WebSocket chat) to the HTTP server
+  // Attach VChat (WebSocket chat) to the HTTP server
   const messenger = require('./lib/messenger');
   messenger.attach(httpServer, app);
 
@@ -1794,7 +1794,7 @@ app.get('/webhook-status', (req, res) => {
     console.log(`🔗 API Base URL: http://localhost:${PORT}`);
     console.log(`📈 Merchant Dashboard: http://localhost:${PORT}/dashboard.html`);
     console.log(`🧑‍💼 Tenants Admin:    http://localhost:${PORT}/tenants.html`);
-    console.log(`💬 Messenger:        http://localhost:${PORT}/messenger.html`);
+    console.log(`💬 VChat:             http://localhost:${PORT}/messenger.html`);
     console.log(`======================================================\n`);
   });
 })();
