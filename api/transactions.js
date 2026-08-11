@@ -21,7 +21,7 @@ const { saveTransaction, fetchTransactions, buildLedgerPayload } = transactionSt
 const { isAuthorizedAdmin, unauthorizedPayload } = adminAuthModule;
 
 export default async function handler(req, res) {
-  // Cross-origin support: the Nanahemaa Market storefront (nanahemaamarket.com)
+  // Cross-origin support: the storefront (e.g. example-store.com)
   // records Cash on Delivery / Manual MoMo orders (status PENDING_MOMO) and the
   // admin panel reconciles them, both via this endpoint on the gateway origin.
   const requestOrigin = req.headers && req.headers.origin;

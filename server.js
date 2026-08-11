@@ -315,8 +315,7 @@ app.post('/api/initialize-payment', async (req, res) => {
   const { email, merchant, phone, callback_url } = req.body || {};
   const amount = parseFloat(req.body && req.body.amount);
   const reference = (req.body && req.body.reference) || generateReference();
-  // Paystack subaccount (body or query) — enables split settlement, e.g.
-  // Nanahemaa Market's ACCT_uvyay690lwskmw5 for automatic 98%/2% splits.
+  // Paystack subaccount (body or query) — enables split settlement (e.g. ACCT_... for automatic 98%/2% splits).
   const subaccount = (req.body && req.body.subaccount) || (req.query && req.query.subaccount);
 
   if (!email || isNaN(amount) || amount <= 0) {
@@ -495,9 +494,8 @@ app.get('/api/transactions', async (req, res) => {
 // Mirrors api/transactions.js (the Vercel serverless function) so local and
 // deployed behavior are identical.
 //
-// Used by the Nanahemaa Market storefront checkout to record Cash on
-// Delivery / Manual MoMo orders (status PENDING_MOMO) and by the admin panel's
-// Orders tab to reconcile them (PENDING_MOMO → PAID) and to advance
+// Used by the storefront checkout to record Cash on
+// Delivery / Manual MoMo orders (status PENDING_MOMO) and by the admin panel to reconcile them (PENDING_MOMO → PAID) and to advance
 // fulfillment status (PAID → SHIPPED / CANCELLED). Upserts by `reference`.
 app.post('/api/transactions', async (req, res) => {
   const body = req.body || {};
