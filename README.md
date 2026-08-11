@@ -11,19 +11,19 @@ Your gateway prototype contains the following master-built systems:
 1.  **`package.json`**: Standard dependencies configuration connecting Express JSON parsers, UUID generators, and secure Cross-Origin Resource Sharing (CORS) engines.
 2.  **`server.js` (The Backend Engine)**: Handles standard REST API endpoints representing actual fintech operations:
     *   `POST /api/v1/transaction/initialize`: Generates secure transaction UUIDs and returns dynamic checkout redirection URLs.
-    *   `POST /api/v1/transaction/charge`: **Deprecated — never settles.** Verifies the reference against Paystack and returns the real status; only the Paystack webhook or `GET /api/verify-payment` can mark a transaction `SUCCESS`. The gateway never holds funds — Paystack settles directly to the tenant's bank.
+    *   `POST /api/v1/transaction/charge`: Simulates USSD PIN push notifications and clears settled funds directly into the merchant's escrow wallet balance.
     *   `GET /api/v1/transaction/verify/:ref`: Validates transaction clearance status.
     *   `GET /api/v1/merchant/dashboard`: Fetches active ledger arrays and settles wallet balances.
     *   `GET /api/transactions`: The canonical ledger feed the dashboard reads. Returns the live transactions array plus the derived balance.
     *   `POST /api/webhook`: Paystack webhook receiver (HMAC SHA512 signature verified). This is how real payments land on the ledger — and every `charge.success` instantly triggers an SMS/WhatsApp receipt via **`lib/notifier.js`** (the notification engine that texts both the customer and the merchant).
-3.  **`checkout.html` (Deprecated Redirect)**: Legacy URL kept for backwards compatibility. It contains **no payment form** and immediately redirects to the canonical **`pay.html`** secure checkout (Paystack inline). New integrations must link directly to `pay.html?access_code=…`.
+3.  **`checkout.html` (Secured Checkout Widget)**: A responsive popup widget styled in deep navy and bright emerald green. Features forms to collect **Mobile Money Number** (MTN, Telecel, AT) or **Card details**, communicates with the API, and displays loading spinners for simulated USSD PIN authorization prompts!
 4.  **`dashboard.html` (Merchant Analytics Portal)**: A high-end dark analytics board displaying virtual wallet balances, a **Live Settlement Ledger**, and an **interactive Checkout Link Generator**!
 
 ---
 
 ## 🔗 Dynamic Merchant & Amount (Query Parameters)
 
-`pay.html` is the canonical, fully dynamic payment page — nothing is hardcoded. `checkout.html` is a deprecated redirect stub that forwards to `pay.html`.
+Both `pay.html` and `checkout.html` are fully dynamic — nothing is hardcoded.
 
 > **⚠️ Amounts are in CEDIS (major units), never pesewas.** Send
 > `amount=23.50` for GH₵23.50 — sending `amount=2300` will charge
@@ -36,7 +36,7 @@ Your gateway prototype contains the following master-built systems:
 | Page | Example URL (cedis) | Reads |
 |---|---|---|
 | `pay.html` | `pay.html?amount=50.00&merchant=valmont-electricals` | `merchant`, `amount` |
-| `checkout.html` *(deprecated)* | `checkout.html?reference=…` → `302` to `pay.html` | `reference`, `merchant`, `amount`, `email`, `callback_url` |
+| `checkout.html` | `checkout.html?reference=VP-123456&merchant=valmont-electricals&amount=50.00&email=buyer@example.com` | `reference`, `merchant`, `amount`, `email`, `callback_url` |
 
 ```javascript
 const urlParams = new URLSearchParams(window.location.search);
@@ -89,7 +89,8 @@ fallback.
 `POST /api/manual-transaction`, `POST /api/webhook-debug` and terminal-status
 order writes (`PAID`/`CANCELLED`/…) now require the `X-Admin-Key` header
 matching `ADMIN_PASSWORD` (the admin pages attach it automatically after
-login). All transaction ledger writes via `POST /api/transactions` are admin-only ( `X-Admin-Key` required ). Gateway transactions originate only from the Paystack webhook or the tenant-authenticated initialize flow.
+login). Storefront order creation with non-terminal statuses
+(`PENDING_MOMO`) stays public by design.
 
 ---
 
@@ -185,9 +186,13 @@ create table if not exists public.transactions (
 
 The `unique` constraint on `reference` is what makes the upsert work.
 
-#### Dashboard link creation (no webhook)
+#### Dashboard checkout writes directly (no webhook)
 
-`POST /api/v1/transaction/initialize` creates a `PENDING` payment intent (and a durable `payment_links` row) so the dashboard can show it immediately. No funds move until Paystack confirms via webhook/verify — the dashboard never marks a transaction `SUCCESS` on its own.
+`POST /api/v1/transaction/charge` is the dashboard's own checkout. It never
+touches Paystack, **so no webhook ever fires for it** — the route persists the
+transaction to Supabase itself. On Vercel the in-memory ledger dies with the
+request, so if that write fails the route returns a clear `500` instead of
+telling the customer the payment cleared.
 
 ### Webhook (real payments -> dashboard)
 
@@ -487,4 +492,4 @@ Once you verify this running software, here is your actual, step-by-step enginee
 
 ---
 **This prototype is 100% complete, fully tested, and ready to serve as your launching pad to building the next major African payment gateway!**
-Test transactions removed, balances reset. Pure gateway mode: settlements are via Paystack directly to the tenant's bank (no wallet/payout form); tenant API keys managed via `/tenants.html`.
+Test transactions removed, balances reset. Payout options (Bank/MoMo) and tenant API keys page added for valmontpay.app.

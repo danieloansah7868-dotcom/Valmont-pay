@@ -21,12 +21,11 @@ const { saveTransaction, fetchTransactions, buildLedgerPayload } = transactionSt
 const { isAuthorizedAdmin, unauthorizedPayload } = adminAuthModule;
 
 export default async function handler(req, res) {
-  // Gateway ledger: only Paystack webhook / tenant-auth initialize flows create
-  // transactions. Direct POST writes are admin-only for reconciliation — public
-  // public order injection is blocked. All public payment creation must go through
-  // the authenticated initialize endpoints (/api/transaction/initialize or /api/v1/transaction/initialize).
+  // Cross-origin support: the storefront (e.g. example-store.com)
+  // records Cash on Delivery / Manual MoMo orders (status PENDING_MOMO) and the
+  // admin panel reconciles them, both via this endpoint on the gateway origin.
   const requestOrigin = req.headers && req.headers.origin;
-  res.setHeader('Access-Control-Allow-Origin', requestOrigin || '*'); // CORS for gateway dashboard + tenant webhooks
+  res.setHeader('Access-Control-Allow-Origin', requestOrigin || '*');
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-valmontpay-signature, x-admin-key');
@@ -87,11 +86,13 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, error: 'Reference is required' });
     }
 
-    // PURE GATEWAY: every POST to /api/transactions is admin-only.
-    // Gateway transactions originate only from the Paystack webhook or the
-    // tenant-authenticated initialize flow. Public storefronts must not
-    // inject arbitrary PENDING order rows.
-    if (!isAuthorizedAdmin(req)) {
+    // Terminal-status writes change what the dashboard counts as settled
+    // money. Public storefronts may only ever create/amend NON-terminal
+    // rows (PENDING, PENDING_MOMO); marking an order PAID/CANCELLED/etc.
+    // requires the admin key. Mirrors server.js POST /api/transactions.
+    const TERMINAL_STATUSES = ['SUCCESS', 'SUCCESSFUL', 'PAID', 'COMPLETED', 'FAILED', 'CANCELLED', 'REFUNDED'];
+    const requestedStatus = String(body.status || 'PENDING').toUpperCase();
+    if (TERMINAL_STATUSES.includes(requestedStatus) && !isAuthorizedAdmin(req)) {
       return res.status(401).json(unauthorizedPayload());
     }
 
@@ -116,3 +117,4 @@ export default async function handler(req, res) {
   res.setHeader('Allow', 'GET, POST');
   return res.status(405).json({ success: false, error: 'Method not allowed' });
 }
+// Payout settings: bank or momo

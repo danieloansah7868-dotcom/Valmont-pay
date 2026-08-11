@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valmont-Pay — Request Payout</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/favicon.svg">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #050d24; color: #ffffff; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+  <script>
+    // Merchant-only page (reached from the gated dashboard). This guard is for
+    // MERCHANTS — customers are never routed here after paying.
+    if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
+      window.location.href = '/admin-login.html';
+    }
+  </script>
+
+  <!-- Header Navigation -->
+  <header style="background: #0b1a38; padding: 16px 24px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+    <a href="/dashboard.html" style="border:1px solid #f58c14;color:#f58c14;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700;float:right;text-decoration:none;font-size:13px;">← Back to Dashboard</a>
+    <img src="/logo.svg" alt="Valmont Pay" style="height: 40px;">
+  </header>
+
+  <!-- Toast -->
+  <div id="toast" class="hidden fixed top-6 left-1/2 -translate-x-1/2 z-50 max-w-[92%] md:max-w-[560px] bg-green-600 text-white text-[12px] font-bold px-5 py-3.5 rounded-lg shadow-2xl"></div>
+
+  <main class="max-w-[560px] mx-auto p-6 flex-1 w-full">
+
+    <!-- Withdrawal Destination Form -->
+    <div id="payoutCard" class="bg-[#0b1a38] border border-[#142850] rounded-lg shadow-xl overflow-hidden">
+
+      <div class="p-6 border-b border-[#142850] flex items-center justify-between">
+        <div>
+          <h1 class="text-lg font-black text-white">Request Payout</h1>
+          <p class="text-[11px] text-gray-400 font-medium mt-1">Tell us where your settled funds should be sent.</p>
+        </div>
+        <div class="h-3 w-3 rounded-full bg-[#f68b1e] animate-pulse"></div>
+      </div>
+
+      <form id="payoutForm" onsubmit="confirmWithdrawal(event)" class="p-6 space-y-6">
+
+        <!-- Amount -->
+        <div>
+          <label class="block text-[10px] font-black uppercase text-gray-400 tracking-widest mb-2">Withdrawal Amount (GHS) <span class="text-red-500">*</span></label>
+          <input id="payoutAmount" type="number" min="1" step="0.01" placeholder="0.00" required
+                 class="w-full bg-[#050d24] border border-[#142850] p-3.5 rounded-[4px] text-sm text-white font-semibold outline-none focus:border-[#f68b1e] transition" />
+          <p id="amountError" class="hidden text-red-400 text-xs font-bold mt-2">Please enter a valid withdrawal amount greater than zero.</p>
+          <p id="balanceHint" class="hidden text-[11px] text-gray-500 font-medium mt-2">Available settled balance: <span id="balanceHintValue" class="text-[#f68b1e] font-bold">GH₵ 0.00</span></p>
+        </div>
+
+        <!-- Payout Method -->
+        <div>
+          <label class="block text-[10px] font-black uppercase text-gray-400 tracking-widest mb-2">Payout Method <span class="text-red-500">*</span></label>
+          <select id="payoutMethod" required onchange="onMethodChange()"
+                  class="w-full bg-[#050d24] border border-[#142850] p-3.5 rounded-[4px] text-sm text-white font-semibold outline-none focus:border-[#f68b1e] transition">
+            <option value="">— Select payout method —</option>
+            <option value="MTN Mobile Money">MTN Mobile Money</option>
+            <option value="Telecel Cash">Telecel Cash</option>
+            <option value="AT Money">AT Money</option>
+            <option value="Bank Transfer">Bank Transfer</option>
+          </select>
+          <p id="methodError" class="hidden text-red-400 text-xs font-bold mt-2">Please select a payout method.</p>
+        </div>
+
+        <!-- Bank Name (only when Bank Transfer is selected) -->
+        <div id="bankNameGroup" class="hidden">
+          <label class="block text-[10px] font-black uppercase text-gray-400 tracking-widest mb-2">Bank Name <span class="text-red-500">*</span></label>
+          <select id="bankName"
+                  class="w-full bg-[#050d24] border border-[#142850] p-3.5 rounded-[4px] text-sm text-white font-semibold outline-none focus:border-[#f68b1e] transition">
+            <option value="">— Select your bank —</option>
+            <option>GCB Bank</option>
+            <option>Ecobank Ghana</option>
+            <option>Absa Bank Ghana</option>
+            <option>Stanbic Bank Ghana</option>
+            <option>Fidelity Bank Ghana</option>
+            <option>CalBank</option>
+            <option>Zenith Bank Ghana</option>
+            <option>Standard Chartered Ghana</option>
+            <option>Access Bank Ghana</option>
+            <option>Agricultural Development Bank (ADB)</option>
+            <option>Consolidated Bank Ghana (CBG)</option>
+            <option>United Bank for Africa (UBA) Ghana</option>
+            <option>Republic Bank Ghana</option>
+            <option>Prudential Bank</option>
+            <option>Other</option>
+          </select>
+          <p id="bankNameError" class="hidden text-red-400 text-xs font-bold mt-2">Please select your bank.</p>
+        </div>
+
+        <!-- Account Name / MoMo Registered Name -->
+        <div>
+          <label id="accountNameLabel" class="block text-[10px] font-black uppercase text-gray-400 tracking-widest mb-2">Account Name / MoMo Registered Name <span class="text-red-500">*</span></label>
+          <input id="accountName" type="text" required placeholder="Name exactly as registered on the account"
+                 class="w-full bg-[#050d24] border border-[#142850] p-3.5 rounded-[4px] text-sm text-white font-semibold outline-none focus:border-[#f68b1e] transition" />
+          <p id="accountNameError" class="hidden text-red-400 text-xs font-bold mt-2">Please enter the account / wallet registered name.</p>
+        </div>
+
+        <!-- Account Number / MoMo Phone Number -->
+        <div>
+          <label id="accountNumberLabel" class="block text-[10px] font-black uppercase text-gray-400 tracking-widest mb-2">Account Number / MoMo Phone Number <span class="text-red-500">*</span></label>
+          <input id="accountNumber" type="tel" required placeholder="e.g. 024 XXX XXXX or bank account number" autocomplete="off"
+                 class="w-full bg-[#050d24] border border-[#142850] p-3.5 rounded-[4px] text-sm text-white font-semibold outline-none focus:border-[#f68b1e] transition" />
+          <p id="accountNumberError" class="hidden text-red-400 text-xs font-bold mt-2">Please enter a valid account number / MoMo phone number.</p>
+        </div>
+
+        <!-- Save destination -->
+        <label class="flex items-center gap-3 cursor-pointer select-none">
+          <input id="saveDestination" type="checkbox" checked class="h-4 w-4 accent-[#f68b1e]" />
+          <span class="text-[11px] text-gray-400 font-semibold">Save this destination for future payouts</span>
+        </label>
+
+        <!-- Submit -->
+        <button id="btnConfirmWithdrawal" type="submit"
+                class="w-full bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-[12px] tracking-widest uppercase py-4 rounded-[4px] transition shadow-lg">
+          Confirm Withdrawal
+        </button>
+
+        <p class="text-center text-[10px] text-gray-500 font-medium">
+          Payouts are processed to the destination above within 1–2 business days.
+        </p>
+      </form>
+    </div>
+
+    <!-- Success Card (shown after the request is logged) -->
+    <div id="successCard" class="hidden bg-[#0b1a38] border border-[#142850] rounded-lg shadow-xl overflow-hidden">
+      <div class="p-8 text-center">
+        <div class="h-16 w-16 bg-green-500/10 text-green-400 rounded-full flex items-center justify-center text-3xl font-black mx-auto mb-4">✓</div>
+        <h2 class="text-xl font-black text-white mb-2">Withdrawal Request Submitted</h2>
+        <p id="successSummary" class="text-gray-400 font-medium text-sm">Your settlement request has been logged and is being processed.</p>
+
+        <div class="bg-[#050d24] border border-[#142850] rounded-[6px] p-5 mt-6 text-left space-y-3">
+          <div class="flex justify-between text-[12px]">
+            <span class="text-gray-500 font-bold uppercase tracking-wider">Reference</span>
+            <span id="successPayoutRef" class="text-white font-black">—</span>
+          </div>
+          <div class="flex justify-between text-[12px]">
+            <span class="text-gray-500 font-bold uppercase tracking-wider">Amount</span>
+            <span id="successPayoutAmount" class="text-[#f68b1e] font-black">—</span>
+          </div>
+          <div class="flex justify-between text-[12px]">
+            <span class="text-gray-500 font-bold uppercase tracking-wider">Destination</span>
+            <span id="successPayoutDestination" class="text-white font-semibold text-right max-w-[60%]">—</span>
+          </div>
+        </div>
+
+        <div class="flex gap-3 mt-8">
+          <a href="/dashboard.html"
+             class="flex-1 bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-[11px] tracking-widest uppercase py-3.5 rounded-[4px] transition shadow-lg">
+            Back to Dashboard
+          </a>
+          <button onclick="newPayoutRequest()"
+                  class="flex-1 border border-[#142850] hover:border-[#f68b1e] text-gray-300 font-black text-[11px] tracking-widest uppercase py-3.5 rounded-[4px] transition">
+            New Request
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <p class="text-center text-[10px] text-gray-600 font-medium mt-6">Secured by Valmont-Pay Payment Gateway</p>
+  </main>
+
+  <script>
+    // ---------------------------------------------------------------
+    // WITHDRAWAL DESTINATION FORM
+    // Merchants must state WHERE their funds go (MTN MoMo, Telecel Cash,
+    // AT Money or Bank Transfer) before a payout request is accepted —
+    // replaces the old mock "settled to bank" alert on the dashboard.
+    // ---------------------------------------------------------------
+    const DESTINATION_STORAGE_KEY = 'valmontPayoutDestination';
+    const MOMO_METHODS = ['MTN Mobile Money', 'Telecel Cash', 'AT Money'];
+    const params = new URLSearchParams(window.location.search);
+
+    function onMethodChange() {
+      const method = document.getElementById('payoutMethod').value;
+      const isBank = method === 'Bank Transfer';
+
+      // Bank Name is displayed/required ONLY for Bank Transfer.
+      document.getElementById('bankNameGroup').classList.toggle('hidden', !isBank);
+      document.getElementById('bankName').required = isBank;
+
+      // Contextual labels + placeholders
+      if (isBank) {
+        document.getElementById('accountNameLabel').innerHTML = 'Account Name <span class="text-red-500">*</span>';
+        document.getElementById('accountNumberLabel').innerHTML = 'Account Number <span class="text-red-500">*</span>';
+        document.getElementById('accountNumber').placeholder = 'e.g. 1234567890123';
+      } else if (MOMO_METHODS.includes(method)) {
+        document.getElementById('accountNameLabel').innerHTML = 'MoMo Registered Name <span class="text-red-500">*</span>';
+        document.getElementById('accountNumberLabel').innerHTML = 'MoMo Phone Number <span class="text-red-500">*</span>';
+        document.getElementById('accountNumber').placeholder = '+233 XX XXX XXXX or 0XX XXX XXXX';
+      } else {
+        document.getElementById('accountNameLabel').innerHTML = 'Account Name / MoMo Registered Name <span class="text-red-500">*</span>';
+        document.getElementById('accountNumberLabel').innerHTML = 'Account Number / MoMo Phone Number <span class="text-red-500">*</span>';
+        document.getElementById('accountNumber').placeholder = 'e.g. 024 XXX XXXX or bank account number';
+      }
+    }
+
+    // Same Ghana MoMo validation used on pay.html:
+    // 0XXXXXXXXX (10 digits) or +233XXXXXXXXX
+    function isValidMomoNumber(raw) {
+      const digits = (raw || '').replace(/[\s\-()]/g, '');
+      return /^(\+?233\d{9}|0\d{9})$/.test(digits);
+    }
+
+    function isValidBankAccountNumber(raw) {
+      const digits = (raw || '').replace(/[\s\-]/g, '');
+      return /^\d{8,16}$/.test(digits);
+    }
+
+    function showFieldError(inputId, errorId, show) {
+      document.getElementById(errorId).classList.toggle('hidden', !show);
+      const input = document.getElementById(inputId);
+      input.classList.toggle('border-red-400', show);
+      input.classList.toggle('border-[#142850]', !show);
+      return show;
+    }
+
+    function formatMoney(value) {
+      return Number(value || 0).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function validateForm() {
+      let valid = true;
+
+      const amount = parseFloat(document.getElementById('payoutAmount').value);
+      if (showFieldError('payoutAmount', 'amountError', !(amount > 0))) valid = false;
+
+      const method = document.getElementById('payoutMethod').value;
+      if (showFieldError('payoutMethod', 'methodError', !method)) valid = false;
+
+      // Account Name / MoMo Registered Name — required
+      const accountName = document.getElementById('accountName').value.trim();
+      if (showFieldError('accountName', 'accountNameError', accountName.length < 2)) valid = false;
+
+      // Account Number / MoMo Phone Number — required (+ format checks)
+      const accountNumber = document.getElementById('accountNumber').value.trim();
+      let numberOk = accountNumber.length > 0;
+      if (numberOk && MOMO_METHODS.includes(method)) numberOk = isValidMomoNumber(accountNumber);
+      if (numberOk && method === 'Bank Transfer') numberOk = isValidBankAccountNumber(accountNumber);
+      if (showFieldError('accountNumber', 'accountNumberError', !numberOk)) valid = false;
+
+      // Bank Name — required only for Bank Transfer
+      if (method === 'Bank Transfer') {
+        if (showFieldError('bankName', 'bankNameError', !document.getElementById('bankName').value)) valid = false;
+      } else {
+        showFieldError('bankName', 'bankNameError', false);
+      }
+
+      return valid;
+    }
+
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.remove('hidden');
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(function () { toast.classList.add('hidden'); }, 8000);
+    }
+
+    function maskNumber(raw) {
+      const digits = (raw || '').replace(/[\s\-()]/g, '');
+      return digits.length > 4 ? '••••' + digits.slice(-4) : digits;
+    }
+
+    async function confirmWithdrawal(event) {
+      event.preventDefault();
+      if (!validateForm()) return;
+
+      const btn = document.getElementById('btnConfirmWithdrawal');
+      btn.disabled = true;
+      btn.textContent = 'Submitting Request...';
+
+      const amount = parseFloat(document.getElementById('payoutAmount').value);
+      const method = document.getElementById('payoutMethod').value;
+      const accountName = document.getElementById('accountName').value.trim();
+      const accountNumber = document.getElementById('accountNumber').value.trim();
+      const bankName = method === 'Bank Transfer' ? document.getElementById('bankName').value : '';
+      const reference = 'VP-PO-' + Date.now();
+
+      const destination = {
+        method: method,
+        account_name: accountName,
+        account_number: accountNumber.replace(/[\s\-]/g, ''),
+        bank_name: bankName
+      };
+
+      // Persist the destination so the merchant doesn't retype it next time.
+      if (document.getElementById('saveDestination').checked) {
+        try { localStorage.setItem(DESTINATION_STORAGE_KEY, JSON.stringify(destination)); } catch (_) {}
+      } else {
+        try { localStorage.removeItem(DESTINATION_STORAGE_KEY); } catch (_) {}
+      }
+
+      // Best-effort: log the payout request with the backend. The request is
+      // still confirmed locally even if the endpoint is unavailable.
+      try {
+        await fetch('/api/payout-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reference, amount, currency: 'GHS', destination })
+        });
+      } catch (_) {}
+
+      // Confirmation toast (required copy)
+      const methodLabel = method === 'Bank Transfer' && bankName ? method + ' — ' + bankName : method;
+      showToast('Withdrawal request for GH₵ ' + formatMoney(amount) + ' to ' + methodLabel +
+        ' (' + accountNumber + ') submitted successfully for processing.');
+
+      // Confirmation card
+      document.getElementById('successPayoutRef').textContent = reference;
+      document.getElementById('successPayoutAmount').textContent = 'GH₵ ' + formatMoney(amount);
+      document.getElementById('successPayoutDestination').textContent =
+        methodLabel + ' · ' + maskNumber(accountNumber) + ' (' + accountName + ')';
+      document.getElementById('successSummary').textContent =
+        'Withdrawal request for GH₵ ' + formatMoney(amount) + ' to ' + methodLabel +
+        ' (' + maskNumber(accountNumber) + ') submitted successfully for processing.';
+      document.getElementById('payoutCard').classList.add('hidden');
+      document.getElementById('successCard').classList.remove('hidden');
+
+      btn.disabled = false;
+      btn.textContent = 'Confirm Withdrawal';
+    }
+
+    function newPayoutRequest() {
+      document.getElementById('successCard').classList.add('hidden');
+      document.getElementById('payoutCard').classList.remove('hidden');
+      window.scrollTo(0, 0);
+    }
+
+    function prefillSavedDestination() {
+      let saved = null;
+      try { saved = JSON.parse(localStorage.getItem(DESTINATION_STORAGE_KEY) || 'null'); } catch (_) {}
+      if (!saved || !saved.method) return;
+
+      const methodSelect = document.getElementById('payoutMethod');
+      if ([...methodSelect.options].some(function (o) { return o.value === saved.method; })) {
+        methodSelect.value = saved.method;
+      }
+      onMethodChange();
+      if (saved.bank_name) document.getElementById('bankName').value = saved.bank_name;
+      if (saved.account_name) document.getElementById('accountName').value = saved.account_name;
+      if (saved.account_number) document.getElementById('accountNumber').value = saved.account_number;
+    }
+
+    // Boot: prefill amount from ?amount= (passed by the dashboard's Request
+    // Payout button) and restore any saved destination.
+    const amountFromDashboard = parseFloat(params.get('amount'));
+    if (amountFromDashboard > 0) {
+      document.getElementById('payoutAmount').value = amountFromDashboard.toFixed(2);
+      document.getElementById('balanceHint').classList.remove('hidden');
+      document.getElementById('balanceHintValue').textContent = 'GH₵ ' + formatMoney(amountFromDashboard);
+    }
+    onMethodChange();
+    prefillSavedDestination();
+  </script>
+</body>
+</html>

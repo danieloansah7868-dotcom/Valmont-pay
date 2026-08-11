@@ -56,7 +56,7 @@ export default async function handler(req, res) {
       subaccount,
       callback_url:
         callbackUrl ||
-        `${baseUrl(req)}/pay.html?reference=${encodeURIComponent(reference)}` +
+        `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(reference)}` +
           `&merchant=${encodeURIComponent(merchant || 'Valmont-Pay')}`
     });
 
@@ -76,10 +76,10 @@ export default async function handler(req, res) {
           amount,
           merchant: merchant || 'Valmont-Pay',
           callback_url: data.data.reference
-            ? `${baseUrl(req)}/pay.html?reference=${encodeURIComponent(data.data.reference)}&amount=${encodeURIComponent(amount)}&email=${encodeURIComponent(email)}&merchant=${encodeURIComponent(merchant || 'Valmont-Pay')}`
+            ? `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(data.data.reference)}&amount=${encodeURIComponent(amount)}&email=${encodeURIComponent(email)}&merchant=${encodeURIComponent(merchant || 'Valmont-Pay')}`
             : null,
           checkout_url: data.data.reference
-            ? `${baseUrl(req)}/pay.html?reference=${encodeURIComponent(data.data.reference)}&amount=${encodeURIComponent(amount)}&email=${encodeURIComponent(email)}&merchant=${encodeURIComponent(merchant || 'Valmont-Pay')}`
+            ? `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(data.data.reference)}&amount=${encodeURIComponent(amount)}&email=${encodeURIComponent(email)}&merchant=${encodeURIComponent(merchant || 'Valmont-Pay')}`
             : data.data.authorization_url
         }
       });

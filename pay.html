@@ -658,7 +658,7 @@
     // Internal pages (dashboard/admin) redirect unauthenticated visitors
     // to admin-login.html, so any callback pointing at them is rejected.
     // ---------------------------------------------------------------
-    const INTERNAL_PAGE_BLOCKLIST = ['/dashboard.html', '/admin.html', '/admin-login.html', '/webhook-status.html'];
+    const INTERNAL_PAGE_BLOCKLIST = ['/dashboard.html', '/admin.html', '/admin-login.html', '/webhook-status.html', '/payout.html'];
 
     // Returns a validated merchant callback URL, or null when there is
     // no usable callback (in which case we stay on the pay.html success card).

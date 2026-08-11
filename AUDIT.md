@@ -67,7 +67,7 @@ The diagnostics recommended `https://valmont-pay.vercel.app/api/webhook`. Recomm
 | `/api/admin/tenants*` (create/update/delete/enable/disable/rotate) | Full tenant CRUD unauthenticated | guarded |
 | `POST /api/manual-transaction` | Inject arbitrary `SUCCESS` rows → fake "Total Collected" money on your dashboard | guarded |
 | `POST /api/webhook-debug` | Same fake-money primitive | guarded |
-| `POST /api/transactions` (terminal statuses) | Anyone could flip orders to `PAID`/`CANCELLED`/`SUCCESS` | ALL writes admin-only (pure gateway: no public PENDING order injection) |
+| `POST /api/transactions` (terminal statuses) | Anyone could flip orders to `PAID`/`CANCELLED`/`SUCCESS` | non-terminal public (`PENDING_MOMO` storefront OK); terminal requires admin |
 | `PUT /api/tenants/:key/webhook` | Redirect a tenant's payment-event stream to an attacker's server | guarded |
 | `POST /api/webhook-deliveries/:ref/replay` | Replay spoofed payment events at tenant backends | guarded |
 
