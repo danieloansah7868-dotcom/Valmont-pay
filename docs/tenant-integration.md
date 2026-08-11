@@ -16,7 +16,7 @@ first try.
 > GH₵23.50 — never `2350` (pesewas).**
 
 The Valmont-Pay gateway, the Paystack wire format, the Supabase
-`transactions.amount` column, the admin dashboard, the Nanahemaa Market
+`transactions.amount` column, the admin dashboard, the example storefront
 checkout, and every server-side helper all speak **cedis**. Paystack
 converts to pesewas at the very last step (`lib/paystack.js →
 toSubunits()`) so client integrations must never pre-multiply.
@@ -193,10 +193,8 @@ to `/api/log/bad-amount` for audit.
 
 ## 4. Subaccounts (split settlement, optional)
 
-If your tenant is configured with a Paystack subaccount (e.g. Nanahemaa
-Market's `ACCT_uvyay690lwskmw5`), the gateway forwards it to Paystack
-and Paystack handles the split automatically (98% merchant / 2% gateway
-in Nanahemaa's case).
+If your tenant is configured with a Paystack subaccount (e.g. `ACCT_xxxxxxxxxxxx`), the gateway forwards it to Paystack
+and Paystack handles the split automatically (e.g. 98% merchant / 2% gateway).
 
 Pass it on either flow:
 
