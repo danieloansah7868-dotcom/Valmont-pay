@@ -22,6 +22,7 @@ const accessCodeStore = require('./lib/access-code-store');
 const webhookForwarder = require('./lib/tenant-webhook-forwarder');
 const notifier = require('./lib/notifier');
 const paymentLinkStore = require('./lib/payment-link-store');
+const mandateStore = require('./lib/mandate-store');
 const { publicBaseUrl } = require('./lib/base-url');
 const { requireAdmin, isAuthorizedAdmin, unauthorizedPayload, adminAuthEnforced } = require('./lib/admin-auth');
 
@@ -309,6 +310,84 @@ app.get('/api/v1/transaction/verify/:reference', (req, res) => {
   });
 });
 
+// ─── STANDING MANDATES / RECURRING BILLING API (Act 987 / BoG Compliant) ───
+// Allows tenants and merchants to inspect active standing instructions,
+// revoke mandates (mandatory opt-out), or execute merchant-initiated charges.
+
+app.get('/api/v1/mandates', async (req, res) => {
+  const merchant_name = req.query.merchant || req.query.merchant_name || undefined;
+  const customer_email = req.query.email || req.query.customer_email || undefined;
+  const status = req.query.status || undefined;
+
+  const result = await mandateStore.listMandates({ merchant_name, customer_email, status });
+  return res.status(200).json({
+    status: result.ok,
+    count: result.mandates ? result.mandates.length : 0,
+    data: result.mandates || [],
+    error: result.error ? result.reason : null
+  });
+});
+
+app.get('/api/v1/mandates/:code', async (req, res) => {
+  const code = req.params.code;
+  const mandate = await mandateStore.getMandate(code);
+  if (!mandate) {
+    return res.status(404).json({ status: false, message: `Mandate ${code} not found.` });
+  }
+  return res.status(200).json({ status: true, data: mandate });
+});
+
+app.post('/api/v1/mandates/charge', async (req, res) => {
+  const { authorization_code, amount, email, reference, currency, subaccount, merchant, metadata } = req.body || {};
+  if (!authorization_code || !amount) {
+    return res.status(400).json({ status: false, message: 'authorization_code and positive amount are required.' });
+  }
+
+  const result = await mandateStore.chargeMandate({
+    authorization_code,
+    amount,
+    email,
+    reference,
+    currency,
+    subaccount,
+    merchant,
+    metadata
+  });
+
+  if (!result.ok) {
+    return res.status(400).json({
+      status: false,
+      message: result.reason || 'Recurring mandate charge failed.',
+      paystack_response: result.paystackResponse || null
+    });
+  }
+
+  return res.status(200).json({
+    status: true,
+    message: 'Mandate charged successfully',
+    data: result.transaction,
+    paystack_response: result.paystackResponse || null
+  });
+});
+
+app.post('/api/v1/mandates/revoke', async (req, res) => {
+  const { authorization_code } = req.body || {};
+  if (!authorization_code) {
+    return res.status(400).json({ status: false, message: 'authorization_code is required.' });
+  }
+
+  const result = await mandateStore.revokeMandate(authorization_code);
+  if (!result.ok) {
+    return res.status(404).json({ status: false, message: result.reason || `Mandate ${authorization_code} not found.` });
+  }
+
+  return res.status(200).json({
+    status: true,
+    message: 'Mandate revoked successfully. No further automated charges can occur.',
+    data: result.data || result.record
+  });
+});
+
 // API 3b: Paystack-backed endpoints (same contract as the /api serverless
 // functions, so local development and Vercel behave identically).
 app.post('/api/initialize-payment', async (req, res) => {
@@ -399,6 +478,14 @@ app.get('/api/verify-payment', async (req, res) => {
             client,
             context: 'VERIFY-PAYMENT'
           });
+
+          if (isSuccess && mandateStore && typeof mandateStore.saveMandateFromAuthorization === 'function') {
+            try {
+              await mandateStore.saveMandateFromAuthorization(paystackTrx, { client, context: 'VERIFY-PAYMENT' });
+            } catch (mandateErr) {
+              console.warn('[VERIFY-PAYMENT] Non-fatal error saving standing mandate:', mandateErr.message || mandateErr);
+            }
+          }
 
           if (persistence.ok) {
             console.log(`[VERIFY-PAYMENT] Persisted to Supabase: ${paystackTrx.reference}`);
@@ -683,6 +770,15 @@ app.post('/api/webhook', async (req, res) => {
     }
   } else if (result.statusCode === 200) {
     console.log(`[WEBHOOK ${requestId}] STEP 6/6 SUPABASE — skipped (no transaction to save, or Supabase is not configured)`);
+  }
+
+  // ─── STANDING MANDATE SAVING ───
+  if (result.statusCode === 200 && req.body && req.body.event === 'charge.success' && req.body.data) {
+    try {
+      await mandateStore.saveMandateFromAuthorization(req.body.data, { context: `WEBHOOK ${requestId}` });
+    } catch (mandateErr) {
+      console.warn(`[WEBHOOK ${requestId}] Non-fatal error saving standing mandate:`, mandateErr.message || mandateErr);
+    }
   }
 
   // ─── MULTI-TENANT: Forward webhook to the tenant's registered URL ───

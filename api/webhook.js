@@ -13,11 +13,13 @@ import webhookLog from '../lib/webhook-log.js';
 import notifierModule from '../lib/notifier.js';
 import tenantsModule from '../lib/tenants.js';
 import tenantWebhookForwarderModule from '../lib/tenant-webhook-forwarder.js';
+import mandateStoreModule from '../lib/mandate-store.js';
 
 const { getSupabaseClient, supabaseConfigState } = supabaseModule;
 const { saveTransaction } = transactionStore;
 const { recordWebhookHit, completeWebhookHit } = webhookLog;
 const { sendOrderReceiptNotification } = notifierModule;
+const { saveMandateFromAuthorization } = mandateStoreModule;
 
 /**
  * Every log line from one request carries the same short id, so a single
@@ -250,7 +252,8 @@ function configurationState() {
 export function createWebhookHandler({
   supabaseClient,
   tenantRegistry = tenantsModule,
-  tenantWebhookForwarder = tenantWebhookForwarderModule
+  tenantWebhookForwarder = tenantWebhookForwarderModule,
+  mandateStore = mandateStoreModule
 } = {}) {
   return async function webhookHandler(req, res) {
     const requestId = newRequestId();
@@ -588,6 +591,17 @@ export function createWebhookHandler({
           'supabase-write-failed',
           { supabaseError: persistence.error || null }
         );
+      }
+
+      // ------------------------------------------ STANDING MANDATE SAVING
+      // If Paystack returned a reusable authorization code (e.g. for standing
+      // instructions / auto-renewal), record it durably.
+      if (eventName === 'charge.success' && mandateStore && typeof mandateStore.saveMandateFromAuthorization === 'function') {
+        try {
+          await mandateStore.saveMandateFromAuthorization(data, { client, context: `WEBHOOK ${requestId}` });
+        } catch (mandateError) {
+          console.warn(`[WEBHOOK ${requestId}] Non-fatal error saving standing mandate:`, mandateError.message || mandateError);
+        }
       }
 
       // ------------------------------------------ TENANT WEBHOOK FORWARDING
