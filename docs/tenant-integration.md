@@ -207,9 +207,64 @@ The subaccount is set per-tenant in `lib/tenants.js` and the
 
 ---
 
-## 5. Validation & error states
+## 5. Standing Mandates & Auto-Renewal (Merchant-Initiated Debits)
 
-### 5.1 What pay.html validates (legacy flow)
+When Valmont-Pay enables an operator's merchant-initiated or standing-mandate product — like MTN Ghana MoMo auto-renewal or recurring card debits — debits can run fully automatically after the customer's first approval.
+
+### 5.1 Legal & Compliance Requirements (Act 987 & Scheme Rules)
+
+Implementing automatic recurring debits is legal and compliant under Bank of Ghana (BoG) consumer protection rules, provided four operational rules are followed:
+
+1. **Explicit Customer Mandate Authorization (Opt-In)**: The initial Customer-Initiated Transaction (CIT) must explicitly inform the customer that they are consenting to a standing instruction or recurring mandate. Once the USSD PIN or 3D-Secure prompt is authorized, Paystack issues a reusable `authorization_code`.
+2. **Mandatory Opt-Out & Revocation Rights**: Customers must have an accessible way to cancel or revoke their standing approval at any time (e.g., via MTN MoMo USSD `*170#` approvals or through the merchant portal).
+3. **Pre-Debit Notification**: Consumer protection guidelines require sending an advance notification (SMS/email/WhatsApp) to the customer before executing an automated debit on monthly or extended billing cycles.
+4. **Gateway / Operator Underwriting**: Automatic MoMo Direct Debits without recurring USSD PIN prompts require Merchant-Initiated Direct Debit (MIDD) / Standing Instruction approval from the operator (MTN/Telecel/Paystack).
+
+### 5.2 How to Initialize a Standing Mandate
+
+When initializing a payment via `POST /api/transaction/initialize` (or in `lib/paystack.js`), pass recurring parameters in `metadata`:
+
+```json
+{
+  "email": "customer@example.com",
+  "amount": 45.00,
+  "reference": "VP-SUB-INIT-001",
+  "recurring": true,
+  "mandate_type": "standing_instruction"
+}
+```
+
+When the initial checkout succeeds, Valmont-Pay inspects the returned Paystack authorization object (`authorization.authorization_code` with `reusable: true`) and durably stores the mandate in the Supabase `mandates` table (created by `scripts/supabase-mandates-schema.sql`).
+
+### 5.3 Managing & Charging Mandates via API
+
+Valmont-Pay provides four endpoints for inspecting, executing, and revoking standing mandates:
+
+* **`GET /api/v1/mandates`**: List standing mandates. Accepts optional query filters `?merchant=<name>&email=<email>&status=<ACTIVE|REVOKED|EXPIRED>`.
+* **`GET /api/v1/mandates/:code`**: Get full details of a specific mandate by its `authorization_code`.
+* **`POST /api/v1/mandates/charge`**: Charge an active standing mandate without customer PIN prompting:
+  ```json
+  {
+    "authorization_code": "AUTH_xxxxxxxxx",
+    "amount": 45.00,
+    "email": "customer@example.com",
+    "reference": "VP-RENEWAL-002"
+  }
+  ```
+  Returns `200 OK` on successful charge and automatically records the new transaction in the dashboard ledger (`transactions` table).
+* **`POST /api/v1/mandates/revoke`**: Revoke an active mandate:
+  ```json
+  {
+    "authorization_code": "AUTH_xxxxxxxxx"
+  }
+  ```
+  Marks the mandate `status` as `REVOKED`. Any subsequent attempt to charge a revoked mandate is immediately rejected by `lib/mandate-store.js` with `400 Bad Request` to guarantee opt-out compliance.
+
+---
+
+## 6. Validation & error states
+
+### 6.1 What pay.html validates (legacy flow)
 
 | Input | Verdict | Why |
 |---|---|---|
@@ -266,7 +321,7 @@ Same as 5.3, plus:
 
 ---
 
-## 6. Reference: every URL parameter on `pay.html`
+## 7. Reference: every URL parameter on `pay.html`
 
 | Param | Legacy flow | Secure flow | Notes |
 |---|---|---|---|
@@ -283,7 +338,7 @@ Same as 5.3, plus:
 
 ---
 
-## 7. Checklist for a new storefront integration
+## 8. Checklist for a new storefront integration
 
 Before going live, confirm each of these:
 
@@ -306,26 +361,31 @@ Before going live, confirm each of these:
 - [ ] No `pay.html` URL is cached by a CDN — the page reads the URL
       on every load and Paystack's inline checkout depends on a fresh
       page state.
+- [ ] If using standing mandates or auto-renewal, verify that customers
+      are clearly informed of the recurring instruction (opt-in) and have a
+      cancellation path (opt-out via `POST /api/v1/mandates/revoke` or USSD).
 
 ---
 
-## 8. Where to look in the code
+## 9. Where to look in the code
 
 | File | What it does |
 |---|---|
 | `pay.html` | Renders the payment form. Runs the unit validator. |
-| `lib/paystack.js` | Converts cedis → pesewas at the wire boundary (`toSubunits`). |
+| `lib/paystack.js` | Converts cedis → pesewas at the wire boundary (`toSubunits`). Includes `chargeAuthorizationWithKey`. |
 | `api/initialize-payment.js` | Vercel serverless handler for the secure flow (cedis in, pesewas out). |
 | `server.js` → `app.post('/api/transaction/initialize', …)` | Express route, identical contract. |
 | `api/log-bad-amount.js` | Audit endpoint for unit-mismatch rejections. |
 | `lib/tenants.js` | Tenant config (display name, brand color, allowed_domains, paystack_subaccount, …). |
 | `lib/access-code-store.js` | One-time access codes for the secure flow. |
+| `lib/mandate-store.js` | Standing mandate & recurring authorization code storage and execution (`chargeMandate`, `revokeMandate`). |
 | `lib/webhook.js` | Paystack webhook → Supabase transaction upsert (the source of truth). |
 
 ---
 
-## 9. Change log
+## 10. Change log
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-11 | Added Standing Mandates & Auto-Renewal documentation (Section 5) and API endpoints (`/api/v1/mandates`). | Explains legal/BoG compliance (Act 987 opt-in/opt-out) and merchant-initiated recurring debits for MTN MoMo & card authorizations. |
 | 2026-08-03 | Unit contract formalized as "cedis only". pay.html validator added. `?amount=2300` (and any plain integer ≥ 1000 with no decimal) is now rejected and audited. | Blocker 4: Electricals `amount=2300` charged GH₵2,300 for a GH₵23 cart. |

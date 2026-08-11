@@ -15,10 +15,12 @@
 import paystackModule from '../lib/paystack.js';
 import transactionStore from '../lib/transaction-store.js';
 import supabaseModule from '../lib/supabase.js';
+import mandateStoreModule from '../lib/mandate-store.js';
 
 const { verifyPayment } = paystackModule;
 const { saveTransaction } = transactionStore;
 const { getSupabaseClient, isSupabaseConfigured } = supabaseModule;
+const { saveMandateFromAuthorization } = mandateStoreModule;
 
 /** Map a Paystack channel + authorization to a human-friendly label. */
 function formatChannel(channel, authorization) {
@@ -110,6 +112,13 @@ export default async function handler(req, res) {
 
         if (result.ok) {
           console.log('[VERIFY-PAYMENT] Transaction persisted to Supabase:', transaction.reference);
+          if (isSuccess && typeof saveMandateFromAuthorization === 'function') {
+            try {
+              await saveMandateFromAuthorization(paystackTrx, { client, context: 'VERIFY-PAYMENT' });
+            } catch (mandateErr) {
+              console.warn('[VERIFY-PAYMENT] Non-fatal error saving standing mandate:', mandateErr.message || mandateErr);
+            }
+          }
         } else {
           console.error('[VERIFY-PAYMENT] Failed to persist transaction:', result.reason, result.error);
         }

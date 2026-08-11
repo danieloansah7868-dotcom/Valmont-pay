@@ -242,6 +242,19 @@ Thank you for your payment!
     in-process so Paystack redeliveries never double-text a customer, while a
     fully failed pass stays retryable.
 
+### 🔄 Standing Mandates & Auto-Renewal (`lib/mandate-store.js`)
+When an operator (like **MTN Mobile Money** or **Paystack Cards**) enables merchant-initiated transactions / standing instructions, Valmont-Pay captures reusable `authorization_code`s and makes them available for automated recurring charges:
+
+- **Durable Mandate Storage**: Backed by Supabase (`public.mandates`, see `scripts/supabase-mandates-schema.sql`) with hot in-memory caching.
+- **Consumer Protection & BoG Compliance (Act 987)**:
+  - **Explicit Opt-in**: Customers authorize the recurring mandate on their initial payment.
+  - **Mandatory Opt-out / Revocation**: Mandates can be revoked at any time via `POST /api/v1/mandates/revoke` (`status = 'REVOKED'`). Charging a revoked mandate is immediately blocked with `HTTP 400`.
+- **Merchant-Initiated Charge API**:
+  - **`GET /api/v1/mandates`**: List active customer mandates.
+  - **`GET /api/v1/mandates/:code`**: Inspect an authorization code.
+  - **`POST /api/v1/mandates/charge`**: Trigger a recurring charge (`{ authorization_code, amount, email, reference }`) without requiring a USSD PIN prompt.
+  - **`POST /api/v1/mandates/revoke`**: Revoke a mandate (`{ authorization_code }`).
+
 ---
 
 ## 🔍 Debugging: "the webhook isn't receiving events"
