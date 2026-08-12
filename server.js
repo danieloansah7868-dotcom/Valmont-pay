@@ -23,6 +23,8 @@ const webhookForwarder = require('./lib/tenant-webhook-forwarder');
 const notifier = require('./lib/notifier');
 const paymentLinkStore = require('./lib/payment-link-store');
 const mandateStore = require('./lib/mandate-store');
+const serviceCatalogue = require('./lib/service-catalogue');
+const legacyLinkPolicy = require('./lib/legacy-link-policy');
 const { publicBaseUrl } = require('./lib/base-url');
 const { requireAdmin, isAuthorizedAdmin, unauthorizedPayload, adminAuthEnforced } = require('./lib/admin-auth');
 
@@ -391,11 +393,73 @@ app.post('/api/v1/mandates/revoke', async (req, res) => {
 // API 3b: Paystack-backed endpoints (same contract as the /api serverless
 // functions, so local development and Vercel behave identically).
 app.post('/api/initialize-payment', async (req, res) => {
-  const { email, merchant, phone, callback_url } = req.body || {};
-  const amount = parseFloat(req.body && req.body.amount);
-  const reference = (req.body && req.body.reference) || generateReference();
+  const body = req.body || {};
+  const { email, phone, callback_url } = body;
+  let merchant = body.merchant;
+  let amount = parseFloat(body.amount);
+  let reference = body.reference || generateReference();
   // Paystack subaccount (body or query) — enables split settlement (e.g. ACCT_... for automatic 98%/2% splits).
-  const subaccount = (req.body && req.body.subaccount) || (req.query && req.query.subaccount);
+  let subaccount = body.subaccount || (req.query && req.query.subaccount);
+
+  // ─── AMOUNT AUTHORITY ─────────────────────────────────────────────
+  // body.amount is NOT gospel. It arrives from a browser that may have
+  // read it straight out of the address bar.
+  //
+  //   1. If the caller presents an access_code, the stored payment
+  //      intent is the source of truth: amount, reference and merchant
+  //      are re-read from it and the body values are ignored. Editing
+  //      ?amount= on an access-code URL therefore cannot change what is
+  //      charged.
+  //   2. Otherwise, if the request came from a legacy pay.html URL that
+  //      carried ?amount= (Referer check), it is refused outright unless
+  //      ALLOW_LEGACY_AMOUNT_URL=1 is set on this server.
+  // ──────────────────────────────────────────────────────────────────
+  const accessCode = typeof body.access_code === 'string' ? body.access_code.trim() : '';
+
+  if (accessCode) {
+    const resolved = await paymentLinkStore.resolvePaymentLink(accessCode);
+    const intent = resolved && resolved.payment;
+    if (!intent) {
+      return res.status(404).json({
+        success: false,
+        code: 'ACCESS_CODE_INVALID',
+        error: 'This payment link is invalid or has expired. Ask the merchant for a new link.'
+      });
+    }
+
+    const storedAmount = parseFloat(intent.amount);
+    if (!Number.isFinite(storedAmount) || storedAmount <= 0) {
+      return res.status(409).json({
+        success: false,
+        code: 'ACCESS_CODE_AMOUNT_MISSING',
+        error: 'The stored payment intent has no usable amount. Ask the merchant for a new link.'
+      });
+    }
+
+    if (Number.isFinite(amount) && Math.round(amount * 100) !== Math.round(storedAmount * 100)) {
+      // Not an error for the customer — the server simply wins. Logged so
+      // tampering attempts are visible.
+      console.warn(
+        `[INIT-PAYMENT] Ignoring client amount ${amount} for access_code ${accessCode}; ` +
+        `charging the stored ${storedAmount}.`
+      );
+    }
+
+    amount = storedAmount;
+    reference = intent.reference || reference;
+    merchant = intent.tenant_key || intent.merchant_display_name || merchant;
+    const intentTenant = tenants.getTenant(intent.tenant_key);
+    subaccount = subaccount || (intentTenant && intentTenant.paystack_subaccount) || undefined;
+  } else if (
+    !legacyLinkPolicy.legacyAmountUrlAllowed() &&
+    legacyLinkPolicy.refererIsLegacyAmountUrl(req.headers && req.headers.referer)
+  ) {
+    console.warn(
+      '[INIT-PAYMENT] Refused a legacy unsigned pay.html request. ' +
+      `referer=${req.headers.referer} amount=${body.amount} merchant=${body.merchant || 'unknown'}`
+    );
+    return res.status(403).json(legacyLinkPolicy.legacyRejectionPayload());
+  }
 
   if (!email || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ success: false, error: 'Missing or invalid fields' });
@@ -1436,6 +1500,240 @@ app.get('/api/transaction/access/:access_code', async (req, res) => {
   });
 });
 
+// ─── GET /api/config/pay — runtime posture for pay.html ────────────────
+//
+// pay.html asks this whether the retired legacy amount-in-URL flow has
+// been re-opened on THIS deployment (ALLOW_LEGACY_AMOUNT_URL=1). The flag
+// is server-side only and nothing in a request can set it. pay.html fails
+// closed if this endpoint is unreachable, so the worst case is a rejected
+// legacy link, never an accepted one.
+app.get('/api/config/pay', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  return res.status(200).json({
+    status: true,
+    data: {
+      allow_legacy_amount_url: legacyLinkPolicy.legacyAmountUrlAllowed()
+    }
+  });
+});
+
+// ─── Valmont Web Services: mint a locked pay link from a SKU ───────────
+//
+// The agency site is anonymous — no secret key may ever ship in its
+// browser bundle — but it still needs "Pay Stage 1" / "Pay in full"
+// buttons. So it may only name a SKU. The price is looked up in
+// lib/service-catalogue.js, server-side. An anonymous caller cannot pass
+// an amount; if it sends one it is ignored (and logged).
+//
+//   GET  /api/v1/payment-link/catalogue   → the price list (public)
+//   POST /api/v1/payment-link/sku         → { sku, email } → pay_url
+//   POST /api/v1/payment-link             → admin-authed, same by SKU
+//
+// Every one of them returns pay.html?access_code=… — never an
+// amount-in-URL link.
+
+app.get('/api/v1/payment-link/catalogue', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  return res.status(200).json({
+    status: true,
+    data: {
+      merchant: serviceCatalogue.SERVICE_MERCHANT_NAME,
+      merchant_key: serviceCatalogue.SERVICE_MERCHANT_KEY,
+      currency: 'GHS',
+      items: serviceCatalogue.listCatalogue()
+    }
+  });
+});
+
+/**
+ * Mint a locked payment link for a catalogue SKU.
+ *
+ * Shared by the public (anonymous) endpoint and the admin one. The ONLY
+ * price input is the SKU: `requestedAmount` exists purely so we can log
+ * that a caller tried to name its own price, and is never charged.
+ */
+async function mintCatalogueLink({ req, sku, email, phone, callbackUrl, requestedAmount, issuedBy }) {
+  const item = serviceCatalogue.lookupSku(sku);
+  if (!item) {
+    return {
+      httpStatus: 400,
+      body: {
+        status: false,
+        code: 'UNKNOWN_SKU',
+        message: 'Unknown sku. Use one of the published service references.',
+        data: { valid_skus: Object.keys(serviceCatalogue.CATALOGUE) }
+      }
+    };
+  }
+
+  if (requestedAmount !== undefined && requestedAmount !== null && String(requestedAmount).trim() !== '') {
+    console.warn(
+      `[SKU-LINK] Ignoring caller-supplied amount ${requestedAmount} for ${item.sku}; ` +
+      `catalogue price is GHS ${item.amount}.`
+    );
+  }
+
+  const customerEmail = String(email || '').trim();
+  if (!customerEmail || !customerEmail.includes('@')) {
+    return {
+      httpStatus: 400,
+      body: { status: false, code: 'EMAIL_REQUIRED', message: 'A valid customer email is required.' }
+    };
+  }
+
+  const tenant = tenants.getTenant(item.merchant_key)
+    || tenants.getTenantByIdentifier(item.merchant)
+    || null;
+  const reference = serviceCatalogue.buildReference(item.sku);
+  const origin = baseUrl(req);
+  const finalCallbackUrl = String(callbackUrl || '').trim();
+
+  // A callback must belong to the tenant, exactly as on the tenant API.
+  if (finalCallbackUrl && tenant) {
+    const validation = tenants.validateCallbackUrl(tenant, finalCallbackUrl);
+    if (!validation.valid) {
+      return {
+        httpStatus: 400,
+        body: { status: false, code: 'CALLBACK_NOT_ALLOWED', message: `Invalid callback_url: ${validation.reason}` }
+      };
+    }
+  }
+
+  // Initialize with Paystack when the tenant has credentials, so pay.html
+  // can open the inline checkout without a second round trip.
+  let paystackResult = null;
+  if (tenant && tenant.paystack_secret_key) {
+    try {
+      paystackResult = await initializePaymentWithKey({
+        amount: item.amount,
+        email: customerEmail,
+        reference,
+        callback_url: finalCallbackUrl
+          || `${origin}/checkout.html?reference=${encodeURIComponent(reference)}&merchant=${encodeURIComponent(item.merchant_key)}`,
+        merchant: item.merchant_key,
+        subaccount: tenant.paystack_subaccount || undefined,
+        currency: item.currency,
+        secretKey: tenant.paystack_secret_key
+      });
+    } catch (error) {
+      console.warn(`[SKU-LINK] Paystack init failed for ${reference}: ${error.message || error}`);
+    }
+  }
+
+  // The access code is the lock: the amount now lives server-side only.
+  const accessCodeData = accessCodeStore.createAccessCode({
+    amount: item.amount,
+    reference,
+    currency: item.currency,
+    email: customerEmail,
+    phone: String(phone || '').trim(),
+    callback_url: finalCallbackUrl,
+    tenant_key: tenant ? tenant.key : item.merchant_key,
+    merchant_display_name: (tenant && tenant.display_name) || item.merchant,
+    merchant_brand_color: (tenant && tenant.brand_color) || '#f68b1e',
+    merchant_logo_url: (tenant && tenant.logo_url) || '/logo.svg',
+    paystack_authorization_url: paystackResult && paystackResult.data ? paystackResult.data.authorization_url || '' : '',
+    paystack_access_code: paystackResult && paystackResult.data ? paystackResult.data.access_code || '' : ''
+  });
+
+  ledger.addTransaction({
+    reference,
+    customer: customerEmail,
+    amount: item.amount,
+    channel: 'PENDING',
+    status: 'PENDING',
+    merchant: (tenant && tenant.display_name) || item.merchant,
+    tenant_key: tenant ? tenant.key : item.merchant_key,
+    callback_url: finalCallbackUrl
+  });
+
+  // A link we hand to a client must outlive a cold start.
+  const persistence = await paymentLinkStore.persistPaymentLink({
+    accessCode: accessCodeData.access_code,
+    payment: accessCodeData.payment,
+    ttlMs: paymentLinkStore.linkTtlMs()
+  });
+
+  if (!persistence.ok) {
+    console.error(`[SKU-LINK] ✗ ${reference} was NOT persisted — refusing to hand out a dead link:`, persistence.reason);
+    return {
+      httpStatus: 502,
+      body: {
+        status: false,
+        code: 'LINK_NOT_DURABLE',
+        message: 'The payment link could not be saved durably, so it was not generated. ' +
+          'If this persists, apply scripts/supabase-payment-links-schema.sql to your Supabase project.',
+        detail: persistence.reason
+      }
+    };
+  }
+
+  console.log(
+    `[SKU-LINK] ${issuedBy}: ${item.sku} → ${reference} | ${item.currency} ${item.amount} | ${customerEmail}`
+  );
+
+  return {
+    httpStatus: 200,
+    body: {
+      status: true,
+      message: 'Payment link created',
+      data: {
+        sku: item.sku,
+        label: item.label,
+        plan: item.plan,
+        stage: item.stage,
+        reference,
+        // Echoed for display only. The charge is driven by the stored
+        // intent behind access_code, not by this number.
+        amount: item.amount,
+        currency: item.currency,
+        merchant: item.merchant,
+        merchant_key: item.merchant_key,
+        access_code: accessCodeData.access_code,
+        link_expires_at: persistence.expiresAt || null,
+        link_durable: Boolean(persistence.durable),
+        pay_url: `${origin}/pay.html?access_code=${encodeURIComponent(accessCodeData.access_code)}`,
+        checkout_url: `${origin}/pay.html?access_code=${encodeURIComponent(accessCodeData.access_code)}`
+      }
+    }
+  };
+}
+
+// Public, anonymous. Takes ONLY a sku (plus who to bill it to) — never an
+// amount. This is what the Valmont Web Services storefront calls.
+app.post('/api/v1/payment-link/sku', async (req, res) => {
+  const body = req.body || {};
+  const result = await mintCatalogueLink({
+    req,
+    sku: body.sku || body.reference,
+    email: body.email,
+    phone: body.phone,
+    callbackUrl: body.callback_url,
+    requestedAmount: body.amount,
+    issuedBy: 'public-sku'
+  });
+  res.set('Cache-Control', 'no-store');
+  return res.status(result.httpStatus).json(result.body);
+});
+
+// Admin-authed equivalent, used by the dashboard's "Issue Stage 1 / full
+// link" panel. Same catalogue, same lock — the operator picks a SKU, not
+// a price.
+app.post('/api/v1/payment-link', requireAdmin, async (req, res) => {
+  const body = req.body || {};
+  const result = await mintCatalogueLink({
+    req,
+    sku: body.sku || body.reference,
+    email: body.email,
+    phone: body.phone,
+    callbackUrl: body.callback_url,
+    requestedAmount: body.amount,
+    issuedBy: 'admin'
+  });
+  res.set('Cache-Control', 'no-store');
+  return res.status(result.httpStatus).json(result.body);
+});
+
 // ─── POST /api/log/bad-amount — pay.html unit-mismatch audit endpoint ────
 //
 // Best-effort audit log. pay.html calls this via navigator.sendBeacon
@@ -1462,7 +1760,18 @@ app.post('/api/log/bad-amount', (req, res) => {
     const userAgent = typeof body.userAgent === 'string' ? body.userAgent.slice(0, 256) : null;
     const path = typeof body.path === 'string' ? body.path.slice(0, 64) : null;
 
-    if (reason === 'looks-like-pesewas' && rawAmount) {
+    if (reason === legacyLinkPolicy.LEGACY_UNSIGNED_REASON) {
+      // A retired amount-in-URL link was opened. This is the migration
+      // log: every line here is a storefront still pointing at the old
+      // flow. See docs/tenant-integration.md § 3.
+      console.warn(
+        `[VALMONT-PAY][BAD-AMOUNT] unit=n/a reason=${reason} ` +
+        `rawAmount=${rawAmount || 'none'} ` +
+        `merchant=${merchant || 'unknown'} ref=${ref || 'none'} ` +
+        `path=${path || 'unknown'} url=${url || 'unknown'} ` +
+        `ua=${userAgent || 'unknown'}`
+      );
+    } else if (reason === 'looks-like-pesewas' && rawAmount) {
       console.warn(
         `[VALMONT-PAY][BAD-AMOUNT] unit=mismatch reason=${reason} ` +
         `rawAmount=${rawAmount} suspectUnit=${suspectUnit || 'pesewas'} ` +

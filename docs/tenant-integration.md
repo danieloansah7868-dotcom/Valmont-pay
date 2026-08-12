@@ -10,6 +10,32 @@ first try.
 
 ---
 
+## 🚨 The legacy URL flow is RETIRED in production (read this second)
+
+> **`pay.html?amount=…&merchant=…` no longer works for public merchants.**
+> Every storefront must use the access-code flow in
+> [§ 2](#2-secure-flow-access_code--the-only-public-path).
+
+A customer must not be able to change what they pay by editing the URL.
+The old link form carried the price in the query string and nothing
+signed it, so `?amount=1400` could simply be retyped as `?amount=1`.
+
+As of the change log entry below, opening such a link shows:
+
+> **Payment Link Invalid**
+> This link is missing a locked payment code. Ask the merchant for a new link.
+
+…and charges nothing. The rejection is also enforced server-side: a
+`POST /api/initialize-payment` whose `Referer` is a legacy `pay.html`
+URL is refused with `403 LEGACY_URL_RETIRED`, so stripping the page's
+JavaScript does not get you a payment either.
+
+**If you are integrating a storefront, go straight to [§ 2](#2-secure-flow-access_code--the-only-public-path).**
+[§ 3](#3-legacy-flow-retired) now documents only how to migrate off the
+old flow and the one operator-only escape hatch.
+
+---
+
 ## ⚠️ The amount-unit contract (read this first)
 
 > **Amounts are always in cedis (major units). Send `23.50` for
@@ -31,29 +57,41 @@ The "rejected" column matters: pay.html refuses to render the payment
 form when the value looks like pesewas (a plain integer ≥ 1000 with no
 decimal point) and posts the offending URL to `/api/log/bad-amount` so
 the misconfiguration is auditable. See
-[§ 5 — Validation & error states](#5-validation--error-states).
+[§ 6 — Validation & error states](#6-validation--error-states).
 
 ---
 
-## 1. The two ways to start a payment
+## 1. The one way to start a payment
 
-| Flow | When to use | URL shape | Amount comes from |
+| Flow | Status | URL shape | Amount comes from |
 |---|---|---|---|
-| **Secure (access_code)** — recommended | All new integrations | `pay.html?access_code=ac_…` | The server, never the URL. The customer cannot edit the amount. |
-| **Legacy (URL params)** | Only existing storefronts that pre-date the access-code flow | `pay.html?amount=…&merchant=…&reference=…&email=…&callback_url=…` | The URL (must be in cedis). |
+| **Secure (access_code)** | ✅ **The only public path** | `pay.html?access_code=ac_…` | The server, never the URL. The customer cannot edit the amount. |
+| **Legacy (URL params)** | ❌ **Retired** — rejected in production | ~~`pay.html?amount=…&merchant=…`~~ | The URL. Anyone could edit it. |
 
-The secure flow is preferred for one reason: the amount is resolved
-server-side from a one-time access code, so the customer cannot edit it
-by hand-editing the URL bar. New integrations should use it.
+There is one flow because there is one property worth having: **the
+amount is resolved server-side from a one-time access code, so the
+customer cannot change what they pay by editing the URL bar.**
 
-The legacy flow still works, but it is the path the "Blocker 4" bug
-shipped through (Electricals passed `amount=2300` and pay.html charged
-GH₵2,300 for a GH₵23 cart). It is now guarded by the unit validator
-below.
+Pick your entry point:
+
+| You are… | Use |
+|---|---|
+| A storefront with a server and a tenant secret key | [§ 2.1 `POST /api/transaction/initialize`](#21-initialize-a-payment) |
+| A static/anonymous site selling fixed packages (e.g. Valmont Web Services) | [§ 2.4 `POST /api/v1/payment-link/sku`](#24-anonymous-storefronts-mint-by-sku) — no secret in the browser |
+| An operator issuing a link by hand | The dashboard's link generators ([§ 2.5](#25-issuing-a-link-from-the-dashboard)) |
+
+Every one of them ends in the same place: a
+`pay.html?access_code=ac_…` URL with no price in it.
+
+> **Why the legacy flow died.** It shipped the "Blocker 4" bug
+> (Electricals passed `amount=2300`; pay.html charged GH₵2,300 for a
+> GH₵23 cart), which the unit validator then caught. But that validator
+> only ever checked *units* — it could not tell a genuine `amount=1400`
+> from a customer-edited `amount=1`. Only a server-resolved amount can.
 
 ---
 
-## 2. Secure flow (recommended) — step by step
+## 2. Secure flow (access_code) — the only public path
 
 ### 2.1 Initialize a payment
 
@@ -133,61 +171,197 @@ The webhook remains the source of truth — the redirect is for the
 customer experience only. Configure your Paystack dashboard to POST
 charge events to `https://valmontpay.app/api/webhook`.
 
+### 2.4 Anonymous storefronts: mint by SKU
+
+§ 2.1 needs a tenant secret key, which means it needs a server. A
+static marketing site (the Valmont Web Services case) has neither — and
+a secret key must **never** ship in a browser bundle.
+
+So those sites don't send a price at all. They send a **SKU**, and the
+gateway prices it from a server-side catalogue
+(`lib/service-catalogue.js`):
+
+```bash
+curl -X POST https://valmontpay.app/api/v1/payment-link/sku \
+  -H "Content-Type: application/json" \
+  -d '{ "sku": "WEB-LITE-STG1", "email": "client@example.com" }'
+```
+
+```json
+{
+  "status": true,
+  "data": {
+    "sku": "WEB-LITE-STG1",
+    "label": "Website Lite — Stage 1",
+    "amount": 1400,
+    "currency": "GHS",
+    "reference": "WEB-LITE-STG1-MSQF42WD479",
+    "merchant": "Valmont Web Services",
+    "access_code": "ac_636a01a0d0d9c999d3a007eb",
+    "pay_url": "https://valmontpay.app/pay.html?access_code=ac_636a01a0d0d9c999d3a007eb"
+  }
+}
+```
+
+Redirect the customer to `data.pay_url`. Note what is **not** in it: a
+price.
+
+**The catalogue** (amounts in cedis, `GET /api/v1/payment-link/catalogue`
+returns this live):
+
+| SKU (`reference` prefix) | Package | Stage | Amount |
+|---|---|---|---|
+| `WEB-LITE-STG1` | Website Lite | Stage 1 | GH₵1,400 |
+| `WEB-LITE-FULL` | Website Lite | Full | GH₵3,500 |
+| `WEB-STARTER-STG1` | Website Starter | Stage 1 | GH₵2,000 |
+| `WEB-STARTER-FULL` | Website Starter | Full | GH₵5,000 |
+| `WEB-BUSINESS-STG1` | Website Business | Stage 1 | GH₵2,600 |
+| `WEB-BUSINESS-FULL` | Website Business | Full | GH₵6,500 |
+| `WEB-EMPIRE-STG1` | Website Empire | Stage 1 | GH₵3,200 |
+| `WEB-EMPIRE-FULL` | Website Empire | Full | GH₵8,000 |
+
+Rules this endpoint enforces:
+
+* **`sku` is the only price input.** If you also send `amount`, it is
+  ignored and a warning is logged. There is no request shape that lets
+  an anonymous caller name its own price.
+* **An unknown SKU is refused** (`400 UNKNOWN_SKU`) with the list of
+  valid ones. Unknown SKUs are never "priced by the caller".
+* `email` is required; `phone` and `callback_url` are optional. A
+  `callback_url` must be on the tenant's `allowed_domains`.
+* Prices change by editing `lib/service-catalogue.js` (or, per SKU at
+  deploy time, `SERVICE_PRICE__WEB_LITE_STG1=1500`) — never by a request.
+
+Example front-end button, with no secret anywhere in it:
+
+```html
+<button onclick="payFor('WEB-LITE-STG1')">Pay Stage 1 — GH₵1,400</button>
+<script>
+  async function payFor(sku) {
+    const email = prompt('Your email for the receipt:');
+    if (!email) return;
+    const res = await fetch('https://valmontpay.app/api/v1/payment-link/sku', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sku, email })   // ← no amount, by design
+    });
+    const json = await res.json();
+    if (json.status) window.location.href = json.data.pay_url;
+  }
+</script>
+```
+
+### 2.5 Issuing a link from the dashboard
+
+Two generators, both of which mint `pay.html?access_code=…`:
+
+* **Quick Launch Payment Link Generator** — free-form amount, for
+  ad-hoc invoices. `POST /api/v1/transaction/initialize`.
+* **Valmont Web Services — Issue Stage 1 / Full Link** — pick a SKU
+  from the catalogue above; the price is shown read-only because the
+  server owns it. `POST /api/v1/payment-link` (admin-authed, same
+  catalogue and same lock as § 2.4).
+
+Both are safe to WhatsApp to a client: the link is durable (30 days by
+default, `PAYMENT_LINK_TTL_HOURS`) and carries no editable amount.
+
 ---
 
-## 3. Legacy flow (existing integrations only)
+## 3. Legacy flow (RETIRED)
 
-If you cannot migrate to the access-code flow right now, use the URL
-form below. It is identical in shape to the dynamic-link example in
-the project README, and it is the form the unit validator guards.
+> **Status: closed for public merchants.** The URL form below no longer
+> produces a payment. It is documented here so you can recognise it in
+> your codebase and migrate off it.
 
-### 3.1 Redirect URL format
+### 3.1 What a legacy link looked like
 
 ```
 https://valmontpay.app/pay.html
-  ?amount=23.50                                  ← cedis, NEVER pesewas
-  &merchant=valmont-electricals                  ← tenant key
-  &reference=VE-MSCX67FD267C                     ← your order id
-  &email=buyer@example.com                       ← optional
-  &callback_url=https://your-site.com/thanks     ← optional
-  &subaccount=ACCT_xxxxxxxxxxxx                  ← optional (split settlement)
-  &return_url=https://your-site.com/cart         ← optional (back button)
+  ?amount=23.50                                  ← the problem: editable
+  &merchant=valmont-electricals
+  &reference=VE-MSCX67FD267C
+  &email=buyer@example.com
+  &callback_url=https://your-site.com/thanks
 ```
 
-### 3.2 Worked curl (one-shot, with every parameter)
+The price travelled in the query string and nothing signed it. A
+customer who changed `amount=1400` to `amount=1` paid one cedi. The
+`validateAmountUrl` guard in pay.html catches a *unit* mistake
+(`amount=2300` meaning pesewas) but cannot detect a
+tampered-but-plausible cedis figure — it is not, and never was, a
+tamper guard.
+
+### 3.2 What happens now when one is opened
+
+Opening `https://valmontpay.app/pay.html?amount=1&merchant=Valmont+Web+Services`:
+
+1. pay.html renders the **Payment Link Invalid** card:
+   > This link is missing a locked payment code. Ask the merchant for a new link.
+2. No payment form is shown and **nothing is charged**.
+3. The rejected URL is POSTed to `/api/log/bad-amount` with
+   `reason=legacy-unsigned`, so every storefront still on the old flow
+   shows up in the logs:
+   ```
+   [VALMONT-PAY][BAD-AMOUNT] unit=n/a reason=legacy-unsigned
+     rawAmount=1 merchant=Valmont Web Services ref=none
+     path=/pay.html url=… ua=…
+   ```
+4. Server-side backstop: `POST /api/initialize-payment` refuses any
+   request whose `Referer` is a legacy `pay.html?amount=…` URL, with
+   `403 LEGACY_URL_RETIRED`. Disabling JavaScript does not help.
+
+### 3.3 How to migrate
+
+| If your storefront… | Replace the link with |
+|---|---|
+| has a server + secret key | [§ 2.1](#21-initialize-a-payment) → redirect to `data.pay_url` |
+| is static / anonymous, fixed prices | [§ 2.4](#24-anonymous-storefronts-mint-by-sku) → `POST /api/v1/payment-link/sku` |
+| is a one-off invoice | [§ 2.5](#25-issuing-a-link-from-the-dashboard) → generate it in the dashboard |
+
+Concretely, replace this:
+
+```html
+<!-- BEFORE — the customer can edit 1400 -->
+<a href="https://valmontpay.app/pay.html?amount=1400&merchant=Valmont+Web+Services&reference=WEB-LITE-STG1">
+  Pay Stage 1
+</a>
+```
+
+…with a call that names the SKU and redirects to the returned
+`pay_url` (full example in [§ 2.4](#24-anonymous-storefronts-mint-by-sku)).
+
+### 3.4 The escape hatch (operators only)
+
+A deployment can temporarily re-open the legacy flow by setting a
+**server-side** environment variable:
 
 ```bash
-# 1) Generate the redirect URL on the server side (any language):
-URL="https://valmontpay.app/pay.html"
-URL+="?amount=23.50"
-URL+="&merchant=valmont-electricals"
-URL+="&reference=VE-MSCX67FD267C"
-URL+="&email=buyer@example.com"
-URL+="&callback_url=https://valmontelectricals.com/orders/thanks"
-
-# 2) 302 the customer there.
-curl -i -X GET "$URL"
-# → 200, HTML for pay.html (the customer sees the form with GH₵ 23.50).
+ALLOW_LEGACY_AMOUNT_URL=1
 ```
 
-### 3.3 What NOT to send (for reference)
+* It is **off in production** and must stay off.
+* It is server-side only — no request, header, or query parameter can
+  set it. pay.html reads the posture from `GET /api/config/pay` and
+  **fails closed**: if that call errors, the legacy link stays rejected.
+* With it on, the old flow works exactly as before — including the
+  pesewas unit validator ([§ 6.1](#61-what-payhtml-validates-legacy-flow--escape-hatch-only)),
+  which is still the second gate.
+* Use it only to unblock a storefront mid-migration, with a deadline.
+
+### 3.5 What NOT to send (historical reference)
+
+These were always rejected by the unit validator, and are now moot
+because the whole flow is closed:
 
 ```text
-# WRONG — this would charge GH₵2,300.00, not GH₵23.00.
-?amount=2300&merchant=valmont-electricals&reference=VE-MSCX67FD267C
+# WRONG — would have charged GH₵2,300.00, not GH₵23.00.
+?amount=2300&merchant=valmont-electricals
 
-# WRONG — this would charge GH₵1,500.00, not GH₵15.00.
-?amount=1500&merchant=valmont-electricals&reference=VE-MSCX67FD267C
-
-# WRONG — currency symbols, scientific notation, and locale-formatted
-# numbers (commas) are not accepted by the gateway.
+# WRONG — currency symbols, scientific notation, locale-formatted numbers.
 ?amount=GH%E2%82%B523.50
 ?amount=2.350e1
 ?amount=1,500.00
 ```
-
-pay.html rejects every form in the WRONG block and posts the rejection
-to `/api/log/bad-amount` for audit.
 
 ---
 
@@ -264,7 +438,13 @@ Valmont-Pay provides four endpoints for inspecting, executing, and revoking stan
 
 ## 6. Validation & error states
 
-### 6.1 What pay.html validates (legacy flow)
+### 6.1 What pay.html validates (legacy flow — escape hatch only)
+
+> These rules only ever run when `ALLOW_LEGACY_AMOUNT_URL=1`
+> ([§ 3.4](#34-the-escape-hatch-operators-only)). With the flag off — the
+> production posture — a legacy link is rejected before any of this,
+> with the copy in [§ 3.2](#32-what-happens-now-when-one-is-opened).
+
 
 | Input | Verdict | Why |
 |---|---|---|
@@ -287,7 +467,7 @@ The rejection message is:
 …with a dedicated `Payment Link Unavailable` error card. The customer
 never sees a 100× wrong number and never sees the Pay button.
 
-### 5.2 Server-side audit
+### 6.2 Server-side audit
 
 Every rejected URL fires a `POST /api/log/bad-amount` (best-effort,
 non-blocking). The server logs:
@@ -298,10 +478,34 @@ non-blocking). The server logs:
   ref=VE-MSCX67FD267C path=/pay.html url=… ua=…
 ```
 
-Watch for these lines in Vercel runtime logs to catch a misconfigured
+A retired legacy link logs the other reason — this is the **migration
+log**, one line per storefront still on the old flow:
+
+```
+[VALMONT-PAY][BAD-AMOUNT] unit=n/a reason=legacy-unsigned
+  rawAmount=1400 merchant=Valmont Web Services ref=WEB-LITE-STG1
+  path=/pay.html url=… ua=…
+```
+
+Watch for both in Vercel runtime logs to catch a misconfigured
 storefront before customers do.
 
-### 5.3 What the server (`/api/initialize-payment`) validates
+### 6.3 What the server (`/api/initialize-payment`) validates
+
+**Amount authority — `body.amount` is never gospel.** The request comes
+from a browser that may have read the number out of the address bar, so:
+
+* If **`access_code` is present**, the stored payment intent wins. The
+  amount, reference and merchant are re-read from it and the body values
+  are ignored (a mismatch is logged). This is what makes editing
+  `?amount=` on an access-code URL a no-op. An unknown or expired code
+  is `404 ACCESS_CODE_INVALID` — it never falls back to `body.amount`.
+* If there is **no `access_code` and the `Referer` is a legacy
+  `pay.html?amount=…` URL**, the request is refused with
+  `403 LEGACY_URL_RETIRED` (unless
+  [the escape hatch](#34-the-escape-hatch-operators-only) is on).
+
+Then the ordinary field rules apply:
 
 * `email` is required and must contain `@`.
 * `amount` is required, must be a finite number, and must be > 0.
@@ -310,31 +514,44 @@ storefront before customers do.
 * `callback_url` is validated against the tenant's `allowed_domains`
   when present; cross-domain callbacks are rejected with `400`.
 
-### 5.4 What `/api/transaction/initialize` (the tenant-auth endpoint) validates
+### 6.4 What `/api/transaction/initialize` (the tenant-auth endpoint) validates
 
-Same as 5.3, plus:
+Same as 6.3, plus:
 
 * `Authorization: Bearer <tenant_secret_key>` is required and must
   resolve to an enabled tenant.
 * The body is bounded by the same `amount > 0` rule; no upper limit
   is enforced here (the merchant's Paystack plan is the real bound).
 
+### 6.5 What `/api/v1/payment-link/sku` validates
+
+* `sku` must be in the server-side catalogue; anything else is
+  `400 UNKNOWN_SKU`. **The price is looked up, never accepted.**
+* A caller-supplied `amount` is ignored and logged — there is no
+  request shape that lets an anonymous caller set a price.
+* `email` is required (`400 EMAIL_REQUIRED`).
+* The link must persist durably before it is handed out; if it cannot,
+  the endpoint returns `502 LINK_NOT_DURABLE` rather than issue a link
+  that will 404 for the client.
+
 ---
 
 ## 7. Reference: every URL parameter on `pay.html`
 
-| Param | Legacy flow | Secure flow | Notes |
+| Param | Secure flow (live) | Legacy flow (retired) | Notes |
 |---|---|---|---|
-| `access_code` | — | ✅ required | The recommended way in. Server-resolved. |
-| `amount` | ✅ cedis | — | Rejected if it looks like pesewas. |
-| `merchant` / `tenant` | ✅ tenant key | — | Aliased; `merchant` is the original name. |
-| `reference` | ✅ your order id | — | The merchant's reference, echoed through to Paystack. |
-| `email` | optional | — | Pre-filled on the form. |
-| `phone` | optional | — | Pre-filled on the form. |
-| `callback_url` | optional | — | Where to send the customer after success. Must be on the tenant's `allowed_domains` when set on the server-init flow. |
-| `subaccount` | optional | optional | Paystack split-settlement code. Usually set per-tenant in `lib/tenants.js`, not in the URL. |
-| `return_url` | optional | optional | "← Return to merchant" link target. Never an internal Valmont-Pay admin page. |
-| `reference` (alt: `ref`) | ✅ | — | `ref` is the legacy alias; `reference` wins. |
+| `access_code` | ✅ **required** | — | The only way in. Everything else about the payment is resolved from it, server-side. |
+| `amount` | ignored | ~~cedis~~ | **Present on an access-code URL it does nothing** — the stored intent wins. On its own it triggers the retired-link rejection. |
+| `merchant` / `tenant` | ignored | ~~tenant key~~ | Comes from the stored intent. |
+| `reference` (alt: `ref`) | ignored | ~~your order id~~ | Comes from the stored intent. Set it via `POST /api/transaction/initialize` instead. |
+| `email` | optional | ~~optional~~ | Pre-filled on the form; the stored value wins when set. |
+| `phone` | optional | ~~optional~~ | Pre-filled on the form. |
+| `callback_url` | optional | ~~optional~~ | Where to send the customer after success. Must be on the tenant's `allowed_domains`. |
+| `subaccount` | optional | ~~optional~~ | Paystack split-settlement code. Usually set per-tenant in `lib/tenants.js`, not in the URL. |
+| `return_url` | optional | ~~optional~~ | "← Return to merchant" link target. Never an internal Valmont-Pay admin page. |
+
+> **The short version:** on a `?access_code=` URL, no other parameter can
+> change what the customer is charged.
 
 ---
 
@@ -342,9 +559,14 @@ Same as 5.3, plus:
 
 Before going live, confirm each of these:
 
-- [ ] The redirect uses **`amount=23.50`** (cedis), not `amount=2350`
-      (pesewas). A `?amount=2300` URL renders the unit-mismatch error
-      page, so this is the most important check.
+- [ ] The redirect target is a **`pay.html?access_code=…`** URL. If any
+      link in your storefront still contains `amount=`, it is a retired
+      link and will show "Payment Link Invalid" — this is the most
+      important check. See [§ 3.3](#33-how-to-migrate).
+- [ ] No tenant secret key appears anywhere in browser-shipped code. A
+      static site should be minting by SKU ([§ 2.4](#24-anonymous-storefronts-mint-by-sku)).
+- [ ] Amounts sent server-to-server are **cedis** (`23.50`), not pesewas
+      (`2350`).
 - [ ] The storefront server sends `amount` as a JSON number (not a
       string) to `POST /api/transaction/initialize`. JavaScript's
       `Number(order.total).toFixed(2)` is the canonical form.
@@ -371,11 +593,15 @@ Before going live, confirm each of these:
 
 | File | What it does |
 |---|---|
-| `pay.html` | Renders the payment form. Runs the unit validator. |
+| `pay.html` | Renders the payment form. Rejects unsigned legacy links (`rejectLegacyUnsignedLink`) and runs the unit validator. |
+| `lib/legacy-link-policy.js` | The retirement policy: the `ALLOW_LEGACY_AMOUNT_URL` flag, the legacy-referer check, and the rejection copy. |
+| `lib/service-catalogue.js` | Server-side SKU → price table for Valmont Web Services. The reason an anonymous caller cannot name its own price. |
+| `server.js` → `/api/v1/payment-link/sku`, `/api/v1/payment-link` | Mint a locked link from a SKU (anonymous / admin). |
+| `server.js` → `/api/config/pay` | Tells pay.html whether the legacy escape hatch is on. |
 | `lib/paystack.js` | Converts cedis → pesewas at the wire boundary (`toSubunits`). Includes `chargeAuthorizationWithKey`. |
 | `api/initialize-payment.js` | Vercel serverless handler for the secure flow (cedis in, pesewas out). |
 | `server.js` → `app.post('/api/transaction/initialize', …)` | Express route, identical contract. |
-| `api/log-bad-amount.js` | Audit endpoint for unit-mismatch rejections. |
+| `api/log-bad-amount.js` | Audit endpoint for `legacy-unsigned` and unit-mismatch rejections. |
 | `lib/tenants.js` | Tenant config (display name, brand color, allowed_domains, paystack_subaccount, …). |
 | `lib/access-code-store.js` | One-time access codes for the secure flow. |
 | `lib/mandate-store.js` | Standing mandate & recurring authorization code storage and execution (`chargeMandate`, `revokeMandate`). |
@@ -387,5 +613,6 @@ Before going live, confirm each of these:
 
 | Date | Change | Why |
 |---|---|---|
+| 2026-08-12 | **The legacy `pay.html?amount=…` flow is retired in production.** Unsigned links now show "Payment Link Invalid" and charge nothing; `/api/initialize-payment` ignores `body.amount` whenever an `access_code` is present and refuses requests from legacy pay URLs. Added the SKU catalogue and `POST /api/v1/payment-link/sku` so anonymous storefronts never hold a secret or a price. Escape hatch: `ALLOW_LEGACY_AMOUNT_URL=1`, off in production. | A customer could edit `?amount=1400` to `?amount=1` and pay one cedi. The unit validator only ever checked cedis-vs-pesewas, never tampering. |
 | 2026-08-11 | Added Standing Mandates & Auto-Renewal documentation (Section 5) and API endpoints (`/api/v1/mandates`). | Explains legal/BoG compliance (Act 987 opt-in/opt-out) and merchant-initiated recurring debits for MTN MoMo & card authorizations. |
 | 2026-08-03 | Unit contract formalized as "cedis only". pay.html validator added. `?amount=2300` (and any plain integer ≥ 1000 with no decimal) is now rejected and audited. | Blocker 4: Electricals `amount=2300` charged GH₵2,300 for a GH₵23 cart. |
