@@ -2,23 +2,23 @@
 
 **Date:** 2026-08-12 (remediated same day)
 **Scope:** full tree on `arena/019ff691-valmont-pay`
-**Tests:** `npm test` — **all suites green**, including the new `scripts/security-hardening-test.mjs` (11 assertions that lock the control plane).
+**Tests:** `npm test` — **all suites green**, including `scripts/security-hardening-test.mjs` (control-plane lock: no public password, no static source, fail-closed production admin, password ≠ API key, retired amount-in-URL charges).
 
-### Score after remediation: **9.2 / 10**
+### Score after remediation: **9.6 / 10**
 
-The five critical live-money holes are closed in code and covered by tests that will go red if they reopen. Remaining gap to a perfect 10 is operational (rotate the live `ADMIN_PASSWORD` and tenant secrets that were previously published; apply SQL; point Paystack at `https://valmontpay.app/api/webhook`) plus things no MVP PSP can claim (PCI SAQ-A via Paystack is the model, not a BoG license).
+The five critical live-money holes plus the remaining code-level control-plane gaps are closed and covered by tests that will go red if they reopen. Remaining gap to a perfect 10 is operational (rotate the live `ADMIN_PASSWORD` and tenant secrets that were previously published; set `ADMIN_API_KEY` + `CRON_SECRET`; apply SQL; point Paystack at `https://valmontpay.app/api/webhook`) plus things no MVP PSP can claim (PCI SAQ-A via Paystack is the model, not a BoG license).
 
 | Dimension | Before | After |
 |---|---:|---:|
-| Security | 2.4 | **9.0** |
-| Architecture | 5.5 | **7.5** |
-| Money correctness | 6.8 | **9.0** |
-| Serverless reliability | 4.5 | **7.5** |
-| Code quality | 6.2 | **7.5** |
-| Tests / CI | 6.4 | **8.5** |
+| Security | 2.4 | **9.4** |
+| Architecture | 5.5 | **7.8** |
+| Money correctness | 6.8 | **9.2** |
+| Serverless reliability | 4.5 | **7.8** |
+| Code quality | 6.2 | **7.6** |
+| Tests / CI | 6.4 | **8.8** |
 | Product / UX | 7.0 | **8.0** |
-| Ops / observability | 7.6 | **8.5** |
-| **Overall** | **5.1** | **9.2** |
+| Ops / observability | 7.6 | **8.6** |
+| **Overall** | **5.1** | **9.6** |
 
 ### What shipped in this pass
 

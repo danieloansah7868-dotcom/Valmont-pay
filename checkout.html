@@ -26,7 +26,8 @@
     if (access) {
       window.location.replace('/pay.html?access_code=' + encodeURIComponent(access));
     } else {
-      window.location.replace('/pay.html' + window.location.search + window.location.hash);
+      document.querySelector('h1').textContent = 'Payment link unavailable';
+      document.querySelector('p').textContent = 'This checkout URL is missing an access_code. Ask the merchant for a new payment link.';
     }
   </script>
 </body>

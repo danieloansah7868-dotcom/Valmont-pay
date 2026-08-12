@@ -16,7 +16,7 @@ Your gateway prototype contains the following master-built systems:
     *   `GET /api/v1/merchant/dashboard`: Fetches active ledger arrays and settles wallet balances.
     *   `GET /api/transactions`: The canonical ledger feed the dashboard reads. Returns the live transactions array plus the derived balance.
     *   `POST /api/webhook`: Paystack webhook receiver (HMAC SHA512 signature verified). This is how real payments land on the ledger — and every `charge.success` instantly triggers an SMS/WhatsApp receipt via **`lib/notifier.js`** (the notification engine that texts both the customer and the merchant).
-3.  **`checkout.html` (Secured Checkout Widget)**: A responsive popup widget styled in deep navy and bright emerald green. Features forms to collect **Mobile Money Number** (MTN, Telecel, AT) or **Card details**, communicates with the API, and displays loading spinners for simulated USSD PIN authorization prompts!
+3.  **`checkout.html`**: A redirector to `pay.html?access_code=…`. Card/PAN fields are never collected on this origin.
 4.  **`dashboard.html` (Merchant Analytics Portal)**: A high-end dark analytics board displaying virtual wallet balances, a **Live Settlement Ledger**, and an **interactive Checkout Link Generator**!
 
 ---
@@ -87,10 +87,11 @@ fallback.
 
 **Admin API guard:** `/api/admin/*`, tenant key rotation, webhook-URL updates,
 `POST /api/manual-transaction`, `POST /api/webhook-debug` and terminal-status
-order writes (`PAID`/`CANCELLED`/…) now require the `X-Admin-Key` header
-matching `ADMIN_PASSWORD` (the admin pages attach it automatically after
-login). Storefront order creation with non-terminal statuses
-(`PENDING_MOMO`) stays public by design.
+order writes (`PAID`/`CANCELLED`/…) require a `vp_admin` session cookie **or**
+`X-Admin-Key: $ADMIN_API_KEY`. The login password is never a valid API key.
+Production with `ADMIN_PASSWORD` unset is fail-closed (503), not open.
+Storefront `PENDING_MOMO` writes in production also need
+`X-Storefront-Key: $STOREFRONT_WRITE_KEY`.
 
 ---
 
@@ -109,11 +110,12 @@ The password is never sent to the browser:
 ```bash
 export ADMIN_EMAIL=support@valmontpay.com
 export ADMIN_PASSWORD=your-strong-password
+export ADMIN_API_KEY=your-separate-api-key
 ```
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/api/initialize-payment` | POST | Initializes a Paystack transaction. Forwards your `reference` and converts the amount to **pesewas (x100)**. |
+| `/api/initialize-payment` | POST | Initializes a Paystack transaction from a server-issued `access_code` (or an admin credential). Converts the amount to **pesewas (x100)**. |
 | `/api/verify-payment?reference=VP-123456` | GET | Verifies a transaction with Paystack and returns the raw payload plus a flattened `summary`. |
 | `/api/transaction/initialize` | POST | **Tenant-authenticated** initializer (Bearer token). Returns a one-time `access_code` so the amount is server-resolved and the customer can never edit it. Use this for new integrations. |
 | `/api/log/bad-amount` | POST | Audit endpoint hit by pay.html when a URL's `amount` looks like pesewas. Best-effort, always returns 200. |
@@ -121,7 +123,7 @@ export ADMIN_PASSWORD=your-strong-password
 ```bash
 curl -X POST http://localhost:3000/api/initialize-payment \
   -H 'Content-Type: application/json' \
-  -d '{"email":"buyer@example.com","amount":50,"merchant":"Valmont Electricals"}'
+  -d '{"email":"buyer@example.com","access_code":"ac_…"}'
 
 curl "http://localhost:3000/api/verify-payment?reference=VP-123456"
 ```
@@ -430,7 +432,10 @@ npm test
 | `SUPABASE_ANON_KEY` | Fallback only | Works **only** when the `transactions` table has explicit RLS insert/select policies. |
 | `PAYSTACK_SECRET_KEY` | **Required** | Paystack API calls and authoritative inbound Paystack webhook verification. |
 | `WEBHOOK_SECRET` | Optional | Legacy fallback only when no Paystack key is configured; it never overrides `PAYSTACK_SECRET_KEY`. |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Optional | Admin dashboard login. |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | **Required in production** | Operator login. Production without `ADMIN_PASSWORD` is fail-closed. |
+| `ADMIN_API_KEY` | Recommended | `X-Admin-Key` for curl/scripts. Never the same as `ADMIN_PASSWORD`. |
+| `STOREFRONT_WRITE_KEY` | Recommended in production | `X-Storefront-Key` for public `PENDING_MOMO` ledger writes. |
+| `CRON_SECRET` | Recommended | Bearer token for `/api/cron/webhook-retry`. |
 | `WHATSAPP_WEBHOOK_URL` | Optional | WhatsApp receipt hook. Receives POST `{ phone, message, reference }` for every SUCCESS payment. |
 | `SMS_WEBHOOK_URL` | Optional | Generic SMS receipt hook. Same JSON payload shape as the WhatsApp hook. |
 | `ARKESEL_API_KEY` / `MNOTIFY_API_KEY` | Optional | Ghana SMS provider keys for direct receipt dispatch (`ARKESEL_SENDER_ID` / `MNOTIFY_SENDER_ID` set the sender id, default `VALMONT-PAY`). |

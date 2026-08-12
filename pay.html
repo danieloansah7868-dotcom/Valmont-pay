@@ -358,62 +358,23 @@
         return;
       }
 
-      // Legacy flow: amount and merchant come from URL (less secure).
-      // The unit validator below is the gate that prevents the
-      // "Electricals bug" (amount=2300 charging GH₵2,300 for a GH₵23
-      // cart) from ever reaching /api/initialize-payment.
+      // Legacy flow: amount-in-URL is retired. We still run the unit
+      // validator so a leftover ?amount=2300 is audited, but we NEVER
+      // render a Pay button from a client-controlled amount.
       if (merchantFromUrl && amountRawFromUrl !== null && amountRawFromUrl !== '') {
         const validation = validateAmountUrl(amountRawFromUrl);
 
-        if (!validation.ok) {
-          if (validation.suspectUnit === 'pesewas') {
-            // Specifically the unit-mismatch case. The page must NOT
-            // render a payment form — the customer must not be one tap
-            // away from a 100× charge.
-            console.warn(
-              '[VALMONT-PAY] Rejected pay.html URL: amount=' + validation.raw +
-              ' looks like pesewas. Cedis expected. ' +
-              '(merchant=' + (merchantFromUrl || '?') + ', ref=' + (refFromUrl || '?') + ')'
-            );
-            reportBadAmount(validation);
-            showUnitError(validation);
-            return;
-          }
-          if (validation.message) {
-            showError(validation.message);
-            return;
-          }
-          showError('This payment link has an invalid amount. Please contact the merchant for a new link.');
+        if (!validation.ok && validation.suspectUnit === 'pesewas') {
+          console.warn(
+            '[VALMONT-PAY] Rejected pay.html URL: amount=' + validation.raw +
+            ' looks like pesewas. Cedis expected. ' +
+            '(merchant=' + (merchantFromUrl || '?') + ', ref=' + (refFromUrl || '?') + ')'
+          );
+          reportBadAmount(validation);
+          showUnitError(validation);
           return;
         }
-
-        // Unit check passed. Build paymentData and continue.
-        paymentData = {
-          amount: validation.amount,
-          reference: refFromUrl || ('VP-' + Math.floor(100000 + Math.random() * 900000)),
-          currency: 'GHS',
-          email: urlParams.get('email') || '',
-          merchant: merchantFromUrl,
-          subaccount: subaccountFromUrl,
-          // IMPORTANT: no fallback here. The old default of /dashboard.html
-          // bounced customers to the ADMIN LOGIN page after paying. If the
-          // merchant did not supply a callback_url the customer simply stays
-          // on the Valmont-Pay success screen.
-          callback_url: urlParams.get('callback_url') || ''
-        };
-
-        // Load tenant info
-        try {
-          const tRes = await fetch('/api/tenants/' + encodeURIComponent(merchantFromUrl));
-          const tJson = await tRes.json();
-          if (tJson.status && tJson.data) {
-            tenantData = tJson.data;
-            paymentData.merchant_display_name = tenantData.display_name;
-            paymentData.merchant_brand_color = tenantData.brand_color;
-          }
-        } catch (_) {}
-
-        renderPaymentForm();
+        showError('This payment link is outdated. Ask the merchant for a new access-code link (pay.html?access_code=…).');
         return;
       }
 

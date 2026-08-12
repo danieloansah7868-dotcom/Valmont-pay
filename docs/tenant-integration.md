@@ -40,7 +40,7 @@ the misconfiguration is auditable. See
 | Flow | When to use | URL shape | Amount comes from |
 |---|---|---|---|
 | **Secure (access_code)** — recommended | All new integrations | `pay.html?access_code=ac_…` | The server, never the URL. The customer cannot edit the amount. |
-| **Legacy (URL params)** | Only existing storefronts that pre-date the access-code flow | `pay.html?amount=…&merchant=…&reference=…&email=…&callback_url=…` | The URL (must be in cedis). |
+| **Legacy (URL params)** | **Retired.** `pay.html?amount=` no longer charges. | — | Use the access-code flow. |
 
 The secure flow is preferred for one reason: the amount is resolved
 server-side from a one-time access code, so the customer cannot edit it
@@ -240,7 +240,7 @@ When the initial checkout succeeds, Valmont-Pay inspects the returned Paystack a
 
 Valmont-Pay provides four endpoints for inspecting, executing, and revoking standing mandates:
 
-All four endpoints require `Authorization: Bearer <tenant_secret_key>` or an admin session (`X-Admin-Key` / `vp_admin` cookie). Unauthenticated calls return `401`. Tenants may only inspect or charge their own mandates.
+All four endpoints require `Authorization: Bearer <tenant_secret_key>` or an admin session (`X-Admin-Key: $ADMIN_API_KEY` / `vp_admin` cookie). The login password is never a valid API key. Unauthenticated calls return `401`. Tenants may only inspect or charge their own mandates.
 
 * **`GET /api/v1/mandates`**: List standing mandates. Accepts optional query filters `?merchant=<name>&email=<email>&status=<ACTIVE|REVOKED|EXPIRED>`.
 * **`GET /api/v1/mandates/:code`**: Get full details of a specific mandate by its `authorization_code`.

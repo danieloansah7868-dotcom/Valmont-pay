@@ -11,7 +11,7 @@ const {
   toSubunits
 } = require('./lib/paystack');
 const ledger = require('./lib/ledger');
-const { handleWebhookEvent, toLedgerRecord } = require('./lib/webhook');
+const { toLedgerRecord } = require('./lib/webhook');
 const { isSupabaseConfigured, supabaseConfigState, getSupabaseClient } = require('./lib/supabase');
 const transactionStore = require('./lib/transaction-store');
 const webhookLog = require('./lib/webhook-log');
@@ -22,12 +22,14 @@ const webhookForwarder = require('./lib/tenant-webhook-forwarder');
 const notifier = require('./lib/notifier');
 const paymentLinkStore = require('./lib/payment-link-store');
 const mandateStore = require('./lib/mandate-store');
+const tenantStore = require('./lib/tenant-store');
 const { publicBaseUrl } = require('./lib/base-url');
-const { requireAdmin, isAuthorizedAdmin, unauthorizedPayload, adminAuthEnforced } = require('./lib/admin-auth');
+const { requireAdmin, requireAdminPage, isAuthorizedAdmin, unauthorizedPayload, adminAuthEnforced } = require('./lib/admin-auth');
 const adminSession = require('./lib/admin-session');
 const { rateLimit } = require('./lib/rate-limit');
 const { applySecurityHeaders } = require('./lib/security-headers');
 const { validatePublicHttpsUrl, validateRedirectUrl } = require('./lib/url-safety');
+const { isProductionRuntime } = require('./lib/insecure-secrets');
 
 // Vercel runs the dashboard checkout (POST /api/v1/transaction/charge) in a
 // serverless function whose memory disappears between requests, so a payment
@@ -56,7 +58,16 @@ function baseUrl(req) {
 }
 
 // Enable Cross-Origin Resource Sharing & JSON Parsing
-app.use(cors());
+app.use(cors({
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Admin-Key',
+    'X-Storefront-Key',
+    'x-valmontpay-signature',
+    'X-Requested-With'
+  ]
+}));
 app.use(applySecurityHeaders);
 // Keep the raw body around so the Paystack webhook signature (an HMAC over the
 // exact bytes Paystack sent) can be verified.
@@ -314,10 +325,8 @@ app.post('/api/v1/transaction/charge', async (req, res) => {
     trx_status: 'PENDING',
     message: 'Please complete the payment via Paystack. This endpoint no longer simulates success.',
     reference,
-    secure_checkout_url: '/pay.html?reference=' + encodeURIComponent(reference) +
-      '&amount=' + encodeURIComponent(trx.amount) +
-      '&email=' + encodeURIComponent(trx.customer) +
-      '&merchant=' + encodeURIComponent(trx.merchant)
+    // Never put a client-controlled amount back on the URL — that flow is retired.
+    secure_checkout_url: '/pay.html?reference=' + encodeURIComponent(reference)
   });
 });
 
@@ -439,10 +448,16 @@ app.post('/api/initialize-payment', initRateLimit, async (req, res) => {
   let reference = (req.body && req.body.reference) || generateReference();
   if (access_code) {
     const resolved = await paymentLinkStore.resolvePaymentLink(access_code);
-    if (resolved && resolved.payment) {
-      amount = Number(resolved.payment.amount);
-      if (resolved.payment.reference) reference = resolved.payment.reference;
+    if (!resolved || !resolved.payment) {
+      return res.status(400).json({ success: false, error: 'Invalid or expired access code' });
     }
+    amount = Number(resolved.payment.amount);
+    if (resolved.payment.reference) reference = resolved.payment.reference;
+  } else if (!isAuthorizedAdmin(req)) {
+    return res.status(401).json({
+      success: false,
+      error: 'A server-issued access_code is required to initialize a payment.'
+    });
   }
   // Paystack subaccount (body or query) — enables split settlement (e.g. ACCT_... for automatic 98%/2% splits).
   const subaccount = (req.body && req.body.subaccount) || (req.query && req.query.subaccount);
@@ -651,6 +666,21 @@ app.post('/api/transactions', publicWriteRateLimit, async (req, res) => {
     return res.status(401).json(unauthorizedPayload());
   }
 
+  // Non-terminal storefront writes (PENDING_MOMO) need a storefront key in
+  // production so the ledger cannot be spammed anonymously.
+  if (!TERMINAL_STATUSES.includes(requestedStatus) && !isAuthorizedAdmin(req)) {
+    const storefrontKey = process.env.STOREFRONT_WRITE_KEY || '';
+    const presented = String((req.headers && (req.headers['x-storefront-key'] || req.headers['X-Storefront-Key'])) || '');
+    if (isProductionRuntime()) {
+      if (!storefrontKey || !presented || !adminSession.safeEqual(presented, storefrontKey)) {
+        return res.status(401).json({
+          success: false,
+          error: 'Storefront authorization required. Send X-Storefront-Key (STOREFRONT_WRITE_KEY).'
+        });
+      }
+    }
+  }
+
   // Without Supabase (local dev / demo) persist to the in-memory ledger so the
   // storefront → admin order loop still works end-to-end.
   if (!isSupabaseConfigured()) {
@@ -707,6 +737,8 @@ app.get('/api/health', (req, res) => {
   if (!supabase.urlConfigured) missing.push('SUPABASE_URL');
   if (!supabase.keyConfigured) missing.push('SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)');
   if (!paystackConfigured) missing.push('PAYSTACK_SECRET_KEY');
+  const { isProductionRuntime } = require('./lib/insecure-secrets');
+  if (isProductionRuntime() && !process.env.ADMIN_PASSWORD) missing.push('ADMIN_PASSWORD');
 
   const warnings = [];
   if (supabase.urlConfigured && !supabase.serviceRoleKeyConfigured && supabase.anonKeyConfigured) {
@@ -728,7 +760,12 @@ app.get('/api/health', (req, res) => {
       SUPABASE_ANON_KEY: supabase.anonKeyConfigured,
       PAYSTACK_SECRET_KEY: paystackConfigured
     },
-    optional: { WEBHOOK_SECRET: Boolean(process.env.WEBHOOK_SECRET) },
+    optional: {
+      WEBHOOK_SECRET: Boolean(process.env.WEBHOOK_SECRET),
+      ADMIN_API_KEY: Boolean(process.env.ADMIN_API_KEY),
+      STOREFRONT_WRITE_KEY: Boolean(process.env.STOREFRONT_WRITE_KEY),
+      CRON_SECRET: Boolean(process.env.CRON_SECRET)
+    },
     supabase: {
       configured: supabase.configured,
       credentialType: supabase.credentialType
@@ -739,163 +776,19 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// API 6: Paystack webhook — the source of truth for real payments.
-// Point your Paystack dashboard webhook URL at https://<your-domain>/api/webhook
+// API 6: Paystack webhook — ONE handler (api/webhook.js). Express
+// delegates so local and Vercel cannot drift on signature/persist rules.
+let vercelWebhookHandlerPromise = null;
+function loadVercelWebhookHandler() {
+  if (!vercelWebhookHandlerPromise) {
+    vercelWebhookHandlerPromise = import('./api/webhook.js').then(mod => mod.default);
+  }
+  return vercelWebhookHandlerPromise;
+}
+
 app.post('/api/webhook', async (req, res) => {
-  const requestId = `wh_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  const startedAt = Date.now();
-  const rawBody = typeof req.rawBody === 'string' ? req.rawBody : JSON.stringify(req.body || {});
-  const signature = req.headers['x-paystack-signature'];
-
-  console.log('========================================');
-  console.log(`[WEBHOOK ${requestId}] STEP 1/6 RECEIVED — POST ${req.originalUrl} at ${new Date().toISOString()}`);
-  console.log(`[WEBHOOK ${requestId}] STEP 2/6 HEADERS —`, JSON.stringify(req.headers, null, 2));
-  console.log(`[WEBHOOK ${requestId}] STEP 3/6 BODY — ${Buffer.byteLength(rawBody, 'utf8')} byte(s):`, rawBody || '(empty)');
-  console.log(`[WEBHOOK ${requestId}] STEP 4/6 ENV —`, JSON.stringify({
-    signingSecretConfigured: Boolean(process.env.PAYSTACK_SECRET_KEY || process.env.WEBHOOK_SECRET),
-    signingSecretSource: process.env.PAYSTACK_SECRET_KEY ? 'PAYSTACK_SECRET_KEY'
-      : process.env.WEBHOOK_SECRET ? 'WEBHOOK_SECRET (legacy fallback)' : null,
-    supabase: supabaseConfigState()
-  }, null, 2));
-
-  const logEntry = webhookLog.recordWebhookHit({
-    endpoint: '/api/webhook',
-    method: req.method,
-    headers: req.headers,
-    body: rawBody,
-    event: req.body && req.body.event ? String(req.body.event) : null,
-    reference: req.body && req.body.data && req.body.data.reference ? String(req.body.data.reference) : null,
-    outcome: 'processing'
-  });
-
-  let result;
-  try {
-    result = handleWebhookEvent(req.body, signature, req.rawBody);
-  } catch (error) {
-    console.error(`[WEBHOOK ${requestId}] UNHANDLED — ✗ handler threw:`, error.message);
-    console.error(`[WEBHOOK ${requestId}] UNHANDLED — stack trace:\n`, error.stack);
-    webhookLog.completeWebhookHit(logEntry, { outcome: 'unhandled-error', statusCode: 500 });
-    console.log('========================================');
-    return res.status(500).json({ status: false, message: 'Internal webhook error', error: error.message });
-  }
-
-  const signatureAccepted = result.statusCode !== 401 && result.statusCode !== 400;
-  console.log(`[WEBHOOK ${requestId}] STEP 5/6 SIGNATURE — ${signatureAccepted ? '✓ accepted' : '✗ REJECTED'}`, JSON.stringify({
-    signaturePresent: Boolean(signature),
-    signatureLength: signature ? String(signature).length : 0,
-    handlerStatus: result.statusCode
-  }, null, 2));
-
-  if (!signatureAccepted) {
-    console.error(`[WEBHOOK ${requestId}] STEP 5/6 SIGNATURE — ✗ signature mismatch. Check that PAYSTACK_SECRET_KEY belongs to the Paystack account/mode (test/live) that sent this event.`);
-  }
-
-
-  // CRITICAL FIX: also persist the webhook event to Supabase so the dashboard
-  // can display it. Without this, webhook events only go to the in-memory
-  // ledger, which is lost on server restart and is empty on Vercel cold starts.
-  if (result.statusCode === 200 && result.body && result.body.transaction && isSupabaseConfigured()) {
-    const client = getSupabaseClient();
-    if (client) {
-      const record = result.body.transaction;
-      const persistence = await transactionStore.saveTransaction(
-        {
-          reference: record.reference,
-          merchant: record.merchant,
-          customer: record.customer,
-          amount: record.amount,
-          channel: record.channel,
-          status: record.status,
-          timestamp: record.timestamp
-        },
-        { client, context: 'WEBHOOK' }
-      );
-      console.log(`[WEBHOOK ${requestId}] STEP 6/6 SUPABASE — insert result: ${persistence.ok ? '✓ SAVED' : '✗ REJECTED'}`, JSON.stringify({
-        ok: persistence.ok,
-        reason: persistence.reason,
-        returnedRow: persistence.data || null,
-        error: persistence.error || null
-      }, null, 2));
-      if (!persistence.ok) {
-        webhookLog.completeWebhookHit(logEntry, { outcome: 'supabase-write-failed', statusCode: 500 });
-        return res.status(500).json({
-          status: false,
-          message: 'Failed to persist webhook event',
-          error: persistence.reason
-        });
-      }
-
-    }
-  } else if (result.statusCode === 200) {
-    console.log(`[WEBHOOK ${requestId}] STEP 6/6 SUPABASE — skipped (no transaction to save, or Supabase is not configured)`);
-  }
-
-  // ─── STANDING MANDATE SAVING ───
-  if (result.statusCode === 200 && req.body && req.body.event === 'charge.success' && req.body.data) {
-    try {
-      await mandateStore.saveMandateFromAuthorization(req.body.data, { context: `WEBHOOK ${requestId}` });
-    } catch (mandateErr) {
-      console.warn(`[WEBHOOK ${requestId}] Non-fatal error saving standing mandate:`, mandateErr.message || mandateErr);
-    }
-  }
-
-  // ─── MULTI-TENANT: Forward webhook to the tenant's registered URL ───
-  // After attempting to persist to Supabase, also dispatch the event to the
-  // appropriate tenant's webhook URL.
-  if (result.statusCode === 200 && result.body && result.body.transaction) {
-    const trxRecord = result.body.transaction;
-    const data = req.body && req.body.data ? req.body.data : {};
-    const metadata = data.metadata && typeof data.metadata === 'object' ? data.metadata : {};
-    const merchantIdentifier = metadata.tenant_key || metadata.merchant || trxRecord.tenant_key || trxRecord.merchant;
-    const tenant = tenants.getTenantByIdentifier(merchantIdentifier);
-
-    if (tenant && tenant.webhook_url) {
-      const eventName = req.body && req.body.event ? String(req.body.event) : 'charge.success';
-      const reference = trxRecord.reference;
-
-      console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — forwarding ${eventName} for ${reference} to ${tenant.key} @ ${tenant.webhook_url}`);
-
-      webhookForwarder.dispatchWebhook(tenant, eventName, {
-        reference,
-        status: trxRecord.status || 'success',
-        amount: Number(trxRecord.amount) || 0,
-        currency: data.currency || tenant.currency || 'GHS',
-        channel: trxRecord.channel || data.channel || 'Unknown',
-        paid_at: trxRecord.timestamp || data.paid_at || new Date().toISOString(),
-        merchant: tenant.key,
-        gateway_reference: reference
-      }, reference);
-    } else if (tenant) {
-      console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — tenant ${tenant.key} has no webhook URL configured, skipping`);
-    } else {
-      console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — could not resolve tenant from merchant metadata, skipping`);
-    }
-  }
-
-  // ─── NOTIFY: instant SMS/WhatsApp receipt to customer + merchant ───────
-  // The event is verified and the SUCCESS transaction is recorded. Dispatch
-  // fire-and-forget: lib/notifier never throws, but even if it did, a broken
-  // receipt must never change the HTTP 200 Paystack is waiting for.
-  if (
-    result.statusCode === 200 &&
-    result.body && result.body.transaction &&
-    String(result.body.transaction.status).toUpperCase() === 'SUCCESS'
-  ) {
-    console.log(`[WEBHOOK ${requestId}] NOTIFY — dispatching SMS/WhatsApp receipt for ${result.body.transaction.reference} (fire-and-forget)`);
-    notifier.sendOrderReceiptNotification(result.body.transaction, req.body || {}).catch(err => {
-      console.error(`[WEBHOOK ${requestId}] [WEBHOOK-NOTIFIER-ERROR]`, err && err.message ? err.message : err);
-    });
-  }
-
-  console.log(`[WEBHOOK ${requestId}] RESPONSE — → HTTP ${result.statusCode} in ${Date.now() - startedAt}ms`, JSON.stringify(result.body, null, 2));
-  webhookLog.completeWebhookHit(logEntry, {
-    statusCode: result.statusCode,
-    outcome: result.statusCode === 200 ? 'saved' : result.statusCode === 401 ? 'invalid-signature' : 'rejected',
-    durationMs: Date.now() - startedAt
-  });
-  console.log('========================================');
-
-  return res.status(result.statusCode).json(result.body);
+  const handler = await loadVercelWebhookHandler();
+  return handler(req, res);
 });
 
 // API 6a-i: /api/test-webhook — the dumbest possible POST receiver.
@@ -1341,7 +1234,7 @@ app.post('/api/transaction/initialize', requireTenantAuth, async (req, res) => {
   });
 });
 
-// ─── New: GET /api/transaction/verify/{reference} ──────────────────────
+// GET /api/transaction/verify/:reference
 
 /**
  * Verify a transaction status. Authorised by tenant secret key.
@@ -1604,50 +1497,43 @@ app.put('/api/tenants/:key/webhook', requireAdmin, async (req, res) => {
 // in its response. It was previously unauthenticated — a full credential-
 // takeover primitive for any tenant. Admin-guarded now.
 
-app.post('/api/tenants/:key/rotate-keys', requireAdmin, (req, res) => {
-  const result = tenants.rotateTenantSecrets(req.params.key);
-  if (!result) {
-    return res.status(404).json({ status: false, message: 'Tenant not found' });
+app.post('/api/tenants/:key/rotate-keys', requireAdmin, async (req, res) => {
+  const result = await tenantStore.rotateSecrets(req.params.key);
+  if (!result.ok) {
+    return res.status(400).json({ status: false, message: result.reason });
   }
-
+  tenants.updateTenantInMemory(req.params.key, {
+    secret_keys: [result.secret_key_1, result.secret_key_2].filter(Boolean),
+    webhook_signing_secret: result.webhook_signing_secret
+  });
   res.status(200).json({
     status: true,
-    message: 'API keys rotated. Both old (secret_1) and new (secret_2) are valid.',
+    message: 'Keys rotated and persisted.',
     data: {
-      secret_key_1: result.secret_1,
-      secret_key_2: result.secret_2,
-      note: 'Keep both keys valid during rotation. Switch your integration to secret_key_2, then revoke secret_key_1.'
+      secret_key_1: result.secret_key_1,
+      secret_key_2: result.secret_key_2,
+      webhook_signing_secret: result.webhook_signing_secret
     }
   });
 });
 
-// ─── Tenant admin CRUD (backed by Supabase) ─────────────────────────────
-// POST /api/admin/tenants      — create a tenant
-// GET  /api/admin/tenants      — list ALL tenants (including disabled)
-// PUT  /api/admin/tenants/:key — update a tenant (display_name, webhook, etc.)
-// DELETE /api/admin/tenants/:key — delete a tenant
-// POST /api/admin/tenants/:key/disable  — soft-disable
-// POST /api/admin/tenants/:key/enable   — re-enable
+// Tenant admin CRUD (backed by Supabase).
+// POST   /api/admin/tenants
+// GET    /api/admin/tenants
+// PUT    /api/admin/tenants/:key
+// DELETE /api/admin/tenants/:key
+// POST   /api/admin/tenants/:key/disable
+// POST   /api/admin/tenants/:key/enable
+// POST   /api/admin/tenants/:key/rotate-keys
 //
-// These are admin-only endpoints. The admin HTML pages sit behind a
-// login, but the API itself is now ACTUALLY guarded server-side: every
-// /api/admin/* route requires the X-Admin-Key header to match
-// ADMIN_PASSWORD (isplay_name, webhook, etc.)
-// DELETE /api/admin/tenants/:key — delete a tenant
-// POST /api/admin/tenants/:key/disable  — soft-disable
-// POST /api/admin/tenants/:key/enable   — re-enable
-//
-// These are admin-only endpoints. The admin HTML pages sit behind a
-// login, but the API itself is now ACTUALLY guarded server-side: every
-// /api/admin/* route requires the X-Admin-Key header to match
-// ADMIN_PASSWORD (lib/admin-auth.js). Previously these were wide open —
-// anyone could rotate tenant keys or create tenants without any credential.
-// When ADMIN_PASSWORD is unset (local dev) the guard warns and passes.
+// Guarded by requireAdmin: X-Admin-Key must match ADMIN_API_KEY, or a
+// vp_admin session cookie must be present. The login password is never
+// a valid API key. Production with no ADMIN_PASSWORD is fail-closed.
 
-const tenantStore = require('./lib/tenant-store');
-
-if (!adminAuthEnforced()) {
-  console.warn('[ADMIN-AUTH] ADMIN_PASSWORD is not set — admin API endpoints are OPEN. Set it before deploying.');
+if (isProductionRuntime() && !process.env.ADMIN_PASSWORD) {
+  console.error('[ADMIN-AUTH] FATAL: ADMIN_PASSWORD is unset in production — admin APIs are CLOSED, not open.');
+} else if (!adminAuthEnforced()) {
+  console.warn('[ADMIN-AUTH] ADMIN_PASSWORD is not set — admin API endpoints are OPEN (local/dev only).');
 }
 
 app.post('/api/admin/login', loginRateLimit, (req, res) => {
@@ -1926,20 +1812,20 @@ app.get('/checkout', (req, res) => {
   res.sendFile(path.join(__dirname, 'checkout.html'));
 });
 
-app.get('/dashboard', (req, res) => {
+app.get('/dashboard', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'dashboard.html'));
 });
 
 app.get('/pay', (req, res) => {
   res.sendFile(path.join(__dirname, 'pay.html'));
 });
-app.get('/dashboard.html', (req, res) => {
+app.get('/dashboard.html', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'dashboard.html'));
 });
 app.get('/checkout.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'checkout.html'));
 });
-app.get('/webhook-status.html', (req, res) => {
+app.get('/webhook-status.html', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'webhook-status.html'));
 });
 
@@ -1956,24 +1842,24 @@ app.get('/pay.html', (req, res) => {
 });
 
 // Multi-tenant admin page
-app.get('/admin', (req, res) => {
+app.get('/admin', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
-app.get('/admin.html', (req, res) => {
+app.get('/admin.html', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
 // Tenants admin page (also reachable as /tenants without .html)
-app.get('/tenants', (req, res) => {
+app.get('/tenants', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'tenants.html'));
 });
-app.get('/tenants.html', (req, res) => {
+app.get('/tenants.html', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'tenants.html'));
 });
 
 // Webhook diagnostic page (also reachable as /webhook-status.html via static).
-app.get('/webhook-status', (req, res) => {
+app.get('/webhook-status', requireAdminPage, (req, res) => {
   res.sendFile(path.join(__dirname, 'webhook-status.html'));
 });
 

@@ -342,7 +342,7 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
     function rotateKeys(key) {
       if (!confirm('Rotate API keys for ' + key + '?\n\nBoth current and new keys will remain valid during the transition period.')) return;
 
-      fetch('/api/tenants/' + encodeURIComponent(key) + '/rotate-keys', {
+      fetch('/api/admin/tenants/' + encodeURIComponent(key) + '/rotate-keys', {
         method: 'POST',
         headers: adminHeaders()
       })

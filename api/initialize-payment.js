@@ -1,8 +1,10 @@
 import paystack from '../lib/paystack.js';
 import baseUrlModule from '../lib/base-url.js';
+import adminAuthModule from '../lib/admin-auth.js';
 
 const { initializePayment, generateReference } = paystack;
 const { publicBaseUrl } = baseUrlModule;
+const { isAuthorizedAdmin } = adminAuthModule;
 
 // Build absolute URLs from the incoming request. The (allowlisted) request
 // host always wins over PUBLIC_BASE_URL so a stale env var can never send
@@ -32,13 +34,19 @@ export default async function handler(req, res) {
     try {
       const paymentLinkStore = (await import('../lib/payment-link-store.js')).default;
       const resolved = await paymentLinkStore.resolvePaymentLink(accessCode);
-      if (resolved && resolved.payment) {
-        amount = Number(resolved.payment.amount);
-        if (resolved.payment.reference) reference = resolved.payment.reference;
+      if (!resolved || !resolved.payment) {
+        return res.status(400).json({ success: false, error: 'Invalid or expired access code' });
       }
+      amount = Number(resolved.payment.amount);
+      if (resolved.payment.reference) reference = resolved.payment.reference;
     } catch (_) {
-      // Fall through to the body amount if the store is unavailable.
+      return res.status(502).json({ success: false, error: 'Could not resolve access code' });
     }
+  } else if (!isAuthorizedAdmin(req)) {
+    return res.status(401).json({
+      success: false,
+      error: 'A server-issued access_code is required to initialize a payment.'
+    });
   }
 
   // Validate required fields

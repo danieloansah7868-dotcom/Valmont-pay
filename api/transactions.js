@@ -15,10 +15,14 @@
 import supabaseModule from '../lib/supabase.js';
 import transactionStore from '../lib/transaction-store.js';
 import adminAuthModule from '../lib/admin-auth.js';
+import secretsModule from '../lib/insecure-secrets.js';
+import sessionModule from '../lib/admin-session.js';
 
 const { isSupabaseConfigured, missingSupabaseEnvMessage, supabaseConfigState } = supabaseModule;
 const { saveTransaction, fetchTransactions, buildLedgerPayload } = transactionStore;
 const { isAuthorizedAdmin, unauthorizedPayload } = adminAuthModule;
+const { isProductionRuntime } = secretsModule;
+const { safeEqual } = sessionModule;
 
 export default async function handler(req, res) {
   // Cross-origin support: the storefront (e.g. example-store.com)
@@ -28,7 +32,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', requestOrigin || '*');
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-valmontpay-signature, x-admin-key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-valmontpay-signature, x-admin-key, x-storefront-key');
   res.setHeader('Access-Control-Max-Age', '86400');
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
@@ -98,6 +102,18 @@ export default async function handler(req, res) {
     if (TERMINAL_STATUSES.includes(requestedStatus) && !isAuthorizedAdmin(req)) {
       return res.status(401).json(unauthorizedPayload());
     }
+    if (!TERMINAL_STATUSES.includes(requestedStatus) && !isAuthorizedAdmin(req)) {
+      const storefrontKey = process.env.STOREFRONT_WRITE_KEY || '';
+      const presented = String((req.headers && (req.headers['x-storefront-key'] || req.headers['X-Storefront-Key'])) || '');
+      if (isProductionRuntime()) {
+        if (!storefrontKey || !presented || !safeEqual(presented, storefrontKey)) {
+          return res.status(401).json({
+            success: false,
+            error: 'Storefront authorization required. Send X-Storefront-Key (STOREFRONT_WRITE_KEY).'
+          });
+        }
+      }
+    }
 
     const result = await saveTransaction(body, { context: 'TRANSACTIONS' });
 
@@ -120,4 +136,3 @@ export default async function handler(req, res) {
   res.setHeader('Allow', 'GET, POST');
   return res.status(405).json({ success: false, error: 'Method not allowed' });
 }
-// Payout settings: bank or momo

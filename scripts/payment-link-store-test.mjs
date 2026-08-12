@@ -186,11 +186,19 @@ console.log('\n# lib/admin-auth.js');
 
   process.env.ADMIN_PASSWORD = 's3cret';
   check(adminAuth.adminAuthEnforced(), 'enforced when ADMIN_PASSWORD is set');
-  check(adminAuth.isAuthorizedAdmin({ headers: { 'x-admin-key': 's3cret' } }), 'right key passes');
+  check(!adminAuth.isAuthorizedAdmin({ headers: { 'x-admin-key': 's3cret' } }), 'login password is NOT a valid API key');
+  process.env.ADMIN_API_KEY = 'api-key-xyz';
+  check(adminAuth.isAuthorizedAdmin({ headers: { 'x-admin-key': 'api-key-xyz' } }), 'ADMIN_API_KEY passes');
   check(!adminAuth.isAuthorizedAdmin({ headers: { 'x-admin-key': 'wrong' } }), 'wrong key rejected');
-  check(!adminAuth.isAuthorizedAdmin({ headers: { 'x-admin-key': 's3cret-but-longer' } }), 'different-length key rejected safely');
+  check(!adminAuth.isAuthorizedAdmin({ headers: { 'x-admin-key': 'api-key-xyz-but-longer' } }), 'different-length key rejected safely');
   check(!adminAuth.isAuthorizedAdmin({ headers: {} }), 'missing key rejected');
   delete process.env.ADMIN_PASSWORD;
+  delete process.env.ADMIN_API_KEY;
+
+  process.env.VERCEL_ENV = 'production';
+  check(adminAuth.adminAuthEnforced(), 'production is enforced even without ADMIN_PASSWORD');
+  check(!adminAuth.isAuthorizedAdmin({ headers: {} }), 'production refuses the open-dev posture');
+  delete process.env.VERCEL_ENV;
 }
 
 console.log(`\n${passed} passed, 0 failed\n`);

@@ -10,6 +10,9 @@
  *   - private webhook URLs are rejected
  *   - well-known dev secrets are refused in strict mode
  *   - charge persists Paystack's amount, not the body's
+ *   - ADMIN_PASSWORD is not a valid X-Admin-Key
+ *   - admin HTML is server-guarded
+ *   - initialize-payment without access_code is rejected when admin is on
  */
 
 import assert from 'node:assert/strict';
@@ -26,6 +29,7 @@ for (const name of ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_
 }
 
 process.env.ADMIN_PASSWORD = 'hardening-s3cret';
+process.env.ADMIN_API_KEY = 'hardening-api-key';
 process.env.ADMIN_EMAIL = 'support@valmontpay.com';
 process.env.PORT = '4331';
 process.env.PAYSTACK_SECRET_KEY = 'sk_test_hardening';
@@ -141,6 +145,35 @@ console.log('\n# Security hardening');
 }
 
 {
+  const asPassword = await fetch(base + '/api/transactions', {
+    headers: { 'X-Admin-Key': 'hardening-s3cret' }
+  });
+  assert.equal(asPassword.status, 401);
+  pass('login password is not accepted as X-Admin-Key');
+}
+
+{
+  const dash = await fetch(base + '/dashboard.html', { redirect: 'manual' });
+  assert.equal(dash.status, 302);
+  assert.match(String(dash.headers.get('location') || ''), /admin-login/);
+  const adminPage = await fetch(base + '/admin.html', { redirect: 'manual' });
+  assert.equal(adminPage.status, 302);
+  const tenantsPage = await fetch(base + '/tenants.html', { redirect: 'manual' });
+  assert.equal(tenantsPage.status, 302);
+  pass('admin HTML pages redirect unauthenticated browsers to login');
+}
+
+{
+  const naked = await fetch(base + '/api/initialize-payment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'buyer@example.com', amount: 23 })
+  });
+  assert.equal(naked.status, 401);
+  pass('initialize-payment without access_code is rejected when admin is enforced');
+}
+
+{
   const redir = await fetch(
     base + '/api/transaction/return?callback_url=https://evil.example/phish&status=success',
     { redirect: 'manual' }
@@ -152,7 +185,7 @@ console.log('\n# Security hardening');
 {
   const webhook = await fetch(base + '/api/tenants/valmont-electricals/webhook', {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', 'X-Admin-Key': 'hardening-s3cret' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Key': 'hardening-api-key' },
     body: JSON.stringify({ webhook_url: 'http://169.254.169.254/latest/meta-data' })
   });
   assert.equal(webhook.status, 400);
@@ -176,7 +209,7 @@ console.log('\n# Security hardening');
 {
   const init = await fetch(base + '/api/v1/transaction/initialize', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Admin-Key': 'hardening-s3cret' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Key': 'hardening-api-key' },
     body: JSON.stringify({ email: 'paid@example.com', amount: 1, merchant: 'valmont-electricals' })
   });
   const initJson = await init.json();

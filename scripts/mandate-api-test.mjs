@@ -17,9 +17,10 @@ for (const name of ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_
 }
 process.env.PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || 'sk_test_fake_mandate_api_key';
 process.env.ADMIN_PASSWORD = 'mandate-test-admin';
+process.env.ADMIN_API_KEY = 'mandate-test-api-key';
 process.env.ADMIN_EMAIL = 'support@valmontpay.com';
 process.env.PORT = '4330';
-const adminHeaders = { 'Content-Type': 'application/json', 'X-Admin-Key': 'mandate-test-admin' };
+const adminHeaders = { 'Content-Type': 'application/json', 'X-Admin-Key': 'mandate-test-api-key' };
 
 // Mock Paystack charge authorization endpoint
 const origFetch = globalThis.fetch;
