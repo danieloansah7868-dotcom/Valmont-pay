@@ -17,7 +17,15 @@
  *   • Logs to stdout (visible in Vercel runtime logs) with a single
  *     prefixed line per rejection. Future enhancement: a dedicated
  *     bad-amount table in Supabase.
+ *
+ * It also receives `reason=legacy-unsigned`: a customer opened a retired
+ * `pay.html?amount=…` link with no access_code. Those lines are the
+ * migration log — each one is a storefront still on the old flow.
  */
+import legacyLinkPolicy from '../lib/legacy-link-policy.js';
+
+const { LEGACY_UNSIGNED_REASON } = legacyLinkPolicy;
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
@@ -37,10 +45,19 @@ export default async function handler(req, res) {
     const userAgent = typeof body.userAgent === 'string' ? body.userAgent.slice(0, 256) : null;
     const path = typeof body.path === 'string' ? body.path.slice(0, 64) : null;
 
-    // Only log the unit-mismatch case (the only thing pay.html sends
-    // today). Other reasons are accepted but not logged to keep the
-    // audit line single-purpose.
-    if (reason === 'looks-like-pesewas' && rawAmount) {
+    // Two reasons are logged: a retired amount-in-URL link
+    // (`legacy-unsigned` — the migration log) and the pesewas/cedis unit
+    // mismatch. Other reasons are accepted but not logged so the audit
+    // lines stay single-purpose.
+    if (reason === LEGACY_UNSIGNED_REASON) {
+      console.warn(
+        `[VALMONT-PAY][BAD-AMOUNT] unit=n/a reason=${reason} ` +
+        `rawAmount=${rawAmount || 'none'} ` +
+        `merchant=${merchant || 'unknown'} ref=${ref || 'none'} ` +
+        `path=${path || 'unknown'} url=${url || 'unknown'} ` +
+        `ua=${userAgent || 'unknown'}`
+      );
+    } else if (reason === 'looks-like-pesewas' && rawAmount) {
       console.warn(
         `[VALMONT-PAY][BAD-AMOUNT] unit=mismatch reason=${reason} ` +
         `rawAmount=${rawAmount} suspectUnit=${suspectUnit || 'pesewas'} ` +

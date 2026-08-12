@@ -249,6 +249,11 @@ check('pay.html contains the AMOUNT UNIT CONTRACT banner at the top of the scrip
 check('pay.html calls validateAmountUrl in the legacy (?amount=&merchant=) branch', () => {
   // The validator must run BEFORE the /api/initialize-payment POST.
   // The order in the file is: access-code branch, legacy branch, hash fallback.
+  //
+  // NOTE: the legacy branch is now only REACHABLE when the operator sets
+  // ALLOW_LEGACY_AMOUNT_URL=1 — see the rejection assertions below and
+  // scripts/pay-html-legacy-link-test.mjs. The unit validator remains the
+  // second gate behind that flag.
   const legacyBranch = payHtml.indexOf('// Legacy flow');
   const initCall = payHtml.indexOf("/api/initialize-payment");
   const validateCall = payHtml.indexOf('validateAmountUrl(amountRawFromUrl)');
@@ -259,6 +264,92 @@ check('pay.html calls validateAmountUrl in the legacy (?amount=&merchant=) branc
   assert.ok(
     validateCall > legacyBranch,
     'expected validateAmountUrl() to be called in or after the legacy branch'
+  );
+});
+
+// ─── The legacy flow is retired ───────────────────────────────────────
+//
+// validateAmountUrl is a UNIT guard, not a TAMPER guard: it stops
+// `amount=2300` (pesewas) but happily accepts `amount=1` in place of
+// `amount=1400`. The real fix is that an unsigned amount-in-URL link is
+// refused outright. These assertions pin that wiring; the behavioural
+// proof (what the customer sees, what gets POSTed) lives in
+// scripts/pay-html-legacy-link-test.mjs.
+
+check('pay.html gates the legacy branch behind the server-side escape hatch', () => {
+  assert.ok(
+    /async function legacyAmountUrlAllowed\s*\(/.test(payHtml),
+    'expected legacyAmountUrlAllowed() to be defined'
+  );
+  assert.ok(
+    /\/api\/config\/pay/.test(payHtml),
+    'expected pay.html to read the flag from the server (/api/config/pay), not from the URL'
+  );
+  assert.ok(
+    /const legacyAllowed = await legacyAmountUrlAllowed\(\);[\s\S]{0,200}?rejectLegacyUnsignedLink\(\)/.test(payHtml),
+    'expected the legacy branch to reject first and only continue when the flag is on'
+  );
+});
+
+check('pay.html rejects an unsigned legacy link with the agreed copy', () => {
+  assert.ok(
+    /function rejectLegacyUnsignedLink\s*\(/.test(payHtml),
+    'expected rejectLegacyUnsignedLink() to be defined'
+  );
+  assert.ok(
+    payHtml.includes('This link is missing a locked payment code. Ask the merchant for a new link.'),
+    'expected the exact customer-facing copy for a retired link'
+  );
+  assert.ok(
+    /rejectLegacyUnsignedLink[\s\S]{0,600}?showError\(LEGACY_UNSIGNED_COPY\)/.test(payHtml),
+    'expected the rejection to render the existing "Payment Link Invalid" card via showError()'
+  );
+});
+
+check('pay.html audits the rejected legacy URL with reason=legacy-unsigned', () => {
+  assert.ok(
+    /LEGACY_UNSIGNED_REASON\s*=\s*'legacy-unsigned'/.test(payHtml),
+    "expected the audit reason to be 'legacy-unsigned'"
+  );
+  assert.ok(
+    /rejectLegacyUnsignedLink[\s\S]{0,500}?reportBadAmount\(/.test(payHtml),
+    'expected rejectLegacyUnsignedLink() to POST the rejected URL to /api/log/bad-amount'
+  );
+});
+
+check('pay.html fails CLOSED when the escape-hatch flag cannot be read', () => {
+  // The catch block around the /api/config/pay fetch must return false.
+  const fnStart = payHtml.indexOf('async function legacyAmountUrlAllowed');
+  assert.ok(fnStart > 0);
+  const fnBody = payHtml.slice(fnStart, fnStart + 900);
+  assert.ok(
+    /catch\s*\(_\)\s*\{\s*return false;/.test(fnBody),
+    'expected the catch block to return false (fail closed)'
+  );
+  assert.ok(
+    /if \(!res\.ok\) return false;/.test(fnBody),
+    'expected a non-OK response to fail closed too'
+  );
+});
+
+check('pay.html sends the access_code to /api/initialize-payment so the server re-resolves the amount', () => {
+  const fnStart = payHtml.indexOf('async function payWithValmontPay');
+  assert.ok(fnStart > 0, 'expected payWithValmontPay() in pay.html');
+  const fnBody = payHtml.slice(fnStart, payHtml.indexOf('function openEmbeddedCheckout'));
+
+  assert.ok(
+    /access_code:\s*accessCode\s*\|\|\s*undefined/.test(fnBody),
+    'expected the link access_code to be forwarded in the request body'
+  );
+  // The old code fell back to `new URLSearchParams(location.search).get('amount')`
+  // — i.e. it read the tampered value straight back out of the URL.
+  assert.ok(
+    !/get\(\s*['"]amount['"]\s*\)/.test(fnBody),
+    'payWithValmontPay() must never read the amount out of the URL'
+  );
+  assert.ok(
+    !/get\(\s*['"]merchant['"]\s*\)/.test(fnBody),
+    'payWithValmontPay() must never read the merchant out of the URL'
   );
 });
 

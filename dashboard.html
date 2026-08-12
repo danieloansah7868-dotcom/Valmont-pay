@@ -89,6 +89,49 @@
         <p id="initError" class="text-red-400 text-[11px] font-bold mt-1.5 hidden"></p>
       </div>
 
+      <!--
+        Valmont Web Services — issue a Stage 1 / full-payment link.
+
+        The operator picks a SKU, never a price. The amount is looked up
+        server-side in lib/service-catalogue.js and locked behind a
+        one-time access_code, so the link that gets WhatsApp'd to a client
+        has nothing in it a customer can edit. See docs § 2.4.
+      -->
+      <div class="bg-[#0b1a38] border border-[#142850] p-5 rounded-lg shadow-xl md:col-span-2">
+        <h3 class="font-extrabold text-[12px] uppercase text-[#f68b1e] tracking-widest mb-1 border-b border-[#142850] pb-2">
+          🔒 Valmont Web Services — Issue Stage 1 / Full Link
+        </h3>
+        <p class="text-[11px] text-gray-400 font-medium mt-2 mb-4">
+          Prices come from the server-side catalogue, not from this form. The generated link is
+          <code class="text-[#f68b1e]">pay.html?access_code=…</code> — the client cannot edit the amount.
+        </p>
+        <form onsubmit="issueServiceLink(event);" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <div>
+            <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Package / Stage (SKU)</label>
+            <select id="skuSelect" onchange="renderSkuPrice();" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e]" required>
+              <option value="">Loading catalogue…</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Client Email Address</label>
+            <input id="skuEmail" type="email" placeholder="client@email.com" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-white outline-none focus:border-[#f68b1e]" required />
+          </div>
+          <div>
+            <label class="block text-[10px] font-black uppercase text-gray-400 mb-1.5">Price (locked)</label>
+            <div id="skuPrice" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded-[4px] text-[13px] text-[#f68b1e] font-black">GH₵ —</div>
+          </div>
+          <button type="submit" class="bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-[12px] uppercase py-3 rounded-[4px] transition tracking-wider shadow">
+            Issue link
+          </button>
+        </form>
+        <div id="skuResult" class="mt-4 p-3 bg-[#050d24] border border-[#142850] rounded-[4px] text-[12px] hidden justify-between items-center gap-2">
+          <span class="font-medium text-gray-400 truncate">Locked Link: <a href="#" id="skuLinkUrl" target="_blank" class="text-[#f68b1e] font-bold underline hover:text-orange-300">https://valmontpay.app/...</a></span>
+          <button onclick="copyServiceLink();" class="text-[10px] bg-[#142850] hover:bg-[#203c6d] text-white py-1 px-2 rounded font-black tracking-wider transition shrink-0">COPY</button>
+        </div>
+        <p id="skuResultMeta" class="text-gray-500 text-[10px] font-medium mt-1.5 hidden"></p>
+        <p id="skuError" class="text-red-400 text-[11px] font-bold mt-1.5 hidden"></p>
+      </div>
+
     </div>
 
     <!-- Webhook Settings Panel -->
@@ -335,6 +378,100 @@
       alert('Payment link copied to clipboard!');
     }
 
+    // ─── Valmont Web Services: Stage 1 / full-payment links ────────────
+    //
+    // The operator never types a price. The catalogue is fetched from the
+    // server, the SKU is what gets POSTed, and the server prices it. That
+    // is what makes the resulting link untamperable — see
+    // docs/tenant-integration.md § 2.4.
+    let serviceCatalogue = [];
+
+    async function loadServiceCatalogue() {
+      const select = document.getElementById('skuSelect');
+      if (!select) return;
+      try {
+        const res = await fetch('/api/v1/payment-link/catalogue', { cache: 'no-store' });
+        const json = await res.json();
+        serviceCatalogue = (json.data && json.data.items) || [];
+        if (!serviceCatalogue.length) {
+          select.innerHTML = '<option value="">(catalogue unavailable)</option>';
+          return;
+        }
+        select.innerHTML = serviceCatalogue
+          .map(item => `<option value="${escapeHtml(item.sku)}">${escapeHtml(item.sku)} — ${escapeHtml(item.label)}</option>`)
+          .join('');
+        renderSkuPrice();
+      } catch (err) {
+        select.innerHTML = '<option value="">(catalogue unavailable)</option>';
+        console.error('Failed to load the service catalogue:', err);
+      }
+    }
+
+    function renderSkuPrice() {
+      const sku = document.getElementById('skuSelect').value;
+      const item = serviceCatalogue.find(i => i.sku === sku);
+      document.getElementById('skuPrice').textContent = item
+        ? `GH\u20b5 ${formatMoney(item.amount)}`
+        : 'GH\u20b5 —';
+    }
+
+    async function issueServiceLink(event) {
+      event.preventDefault();
+      const sku = document.getElementById('skuSelect').value;
+      const email = document.getElementById('skuEmail').value.trim();
+      const errorEl = document.getElementById('skuError');
+      const metaEl = document.getElementById('skuResultMeta');
+      const resultEl = document.getElementById('skuResult');
+      errorEl.classList.add('hidden');
+      metaEl.classList.add('hidden');
+
+      if (!sku) {
+        errorEl.textContent = '❌ Choose a package/stage first.';
+        errorEl.classList.remove('hidden');
+        return;
+      }
+
+      try {
+        // NOTE: no amount in this body. The server prices the SKU.
+        const res = await fetch('/api/v1/payment-link', {
+          method: 'POST',
+          headers: adminHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ sku, email })
+        });
+        const json = await res.json();
+
+        if (!json.status) {
+          errorEl.textContent = '❌ ' + (json.message || 'Could not issue the link.');
+          errorEl.classList.remove('hidden');
+          return;
+        }
+
+        const url = json.data.pay_url;
+        const link = document.getElementById('skuLinkUrl');
+        link.href = url;
+        link.textContent = url;
+        resultEl.classList.remove('hidden');
+        resultEl.classList.add('flex');
+
+        const parts = [`${json.data.sku} · GH\u20b5 ${formatMoney(json.data.amount)} · ref ${json.data.reference}`];
+        if (json.data.link_expires_at) {
+          parts.push((json.data.link_durable ? 'valid until ' : 'valid on this server only, until ') +
+            new Date(json.data.link_expires_at).toLocaleString());
+        }
+        metaEl.textContent = (json.data.link_durable ? '✅ ' : '⚠️ ') + parts.join(' — ');
+        metaEl.classList.remove('hidden');
+        fetchDashboardData();
+      } catch (err) {
+        errorEl.textContent = '❌ Network error: ' + err.message;
+        errorEl.classList.remove('hidden');
+      }
+    }
+
+    function copyServiceLink() {
+      navigator.clipboard.writeText(document.getElementById('skuLinkUrl').textContent);
+      alert('Locked payment link copied to clipboard!');
+    }
+
     // ─── Webhook Settings ──────────────────────────────────────────────
     async function loadTenantList() {
       try {
@@ -436,6 +573,9 @@
 
     // Boot webhook panel
     populateWebhookTenantSelect().then(() => loadWebhookSettings());
+
+    // Boot the Valmont Web Services SKU catalogue (prices are server-side)
+    loadServiceCatalogue();
 
     // Poll so a real payment shows up without a manual refresh.
     setInterval(fetchDashboardData, 10000);

@@ -163,6 +163,27 @@
     // VALMONT-PAY SECURE PAYMENT PAGE
     // ===============================================================
     //
+    // THE ONLY PUBLIC PATH IS ?access_code= ————————————————————————
+    //   A customer must not be able to change what they pay by editing
+    //   the URL. Amounts are resolved server-side from a one-time
+    //   access_code that the merchant mints with their secret key
+    //   (POST /api/transaction/initialize) or from the dashboard.
+    //
+    //   The legacy link form —
+    //       pay.html?amount=1400&merchant=…&reference=…
+    //   — carries the price in the query string and is NOT signed, so
+    //   anyone could change 1400 to 1. It is RETIRED: this page refuses
+    //   to render a payment form for it (see rejectLegacyUnsignedLink)
+    //   and POST /api/initialize-payment refuses the matching request
+    //   server-side. The unit validator below is NOT that guard — it
+    //   only catches the pesewas/cedis mix-up and would happily accept
+    //   a tampered-but-plausible cedis amount.
+    //
+    //   The single escape hatch is the server-side environment variable
+    //   ALLOW_LEGACY_AMOUNT_URL=1 (off in production). This page asks the
+    //   server for that flag via /api/config/pay and FAILS CLOSED: if the
+    //   request errors, the legacy link stays rejected.
+    //
     // AMOUNT UNIT CONTRACT (enforced below — see validateAmountUrl):
     //   pay.html?amount= is ALWAYS in CEDIS (major units) — the same
     //   unit the gateway server, Paystack's downstream conversion, the
@@ -306,7 +327,7 @@
           url: window.location.href,
           rawAmount: rejection.raw,
           reason: rejection.error,
-          suspectUnit: rejection.suspectUnit,
+          suspectUnit: rejection.suspectUnit || null,
           merchant: merchantFromUrl || null,
           ref: refFromUrl || null,
           userAgent: navigator.userAgent
@@ -325,6 +346,50 @@
           }).catch(() => {});
         }
       } catch (_) { /* never let audit logging break the page */ }
+    }
+
+    // ---------------------------------------------------------------
+    // LEGACY (UNSIGNED) LINK REJECTION
+    //
+    // A pay.html URL with no `access_code` puts the price in the query
+    // string, where the customer can edit it. That flow is retired for
+    // public merchants. This is the gate.
+    //
+    // The escape hatch is server-side only: ALLOW_LEGACY_AMOUNT_URL=1.
+    // We ask the server for it and FAIL CLOSED — if /api/config/pay is
+    // unreachable or returns anything unexpected, the link is rejected.
+    // ---------------------------------------------------------------
+    const LEGACY_UNSIGNED_REASON = 'legacy-unsigned';
+    const LEGACY_UNSIGNED_COPY =
+      'This link is missing a locked payment code. Ask the merchant for a new link.';
+
+    async function legacyAmountUrlAllowed() {
+      try {
+        const res = await fetch('/api/config/pay', { cache: 'no-store' });
+        if (!res.ok) return false;
+        const json = await res.json();
+        // Explicit true only. Anything else (missing key, string, error
+        // envelope) keeps the legacy flow closed.
+        return json && json.data && json.data.allow_legacy_amount_url === true;
+      } catch (_) {
+        return false; // fail closed
+      }
+    }
+
+    // Renders the existing "Payment Link Invalid" card and posts the
+    // rejected URL to /api/log/bad-amount with reason=legacy-unsigned.
+    function rejectLegacyUnsignedLink() {
+      console.warn(
+        '[VALMONT-PAY] Rejected unsigned legacy pay.html URL (no access_code). ' +
+        'amount=' + (amountRawFromUrl === null ? 'none' : amountRawFromUrl) +
+        ' merchant=' + (merchantFromUrl || '?') + ' ref=' + (refFromUrl || '?')
+      );
+      reportBadAmount({
+        raw: amountRawFromUrl,
+        error: LEGACY_UNSIGNED_REASON,
+        suspectUnit: null
+      });
+      showError(LEGACY_UNSIGNED_COPY);
     }
 
     // Try to resolve from access_code first
@@ -358,11 +423,24 @@
         return;
       }
 
-      // Legacy flow: amount and merchant come from URL (less secure).
-      // The unit validator below is the gate that prevents the
-      // "Electricals bug" (amount=2300 charging GH₵2,300 for a GH₵23
-      // cart) from ever reaching /api/initialize-payment.
+      // Legacy flow: amount and merchant come from URL (RETIRED).
+      //
+      // There is no access_code here, so the price is whatever the
+      // customer left in the address bar. Reject the link outright
+      // unless the operator has explicitly re-opened the legacy flow
+      // server-side with ALLOW_LEGACY_AMOUNT_URL=1.
+      //
+      // When it IS re-opened, the unit validator below still runs: it is
+      // the gate that prevents the "Electricals bug" (amount=2300
+      // charging GH₵2,300 for a GH₵23 cart) from reaching
+      // /api/initialize-payment.
       if (merchantFromUrl && amountRawFromUrl !== null && amountRawFromUrl !== '') {
+        const legacyAllowed = await legacyAmountUrlAllowed();
+        if (!legacyAllowed) {
+          rejectLegacyUnsignedLink();
+          return;
+        }
+
         const validation = validateAmountUrl(amountRawFromUrl);
 
         if (!validation.ok) {
@@ -422,6 +500,14 @@
       const hashAccessCode = hashParams.get('access_code');
       if (hashAccessCode) {
         window.location.search = '?access_code=' + encodeURIComponent(hashAccessCode);
+        return;
+      }
+
+      // A partial legacy link (e.g. ?amount=1400 with no merchant) is still
+      // an unsigned amount-in-URL link. Reject it with the same copy and
+      // the same audit reason so it shows up in the migration log.
+      if (amountRawFromUrl !== null && String(amountRawFromUrl).trim() !== '') {
+        rejectLegacyUnsignedLink();
         return;
       }
 
@@ -589,8 +675,14 @@
       }
 
       // 2. Otherwise initialize the transaction in the BACKEND and get a fresh access code.
-      //    The amount sent here is ALWAYS cedis (validateAmountUrl enforced
-      //    that in the legacy path; the access-code path is server-resolved).
+      //
+      //    IMPORTANT: nothing here reads the amount back out of the URL.
+      //    `paymentData.amount` is either server-resolved (access-code
+      //    path) or was produced by validateAmountUrl on a deployment
+      //    that explicitly re-opened the legacy flow. When we hold an
+      //    access_code we send it and the SERVER re-reads the amount from
+      //    the stored intent, ignoring whatever body.amount says — so
+      //    editing ?amount= on an access-code URL changes nothing.
       try {
         const res = await fetch('/api/initialize-payment', {
           method: 'POST',
@@ -598,25 +690,32 @@
           body: JSON.stringify({
             email: email,
             phone: phone,
-            amount: paymentData.amount || parseFloat(new URLSearchParams(window.location.search).get('amount')),
-            merchant: paymentData.merchant || new URLSearchParams(window.location.search).get('merchant') || 'Valmont-Pay',
-            reference: paymentData.reference || new URLSearchParams(window.location.search).get('reference') || new URLSearchParams(window.location.search).get('ref') || `VP-${Date.now()}`,
+            // Authoritative when present: the server re-resolves the
+            // amount/merchant/reference from this code.
+            access_code: accessCode || undefined,
+            amount: paymentData.amount,
+            merchant: paymentData.merchant || 'Valmont-Pay',
+            reference: paymentData.reference || `VP-${Date.now()}`,
             // Forward the merchant's Paystack subaccount (e.g. ACCT_...) so Paystack applies the
             // automatic 98%/2% split settlement to this transaction.
-            subaccount: (paymentData && paymentData.subaccount) || urlParams.get('subaccount') || undefined
+            subaccount: (paymentData && paymentData.subaccount) || undefined
           })
         });
         const data = await res.json();
 
-        const accessCode =
+        // NB: named gatewayAccessCode, not accessCode — the module-scope
+        // `accessCode` above is the LINK's code (read from the URL) and is
+        // referenced earlier in this function. Shadowing it here would put
+        // that reference in the temporal dead zone and throw.
+        const gatewayAccessCode =
           data.accessCode ||
           data.access_code ||
           data.data?.access_code ||
           data.data?.accessCode;
         const reference = data.reference || data.data?.reference || paymentData.reference;
 
-        if ((data.status || data.success) && accessCode) {
-          openEmbeddedCheckout(accessCode, reference);
+        if ((data.status || data.success) && gatewayAccessCode) {
+          openEmbeddedCheckout(gatewayAccessCode, reference);
         } else {
           alert(data.message || data.error || 'Unable to start secure checkout. Please try again.');
           resetPayButton();
