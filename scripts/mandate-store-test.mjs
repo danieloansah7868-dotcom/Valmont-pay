@@ -15,6 +15,18 @@
 
 import assert from 'node:assert/strict';
 
+// This is an OFFLINE suite (see the docblock): every Supabase interaction is
+// either skipped or served by the stub client below. CI injects real Supabase
+// credentials for the persistence-specific suites later in `npm test`, so they
+// must be cleared here — otherwise `setSupabaseClient(null)`, which the
+// "Supabase is not configured" cases use to mean "no client", falls through to
+// the env-built client in resolveClient() and the test attempts a live network
+// write. The sibling offline suites (api-smoke-test, dashboard-ledger-test,
+// mandate-api-test) already do exactly this.
+for (const name of ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY']) {
+  delete process.env[name];
+}
+
 const mandateStore = (await import('../lib/mandate-store.js')).default;
 const {
   buildMandateRecord,
