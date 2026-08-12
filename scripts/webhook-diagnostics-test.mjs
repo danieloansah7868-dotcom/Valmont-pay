@@ -98,7 +98,7 @@ check(res.body.received === true, 'test-webhook confirms receipt');
 check(res.body.bodyBytes === Buffer.byteLength(payload), 'test-webhook reports the body size');
 check(res.body.body.data.reference === 'VP-TEST-ABC', 'test-webhook echoes the parsed body');
 check(res.body.signaturePresent === true, 'test-webhook reports the signature header');
-check(res.body.headers['content-type'] === 'application/json', 'test-webhook echoes the headers');
+check(res.body.headers === undefined, 'test-webhook does not echo request headers');
 
 // Malformed bodies must still succeed — this endpoint can never be the failure.
 res = response();

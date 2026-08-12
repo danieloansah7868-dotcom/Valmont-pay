@@ -131,8 +131,7 @@ export default async function handler(req, res) {
     method: req.method,
     signaturePresent,
     bodyBytes,
-    body: parsedBody,
-    headers
+    body: parsedBody
   };
   if (bodyParseError) payload.bodyParseError = bodyParseError;
 

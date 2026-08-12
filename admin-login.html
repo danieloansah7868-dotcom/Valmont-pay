@@ -92,35 +92,30 @@
     </form>
   </div>
 
-  <!-- Admin credentials are NOT stored in source. They come from the ADMIN_EMAIL and
-       ADMIN_PASSWORD environment variables, injected at runtime via /config/admin.js. -->
-  <script src="/config/admin.js"></script>
   <script>
-   const ADMIN_EMAIL = (window.ADMIN_CONFIG && window.ADMIN_CONFIG.email) || 'support@valmontpay.com';
-   const ADMIN_PASSWORD = (window.ADMIN_CONFIG && window.ADMIN_CONFIG.password) || '';
-
-    document.getElementById('login-form').addEventListener('submit', (e) => {
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const email = document.getElementById('email').value;
       const password = document.getElementById('password').value;
       const errorMessage = document.getElementById('error-message');
+      errorMessage.style.display = 'none';
 
-      if (!ADMIN_PASSWORD) {
-        errorMessage.textContent = 'Admin login is not configured yet. Contact support.';
-        errorMessage.style.display = 'block';
-        return;
-      }
-
-     if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD) {
-        sessionStorage.setItem('adminLoggedIn', 'true');
-        // The admin APIs are guarded server-side (X-Admin-Key must match
-        // ADMIN_PASSWORD). Keep the key in sessionStorage so the admin
-        // pages can attach it to their mutating API calls. It is only ever
-        // the operator's own password, on their own browser, same-origin.
-        sessionStorage.setItem('valmontAdminKey', password);
+      try {
+        const res = await fetch('/api/admin/login', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.status) {
+          errorMessage.textContent = data.message || 'Invalid email or password';
+          errorMessage.style.display = 'block';
+          return;
+        }
         window.location.href = '/dashboard.html';
-      } else {
-        errorMessage.textContent = 'Invalid email or password';
+      } catch (_) {
+        errorMessage.textContent = 'Network error. Please try again.';
         errorMessage.style.display = 'block';
       }
     });

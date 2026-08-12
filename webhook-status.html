@@ -195,6 +195,14 @@
   <p class="foot">Valmont-Pay · diagnostics are read-only and never display secret values.</p>
 
   <script>
+    (async function guardAdmin() {
+      try {
+        const res = await fetch('/api/admin/session', { credentials: 'same-origin', cache: 'no-store' });
+        if (!res.ok) window.location.href = '/admin-login.html';
+      } catch (_) {
+        window.location.href = '/admin-login.html';
+      }
+    })();
     const $ = id => document.getElementById(id);
 
     function esc(value) {

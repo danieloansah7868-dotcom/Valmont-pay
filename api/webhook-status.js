@@ -12,10 +12,15 @@
  */
 
 import diagnostics from '../lib/webhook-diagnostics.js';
+import adminAuthModule from '../lib/admin-auth.js';
 
 const { buildDiagnostics } = diagnostics;
+const { isAuthorizedAdmin, unauthorizedPayload } = adminAuthModule;
 
 export default async function handler(req, res) {
+  if (!isAuthorizedAdmin(req)) {
+    return res.status(401).json(unauthorizedPayload());
+  }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.setHeader('Allow', 'GET, HEAD');
     return res.status(405).json({ success: false, error: 'Method not allowed' });

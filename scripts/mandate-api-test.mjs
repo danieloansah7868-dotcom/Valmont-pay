@@ -16,7 +16,10 @@ for (const name of ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_
   delete process.env[name];
 }
 process.env.PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || 'sk_test_fake_mandate_api_key';
+process.env.ADMIN_PASSWORD = 'mandate-test-admin';
+process.env.ADMIN_EMAIL = 'support@valmontpay.com';
 process.env.PORT = '4330';
+const adminHeaders = { 'Content-Type': 'application/json', 'X-Admin-Key': 'mandate-test-admin' };
 
 // Mock Paystack charge authorization endpoint
 const origFetch = globalThis.fetch;
@@ -65,8 +68,21 @@ await new Promise(r => setTimeout(r, 400));
 const baseUrl = 'http://127.0.0.1:4330';
 
 try {
+  // 0. Unauthenticated charge is rejected
+  const unauth = await fetch(`${baseUrl}/api/v1/mandates/charge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ authorization_code: 'AUTH_API_MTN_001', amount: 45 })
+  });
+  assert.equal(unauth.status, 401);
+  pass('POST /api/v1/mandates/charge without credentials is 401');
+
+  const unauthList = await fetch(`${baseUrl}/api/v1/mandates`);
+  assert.equal(unauthList.status, 401);
+  pass('GET /api/v1/mandates without credentials is 401');
+
   // 1. GET /api/v1/mandates
-  const listRes = await fetch(`${baseUrl}/api/v1/mandates?merchant=Valmont%20Electricals`);
+  const listRes = await fetch(`${baseUrl}/api/v1/mandates?merchant=Valmont%20Electricals`, { headers: adminHeaders });
   const listData = await listRes.json();
   assert.equal(listRes.status, 200);
   assert.equal(listData.status, true);
@@ -75,7 +91,7 @@ try {
   pass('GET /api/v1/mandates lists active standing mandates');
 
   // 2. GET /api/v1/mandates/:code
-  const getRes = await fetch(`${baseUrl}/api/v1/mandates/AUTH_API_MTN_001`);
+  const getRes = await fetch(`${baseUrl}/api/v1/mandates/AUTH_API_MTN_001`, { headers: adminHeaders });
   const getData = await getRes.json();
   assert.equal(getRes.status, 200);
   assert.equal(getData.status, true);
@@ -85,7 +101,7 @@ try {
   // 3. POST /api/v1/mandates/charge
   const chargeRes = await fetch(`${baseUrl}/api/v1/mandates/charge`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: adminHeaders,
     body: JSON.stringify({
       authorization_code: 'AUTH_API_MTN_001',
       amount: 45,
@@ -102,7 +118,7 @@ try {
   // 4. POST /api/v1/mandates/revoke
   const revokeRes = await fetch(`${baseUrl}/api/v1/mandates/revoke`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: adminHeaders,
     body: JSON.stringify({ authorization_code: 'AUTH_API_MTN_001' })
   });
   const revokeData = await revokeRes.json();
@@ -114,7 +130,7 @@ try {
   // 5. Attempting to charge a REVOKED mandate returns 400
   const failChargeRes = await fetch(`${baseUrl}/api/v1/mandates/charge`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: adminHeaders,
     body: JSON.stringify({
       authorization_code: 'AUTH_API_MTN_001',
       amount: 45
@@ -129,6 +145,6 @@ try {
 } finally {
   globalThis.fetch = origFetch;
   console.log(`\n✓ server.js Mandate API: all ${passed} tests passed.\n`);
-  process.exit(passed === 5 ? 0 : 1);
+  process.exit(passed === 7 ? 0 : 1);
 }
 

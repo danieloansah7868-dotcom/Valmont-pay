@@ -76,7 +76,6 @@ function getWebhookConfigState(req) {
         ? 'WEBHOOK_SECRET (legacy fallback)'
         : null,
     paystackSecretKeyConfigured: Boolean(paystackKey),
-    paystackSecretKeyPrefix: paystackKey ? `${paystackKey.substring(0, 12)}...` : null,
     // Host-first: a stale PUBLIC_BASE_URL (e.g. a dead .vercel.app hostname)
     // must never be recommended as the Paystack webhook URL again.
     expectedWebhookUrl: `${publicBaseUrl(req)}/api/webhook`
@@ -85,6 +84,9 @@ function getWebhookConfigState(req) {
 
 export default async function handler(req, res) {
   if (req.method === 'GET') {
+    if (!isAuthorizedAdmin(req)) {
+      return res.status(401).json(unauthorizedPayload());
+    }
     // Diagnostic GET — show configuration and connectivity status
     const supabaseConfig = supabaseConfigState();
     const webhookConfig = getWebhookConfigState(req);

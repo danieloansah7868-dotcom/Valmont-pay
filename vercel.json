@@ -44,8 +44,18 @@
       "dest": "/api/transactions.js"
     },
     {
+      "src": "/api/cron/webhook-retry",
+      "dest": "/api/cron-webhook-retry.js"
+    },
+    {
       "src": "/(.*)",
       "dest": "server.js"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/webhook-retry",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

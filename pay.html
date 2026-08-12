@@ -601,6 +601,7 @@
             amount: paymentData.amount || parseFloat(new URLSearchParams(window.location.search).get('amount')),
             merchant: paymentData.merchant || new URLSearchParams(window.location.search).get('merchant') || 'Valmont-Pay',
             reference: paymentData.reference || new URLSearchParams(window.location.search).get('reference') || new URLSearchParams(window.location.search).get('ref') || `VP-${Date.now()}`,
+            access_code: accessCode || paymentData.access_code || undefined,
             // Forward the merchant's Paystack subaccount (e.g. ACCT_...) so Paystack applies the
             // automatic 98%/2% split settlement to this transaction.
             subaccount: (paymentData && paymentData.subaccount) || urlParams.get('subaccount') || undefined

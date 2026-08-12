@@ -45,13 +45,16 @@
 </head>
 <body class="min-h-screen">
   <script>
-    if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
-      window.location.href = '/admin-login.html';
-    }
-    // Mutating admin APIs are guarded server-side. Attach the key captured
-    // at login (see admin-login.html) as the X-Admin-Key header.
+    (async function guardAdmin() {
+      try {
+        const res = await fetch('/api/admin/session', { credentials: 'same-origin', cache: 'no-store' });
+        if (!res.ok) window.location.href = '/admin-login.html';
+      } catch (_) {
+        window.location.href = '/admin-login.html';
+      }
+    })();
     function adminHeaders(extra) {
-      return Object.assign({ 'X-Admin-Key': sessionStorage.getItem('valmontAdminKey') || '' }, extra || {});
+      return Object.assign({ 'Content-Type': 'application/json' }, extra || {});
     }
   </script>
 
@@ -63,7 +66,7 @@
       <div class="flex items-center gap-3">
         <span id="tenantCount" class="text-xs text-gray-500 font-bold">0 tenants</span>
         <button onclick="openAddModal()" class="gold-btn">+ Add Tenant</button>
-        <button onclick="sessionStorage.removeItem('adminLoggedIn'); sessionStorage.removeItem('valmontAdminKey'); window.location.href='/admin-login.html'" class="ghost-btn">Logout</button>
+        <button onclick="fetch('/api/admin/logout',{method:'POST',credentials:'same-origin'}).finally(()=>window.location.href='/admin-login.html')" class="ghost-btn">Logout</button>
       </div>
     </div>
     <!-- Row 2: Tabs under the logo -->

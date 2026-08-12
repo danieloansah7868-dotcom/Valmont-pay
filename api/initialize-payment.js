@@ -19,16 +19,27 @@ export default async function handler(req, res) {
 
   // Get data from the request (Vercel parses JSON bodies, but be defensive)
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-  const { email, merchant, phone, callback_url: callbackUrl } = body;
+  const { email, merchant, phone, callback_url: callbackUrl, access_code: accessCode } = body;
   // Paystack subaccount (body or query) — enables split settlement (e.g. ACCT_... for automatic 98%/2% splits).
   const subaccount = body.subaccount || (req.query && req.query.subaccount);
 
-  // The amount always comes from the request, never from a hardcoded default.
-  const amount = parseFloat(body.amount);
+  // The amount always comes from the request, never from a hardcoded default —
+  // unless an access_code is present, in which case the server-side intent wins.
+  let amount = parseFloat(body.amount);
+  let reference = body.reference || generateReference();
 
-  // Keep the caller's reference when supplied so the checkout page, our ledger
-  // and Paystack all refer to the exact same transaction.
-  const reference = body.reference || generateReference();
+  if (accessCode) {
+    try {
+      const paymentLinkStore = (await import('../lib/payment-link-store.js')).default;
+      const resolved = await paymentLinkStore.resolvePaymentLink(accessCode);
+      if (resolved && resolved.payment) {
+        amount = Number(resolved.payment.amount);
+        if (resolved.payment.reference) reference = resolved.payment.reference;
+      }
+    } catch (_) {
+      // Fall through to the body amount if the store is unavailable.
+    }
+  }
 
   // Validate required fields
   if (!email || !reference) {

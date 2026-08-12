@@ -101,7 +101,7 @@ const raw = JSON.stringify(event);
 const sign = body => crypto.createHmac('sha512', secret).update(body).digest('hex');
 
 let out = webhook.handleWebhookEvent(event, 'not-a-real-signature', raw);
-check(out.statusCode === 401, 'webhook with a bad signature is rejected with 401');
+check(out.statusCode === 400, 'webhook with a bad signature is rejected with 400');
 check(ledger.listTransactions().length === 0, 'a rejected webhook writes nothing to the ledger');
 
 out = webhook.handleWebhookEvent(event, sign(raw), raw);

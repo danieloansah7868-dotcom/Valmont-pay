@@ -50,6 +50,9 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'GET') {
+    if (!isAuthorizedAdmin(req)) {
+      return res.status(401).json(unauthorizedPayload());
+    }
     const result = await fetchTransactions({ context: 'TRANSACTIONS' });
 
     if (!result.ok) {

@@ -102,8 +102,9 @@ Set your secret key before starting the server (copy `.env.example` to `.env`):
 export PAYSTACK_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxx
 ```
 
-For the admin dashboard login (`admin-login.html`), credentials are read from environment variables
-at runtime (via `/config/admin.js`) — none are stored in source:
+For the admin dashboard login (`admin-login.html`), sign in via `POST /api/admin/login`.
+The server compares `ADMIN_EMAIL` / `ADMIN_PASSWORD` and sets an **httpOnly** session cookie.
+The password is never sent to the browser:
 
 ```bash
 export ADMIN_EMAIL=support@valmontpay.com

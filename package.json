@@ -6,12 +6,11 @@
   "scripts": {
     "start": "node server.js",
     "verify:modules": "node scripts/verify-module-graph.mjs",
-    "test": "node scripts/verify-module-graph.mjs && node scripts/tenant-configuration-test.mjs && node scripts/api-smoke-test.mjs && node scripts/dashboard-ledger-test.mjs && node scripts/webhook-supabase-test.mjs && node scripts/checkout-supabase-test.mjs && node scripts/webhook-diagnostics-test.mjs && node scripts/notifier-test.mjs && node scripts/pay-html-amount-validation.test.mjs && node scripts/payment-link-store-test.mjs && node scripts/mandate-store-test.mjs && node scripts/mandate-api-test.mjs"
+    "test": "node scripts/verify-module-graph.mjs && node scripts/tenant-configuration-test.mjs && node scripts/api-smoke-test.mjs && node scripts/dashboard-ledger-test.mjs && node scripts/webhook-supabase-test.mjs && node scripts/checkout-supabase-test.mjs && node scripts/webhook-diagnostics-test.mjs && node scripts/notifier-test.mjs && node scripts/pay-html-amount-validation.test.mjs && node scripts/payment-link-store-test.mjs && node scripts/mandate-store-test.mjs && node scripts/mandate-api-test.mjs && node scripts/security-hardening-test.mjs && node tests/no-paystack-fallback.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.109.0",
     "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "uuid": "^9.0.1"
+    "express": "^4.19.2"
   }
 }

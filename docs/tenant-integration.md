@@ -240,6 +240,8 @@ When the initial checkout succeeds, Valmont-Pay inspects the returned Paystack a
 
 Valmont-Pay provides four endpoints for inspecting, executing, and revoking standing mandates:
 
+All four endpoints require `Authorization: Bearer <tenant_secret_key>` or an admin session (`X-Admin-Key` / `vp_admin` cookie). Unauthenticated calls return `401`. Tenants may only inspect or charge their own mandates.
+
 * **`GET /api/v1/mandates`**: List standing mandates. Accepts optional query filters `?merchant=<name>&email=<email>&status=<ACTIVE|REVOKED|EXPIRED>`.
 * **`GET /api/v1/mandates/:code`**: Get full details of a specific mandate by its `authorization_code`.
 * **`POST /api/v1/mandates/charge`**: Charge an active standing mandate without customer PIN prompting:

@@ -77,8 +77,8 @@ insert into public.tenants as existing (
   null,
   'GCB Bank - 1234567890',
   array['valmontelectricals.com','valmontweb.com','valmontpay.app','localhost'],
-  'vme_secret_dev_key_1',
-  'vme_pub_dev_key_1',
+  'sk_valmont-electricals_' || encode(gen_random_bytes(20), 'hex'),
+  'pk_valmont-electricals_' || encode(gen_random_bytes(16), 'hex'),
   'active'
 ),
 (
@@ -91,8 +91,8 @@ insert into public.tenants as existing (
   null,
   'GCB Bank - 0987654321',
   array['valmontweb.com','valmontpay.app','localhost'],
-  'vmw_secret_dev_key_1',
-  'vmw_pub_dev_key_1',
+  'sk_valmontweb_' || encode(gen_random_bytes(20), 'hex'),
+  'pk_valmontweb_' || encode(gen_random_bytes(16), 'hex'),
   'active'
 )
 on conflict (key) do update set
