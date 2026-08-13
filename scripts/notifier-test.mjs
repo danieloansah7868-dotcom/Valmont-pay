@@ -150,9 +150,9 @@ await test('receipt message matches the Ghanaian receipt format', () => {
 
 await test('receipt falls back to pesewas conversion and ledger field names', () => {
   // The lib/webhook.js ledger record shape (merchant/channel/timestamp).
-  const trx = { reference: 'VP-9', merchant: 'Valmont Web', channel: 'card', status: 'SUCCESS', timestamp: '' };
+  const trx = { reference: 'VP-9', merchant: 'Valmont Web Services', channel: 'card', status: 'SUCCESS', timestamp: '' };
   const message = formatReceiptMessage(trx, samplePayload('VP-9'));
-  assert.ok(message.includes('Merchant: Valmont Web'), 'ledger merchant name used');
+  assert.ok(message.includes('Merchant: Valmont Web Services'), 'ledger merchant name used');
   assert.ok(message.includes('Amount Paid: GH₵ 50.00'), 'pesewas converted when trx.amount missing');
   assert.ok(message.includes('Payment Method: card'));
 });

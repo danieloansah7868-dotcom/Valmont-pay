@@ -447,8 +447,12 @@ app.post('/api/initialize-payment', async (req, res) => {
 
     amount = storedAmount;
     reference = intent.reference || reference;
-    merchant = intent.tenant_key || intent.merchant_display_name || merchant;
-    const intentTenant = tenants.getTenant(intent.tenant_key);
+    // Locked links may predate the canonical SKU tenant key. The stored
+    // amount/reference remain authoritative, while routing/branding resolves
+    // the legacy key through the alias.
+    const canonicalIntentKey = tenants.canonicalTenantKey(intent.tenant_key);
+    merchant = canonicalIntentKey || intent.tenant_key || intent.merchant_display_name || merchant;
+    const intentTenant = tenants.getTenant(canonicalIntentKey || intent.tenant_key);
     subaccount = subaccount || (intentTenant && intentTenant.paystack_subaccount) || undefined;
   } else if (
     !legacyLinkPolicy.legacyAmountUrlAllowed() &&
@@ -1198,6 +1202,17 @@ function resolveTenant(req, res, next) {
   next();
 }
 
+/** Legacy keys resolve for reads, but cannot create/configure a second tenant. */
+function rejectLegacyTenantAliasWrite(key, res) {
+  if (!tenants.isLegacyTenantKey(key)) return false;
+  res.status(409).json({
+    status: false,
+    code: 'LEGACY_TENANT_ALIAS',
+    message: `${key} is a read-only legacy alias. Use ${tenants.SERVICE_MERCHANT_KEY}.`
+  });
+  return true;
+}
+
 // ─── New: POST /api/transaction/initialize (security-critical) ─────────
 
 /**
@@ -1420,11 +1435,17 @@ app.get('/api/transaction/verify/:reference', requireTenantAuth, async (req, res
   }
 
   // Enforce tenant scope: a tenant must only see its own transactions.
-  // When tenant_key is stored on the transaction record, we check it.
-  // If not stored (older records), we fall back to checking the merchant name.
-  const transactionTenant = trx.tenant_key || (
-    trx.merchant ? String(trx.merchant).toLowerCase().replace(/\s+/g, '-') : null
-  );
+  // When tenant_key is stored on the transaction record, we check it. Old
+  // valmontweb rows resolve to the canonical SKU tenant before comparison;
+  // no historical ledger row is deleted or rewritten. If no key was stored,
+  // resolve its merchant display name through the same alias-aware registry.
+  const storedTransactionTenant = trx.tenant_key || null;
+  const merchantTenant = !storedTransactionTenant && trx.merchant
+    ? tenants.getTenantByIdentifier(trx.merchant)
+    : null;
+  const transactionTenant = storedTransactionTenant
+    ? tenants.canonicalTenantKey(storedTransactionTenant)
+    : (merchantTenant ? merchantTenant.key : null);
   if (transactionTenant && transactionTenant !== tenant.key) {
     return res.status(404).json({ status: false, message: 'Transaction reference not found.' });
   }
@@ -1475,8 +1496,13 @@ app.get('/api/transaction/access/:access_code', async (req, res) => {
     return res.status(404).json({ status: false, message: 'Invalid or expired access code' });
   }
 
-  // Get fresh tenant data (branding may have been updated)
-  const tenant = tenants.getTenant(payment.tenant_key);
+  // Get fresh tenant data (branding may have been updated). A durable link
+  // created before the SKU migration can still carry tenant_key=valmontweb;
+  // preserve its locked amount/reference but expose the one public identity.
+  const storedTenantKey = payment.tenant_key;
+  const merchantKey = tenants.canonicalTenantKey(storedTenantKey) || storedTenantKey;
+  const isLegacyTenantAlias = tenants.isLegacyTenantKey(storedTenantKey);
+  const tenant = tenants.getTenant(merchantKey);
 
   res.status(200).json({
     status: true,
@@ -1488,12 +1514,14 @@ app.get('/api/transaction/access/:access_code', async (req, res) => {
       email: payment.email,
       phone: payment.phone,
       callback_url: payment.callback_url,
-      merchant: payment.tenant_key,
+      merchant: merchantKey,
       // Branding captured at link-creation wins (that's what the operator
-      // typed / the tenant API set); tenant config only fills in gaps.
-      merchant_display_name: payment.merchant_display_name || (tenant ? tenant.display_name : '') || 'Valmont-Pay',
-      merchant_brand_color: payment.merchant_brand_color || (tenant ? tenant.brand_color : '#f68b1e'),
-      merchant_logo_url: payment.merchant_logo_url || (tenant ? tenant.logo_url : '/logo.svg'),
+      // typed / the tenant API set); tenant config only fills in gaps. The
+      // retired alias is the exception: old links now render the canonical
+      // Valmont Web Services branding rather than revive a second identity.
+      merchant_display_name: (isLegacyTenantAlias && tenant ? tenant.display_name : payment.merchant_display_name) || (tenant ? tenant.display_name : '') || 'Valmont-Pay',
+      merchant_brand_color: (isLegacyTenantAlias && tenant ? tenant.brand_color : payment.merchant_brand_color) || (tenant ? tenant.brand_color : '#f68b1e'),
+      merchant_logo_url: (isLegacyTenantAlias && tenant ? tenant.logo_url : payment.merchant_logo_url) || (tenant ? tenant.logo_url : '/logo.svg'),
       paystack_authorization_url: payment.paystack_authorization_url,
       paystack_access_code: payment.paystack_access_code
     }
@@ -1820,6 +1848,8 @@ app.get('/api/tenants/:key', (req, res) => {
 // Admin-guarded: a tenant's webhook URL controls where payment events
 // (with amounts + customer references) are forwarded. Was previously open.
 app.put('/api/tenants/:key/webhook', requireAdmin, async (req, res) => {
+  if (rejectLegacyTenantAliasWrite(req.params.key, res)) return;
+  const tenantKey = tenants.canonicalTenantKey(req.params.key);
   const { webhook_url } = req.body || {};
   if (!webhook_url) {
     return res.status(400).json({ status: false, message: 'webhook_url is required' });
@@ -1830,14 +1860,14 @@ app.put('/api/tenants/:key/webhook', requireAdmin, async (req, res) => {
     return res.status(400).json({ status: false, message: 'Invalid webhook URL format' });
   }
 
-  const exists = tenants.getTenant(req.params.key);
+  const exists = tenants.getTenant(tenantKey);
   if (!exists) {
     return res.status(404).json({ status: false, message: 'Tenant not found' });
   }
 
   // Persist first, then rebuild the exact effective tenant used by every API
   // and by the forwarder. Never report success for a process-only change.
-  const result = await tenantStore.updateTenant(req.params.key, { webhook_url });
+  const result = await tenantStore.updateTenant(tenantKey, { webhook_url });
   if (!result.ok) {
     return res.status(503).json({ status: false, message: result.reason });
   }
@@ -1857,7 +1887,8 @@ app.put('/api/tenants/:key/webhook', requireAdmin, async (req, res) => {
 // takeover primitive for any tenant. Admin-guarded now.
 
 app.post('/api/tenants/:key/rotate-keys', requireAdmin, (req, res) => {
-  const result = tenants.rotateTenantSecrets(req.params.key);
+  if (rejectLegacyTenantAliasWrite(req.params.key, res)) return;
+  const result = tenants.rotateTenantSecrets(tenants.canonicalTenantKey(req.params.key));
   if (!result) {
     return res.status(404).json({ status: false, message: 'Tenant not found' });
   }
@@ -1910,6 +1941,10 @@ app.get('/api/admin/tenants', async (req, res) => {
 
 app.post('/api/admin/tenants', async (req, res) => {
   const body = req.body || {};
+  const identity = tenants.validateTenantIdentityForCreate(body);
+  if (!identity.valid) {
+    return res.status(409).json({ status: false, code: 'CATALOGUE_MERCHANT_RESERVED', message: identity.reason });
+  }
   const result = await tenantStore.createTenant(body);
   if (!result.ok) {
     return res.status(400).json({ status: false, message: result.reason });
@@ -1928,8 +1963,12 @@ app.post('/api/admin/tenants', async (req, res) => {
 app.put('/api/admin/tenants/:key', async (req, res) => {
   const key = req.params.key;
   const body = req.body || {};
+  const identity = tenants.validateTenantIdentityForUpdate(key, body);
+  if (!identity.valid) {
+    return res.status(409).json({ status: false, code: 'CATALOGUE_MERCHANT_RESERVED', message: identity.reason });
+  }
   // Allow setting webhook_url via this endpoint too
-  const result = await tenantStore.updateTenant(key, body);
+  const result = await tenantStore.updateTenant(tenants.canonicalTenantKey(key), body);
   if (!result.ok) {
     return res.status(400).json({ status: false, message: result.reason });
   }
@@ -1943,25 +1982,27 @@ app.put('/api/admin/tenants/:key', async (req, res) => {
 
 app.delete('/api/admin/tenants/:key', async (req, res) => {
   const key = req.params.key;
-  // Protect the two seed tenants from accidental deletion; admin can still
-  // disable them via the toggle.
-  if (['valmont-electricals', 'valmontweb'].includes(key.toLowerCase())) {
+  const canonicalKey = tenants.canonicalTenantKey(key);
+  // Protect the two current built-ins from accidental deletion. The retired
+  // alias maps here too, so an old DB record is never deleted through it.
+  if (['valmont-electricals', tenants.SERVICE_MERCHANT_KEY].includes(canonicalKey)) {
     return res.status(400).json({
       status: false,
       message: 'Built-in tenants cannot be deleted. Disable them instead.'
     });
   }
-  const result = await tenantStore.deleteTenant(key);
+  const result = await tenantStore.deleteTenant(canonicalKey);
   if (!result.ok) {
     return res.status(400).json({ status: false, message: result.reason });
   }
-  tenants.removeTenant(key);
+  tenants.removeTenant(canonicalKey);
   res.status(200).json({ status: true, message: 'Tenant deleted' });
 });
 
 app.post('/api/admin/tenants/:key/disable', async (req, res) => {
   const key = req.params.key;
-  const result = await tenantStore.updateTenant(key, { status: 'disabled' });
+  if (rejectLegacyTenantAliasWrite(key, res)) return;
+  const result = await tenantStore.updateTenant(tenants.canonicalTenantKey(key), { status: 'disabled' });
   if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
   const effective = tenants.applyDbTenant(tenantStore.rowToTenant(result.raw));
   res.status(200).json({
@@ -1973,7 +2014,8 @@ app.post('/api/admin/tenants/:key/disable', async (req, res) => {
 
 app.post('/api/admin/tenants/:key/enable', async (req, res) => {
   const key = req.params.key;
-  const result = await tenantStore.updateTenant(key, { status: 'active' });
+  if (rejectLegacyTenantAliasWrite(key, res)) return;
+  const result = await tenantStore.updateTenant(tenants.canonicalTenantKey(key), { status: 'active' });
   if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
   const effective = tenants.applyDbTenant(tenantStore.rowToTenant(result.raw));
   res.status(200).json({
@@ -1985,9 +2027,11 @@ app.post('/api/admin/tenants/:key/enable', async (req, res) => {
 
 app.post('/api/admin/tenants/:key/rotate-keys', async (req, res) => {
   const key = req.params.key;
-  const result = await tenantStore.rotateSecrets(key);
+  if (rejectLegacyTenantAliasWrite(key, res)) return;
+  const canonicalKey = tenants.canonicalTenantKey(key);
+  const result = await tenantStore.rotateSecrets(canonicalKey);
   if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
-  tenants.updateTenantInMemory(key, {
+  tenants.updateTenantInMemory(canonicalKey, {
     secret_keys: [result.secret_key_1, result.secret_key_2].filter(Boolean)
   });
   res.status(200).json({
@@ -2007,7 +2051,7 @@ app.get('/api/webhook-deliveries', (req, res) => {
   const { reference, tenant_key } = req.query;
   const filters = {};
   if (reference) filters.reference = reference;
-  if (tenant_key) filters.tenant_key = tenant_key;
+  if (tenant_key) filters.tenant_key = tenants.canonicalTenantKey(tenant_key) || tenant_key;
 
   const log = webhookForwarder.getDeliveryLog(filters);
   res.status(200).json({ status: true, count: log.length, data: log });
@@ -2059,7 +2103,7 @@ app.post('/api/webhook-deliveries/:reference/replay', requireAdmin, (req, res) =
     status: true,
     message: 'Webhook replay initiated',
     reference,
-    tenant_key
+    tenant_key: tenant.key
   });
 });
 

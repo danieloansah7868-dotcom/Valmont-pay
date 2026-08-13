@@ -55,12 +55,20 @@ drop policy if exists "tenants service-role only" on public.tenants;
 create policy "tenants service-role only" on public.tenants
   for all using (auth.role() = 'service_role') with check (auth.role() = 'service_role');
 
--- Seed both built-in tenants. The Electricals receiver is operational by
--- default; Valmont Web has no receiver contract yet, so its URL remains NULL.
+-- Seed only the operational Electricals tenant. Valmont Web Services is the
+-- canonical SKU-only merchant in lib/tenants.js; it deliberately has no
+-- baked-in API secret, while this table requires secret_key_1, so it is not
+-- inserted here.
+--
+-- IMPORTANT legacy-data rule: do NOT delete or rename an existing `valmontweb`
+-- row in this migration. Historical payment_links and ledger records may still
+-- store that key. lib/tenants.js resolves it as a read-only alias to
+-- `valmont-web-services` at lookup time and keeps the old row out of public
+-- tenant lists.
 --
 -- On re-run, an existing non-null webhook_url wins so prior admin edits are
--- preserved. The built-in environment labels are intentionally corrected to
--- LIVE below; environment is display-only and does not route Paystack traffic.
+-- preserved. The built-in environment label is display-only and does not route
+-- Paystack traffic.
 insert into public.tenants as existing (
   key, display_name, brand_color, currency, environment,
   webhook_url, paystack_subaccount, settlement_account,
@@ -80,28 +88,15 @@ insert into public.tenants as existing (
   'vme_secret_dev_key_1',
   'vme_pub_dev_key_1',
   'active'
-),
-(
-  'valmontweb',
-  'Valmont Web',
-  '#2563eb',
-  'GHS',
-  'live',
-  null,
-  null,
-  'GCB Bank - 0987654321',
-  array['valmontweb.com','valmontpay.app','localhost'],
-  'vmw_secret_dev_key_1',
-  'vmw_pub_dev_key_1',
-  'active'
 )
 on conflict (key) do update set
   webhook_url = coalesce(existing.webhook_url, excluded.webhook_url);
 
--- Correct rows created by the original seed, which labelled production
--- built-ins as TEST. This is safe because the label is not a payment-mode gate.
+-- Correct rows created by the original Electricals seed, which labelled the
+-- production built-in as TEST. This is safe because the label is not a
+-- payment-mode gate.
 update public.tenants
 set environment = 'live'
-where key in ('valmont-electricals', 'valmontweb')
+where key = 'valmont-electricals'
   and environment is distinct from 'live';
 NOTIFY pgrst, 'reload schema';
