@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Valmont Pay — Hosted Checkout for Ghanaian Businesses</title>
+  <meta name="description" content="Send a locked payment link. Your customer pays via MoMo or card through Paystack. Money goes to your merchant account. Staged 40/40/20 for web projects.">
+  <link rel="canonical" href="https://valmontpay.app/">
+  <meta property="og:title" content="Valmont Pay — Hosted Checkout for Ghanaian Businesses">
+  <meta property="og:description" content="Send a locked payment link. Your customer pays via MoMo or card. Money goes straight to your merchant account.">
+  <meta property="og:url" content="https://valmontpay.app/">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://valmontpay.app/logo.svg">
+  <meta property="og:site_name" content="Valmont Pay">
+  <meta property="og:locale" content="en_GH">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Valmont Pay — Hosted Checkout for Ghanaian Businesses">
+  <meta name="twitter:description" content="Send a locked payment link. Your customer pays via MoMo or card. Money goes straight to your merchant account.">
+  <meta name="twitter:image" content="https://valmontpay.app/logo.svg">
+  <meta name="theme-color" content="#0b1a38">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            navy: { DEFAULT: '#0b1a38', light: '#0e1d3d', deep: '#060e1f' },
+            accent: { DEFAULT: '#f68b1e', warm: '#f58c14', gold: '#e8b64c' }
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Focus ring for keyboard nav */
+    :focus-visible {
+      outline: 2px solid #f68b1e;
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+    /* Skip link */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 16px;
+      z-index: 100;
+      padding: 12px 24px;
+      background: #f68b1e;
+      color: #0b1a38;
+      font-weight: 800;
+      border-radius: 0 0 8px 8px;
+      transition: top 0.2s;
+    }
+    .skip-link:focus {
+      top: 0;
+    }
+    /* Subtle gradient animation */
+    @keyframes shimmer {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 0.7; }
+    }
+    .shimmer { animation: shimmer 4s ease-in-out infinite; }
+  </style>
+</head>
+<body class="bg-navy text-white font-sans antialiased">
+
+  <!-- Skip navigation link for keyboard/screen-reader users -->
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <!-- ─── Header ──────────────────────────────────────────────────── -->
+  <header class="w-full border-b border-white/5">
+    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-3" aria-label="Valmont Pay home">
+        <svg class="w-8 h-8" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="vGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#f58c14"/>
+              <stop offset="100%" stop-color="#e8b64c"/>
+            </linearGradient>
+          </defs>
+          <polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5" fill="#0f2247" stroke="#1a3a6b" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M 30,30 L 42,30 L 50,65 L 58,30 L 70,30 L 60,75 L 40,75 Z" fill="url(#vGrad)"/>
+        </svg>
+        <span class="font-extrabold text-lg tracking-tight">
+          <span class="text-white">VALMONT</span><span class="text-accent">PAY</span>
+        </span>
+      </a>
+      <nav aria-label="Primary">
+        <a href="/admin-login.html"
+           class="text-xs font-bold text-gray-400 hover:text-accent transition-colors uppercase tracking-widest">
+          Merchant Login
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ─── Main ────────────────────────────────────────────────────── -->
+  <main id="main">
+
+    <!-- Hero -->
+    <section class="relative overflow-hidden">
+      <!-- Background decoration -->
+      <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
+        <div class="absolute top-20 left-1/4 w-96 h-96 bg-accent/5 rounded-full blur-3xl shimmer"></div>
+        <div class="absolute bottom-10 right-1/4 w-72 h-72 bg-accent/3 rounded-full blur-3xl shimmer" style="animation-delay: 2s;"></div>
+      </div>
+
+      <div class="relative max-w-4xl mx-auto px-6 pt-20 pb-24 text-center">
+        <!-- Badge -->
+        <div class="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-1.5 mb-8">
+          <span class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+          <span class="text-xs font-bold text-gray-300 uppercase tracking-widest">Built for Ghana</span>
+        </div>
+
+        <h1 class="text-4xl sm:text-5xl lg:text-6xl font-black leading-tight tracking-tight">
+          Hosted payment links<br>
+          <span class="text-accent">your customers actually trust.</span>
+        </h1>
+
+        <p class="mt-6 text-lg sm:text-xl text-gray-300 max-w-2xl mx-auto leading-relaxed">
+          Send a locked payment link. Your customer pays via
+          <strong class="text-white">MTN MoMo, Vodafone Cash, AirtelTigo, or card</strong>
+          through Paystack. The money goes to <em>your</em> merchant account — not ours.
+        </p>
+
+        <!-- CTA buttons -->
+        <div class="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+          <a href="mailto:hello@valmontweb.com?subject=Valmont%20Pay%20%E2%80%94%20Merchant%20Account%20Request"
+             class="inline-flex items-center gap-2 bg-accent hover:bg-accent-warm text-navy font-extrabold text-sm uppercase tracking-widest px-8 py-4 rounded-lg transition-all shadow-lg shadow-accent/20 hover:shadow-accent/30">
+            Request a Merchant Account
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+          </a>
+          <a href="https://wa.me/233500919969?text=Hi%2C%20I%27d%20like%20to%20set%20up%20Valmont%20Pay%20for%20my%20business"
+             target="_blank" rel="noopener noreferrer"
+             class="inline-flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-white font-bold text-sm uppercase tracking-widest px-8 py-4 rounded-lg transition-all">
+            <svg class="w-5 h-5 text-green-400" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+            Chat on WhatsApp
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Three Proof Points ──────────────────────────────────── -->
+    <section class="border-t border-white/5 bg-navy-light" aria-labelledby="features-heading">
+      <div class="max-w-6xl mx-auto px-6 py-20">
+        <h2 id="features-heading" class="sr-only">Key Features</h2>
+        <div class="grid md:grid-cols-3 gap-8">
+
+          <!-- 1. Locked amounts -->
+          <div class="bg-navy/60 border border-white/5 rounded-xl p-8">
+            <div class="w-12 h-12 bg-accent/10 rounded-lg flex items-center justify-center mb-5">
+              <svg class="w-6 h-6 text-accent" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+              </svg>
+            </div>
+            <h3 class="text-lg font-extrabold text-white mb-2">Locked Amounts</h3>
+            <p class="text-gray-400 text-sm leading-relaxed">
+              Every link carries a one-time access code. The price is resolved server-side —
+              a customer cannot change GH₵1,400 to GH₵1 by editing the URL. No surprises on
+              either side.
+            </p>
+          </div>
+
+          <!-- 2. Staged payments -->
+          <div class="bg-navy/60 border border-white/5 rounded-xl p-8">
+            <div class="w-12 h-12 bg-accent/10 rounded-lg flex items-center justify-center mb-5">
+              <svg class="w-6 h-6 text-accent" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+              </svg>
+            </div>
+            <h3 class="text-lg font-extrabold text-white mb-2">Staged 40 / 40 / 20</h3>
+            <p class="text-gray-400 text-sm leading-relaxed">
+              Web projects don't ship in one go. Send a Stage 1 link, a Stage 2 link, and
+              a handover link — each with its own locked amount and reference. Your ledger
+              stays clean.
+            </p>
+          </div>
+
+          <!-- 3. Merchant dashboard -->
+          <div class="bg-navy/60 border border-white/5 rounded-xl p-8">
+            <div class="w-12 h-12 bg-accent/10 rounded-lg flex items-center justify-center mb-5">
+              <svg class="w-6 h-6 text-accent" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+              </svg>
+            </div>
+            <h3 class="text-lg font-extrabold text-white mb-2">Merchant Dashboard</h3>
+            <p class="text-gray-400 text-sm leading-relaxed">
+              Generate payment links, track every transaction, and see your balance in real
+              time. Paystack webhooks update the ledger the moment a customer pays — no
+              manual reconciliation.
+            </p>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── How it works ────────────────────────────────────────── -->
+    <section class="border-t border-white/5" aria-labelledby="how-heading">
+      <div class="max-w-4xl mx-auto px-6 py-20">
+        <h2 id="how-heading" class="text-2xl sm:text-3xl font-black text-center mb-14">
+          Three steps. No integration code.
+        </h2>
+        <div class="space-y-10">
+
+          <div class="flex gap-6 items-start">
+            <div class="flex-shrink-0 w-10 h-10 bg-accent text-navy rounded-full flex items-center justify-center font-black text-lg">1</div>
+            <div>
+              <h3 class="font-bold text-white text-lg">Request a merchant account</h3>
+              <p class="text-gray-400 mt-1 text-sm leading-relaxed">
+                Email us or send a WhatsApp message. We set up your Paystack-linked tenant
+                with your business name, brand colour, and split settlement.
+              </p>
+            </div>
+          </div>
+
+          <div class="flex gap-6 items-start">
+            <div class="flex-shrink-0 w-10 h-10 bg-accent text-navy rounded-full flex items-center justify-center font-black text-lg">2</div>
+            <div>
+              <h3 class="font-bold text-white text-lg">Generate a payment link</h3>
+              <p class="text-gray-400 mt-1 text-sm leading-relaxed">
+                Use the dashboard or the API. You get a
+                <code class="text-accent text-xs bg-white/5 px-1.5 py-0.5 rounded">pay.html?access_code=…</code>
+                URL — no price in it, nothing to tamper with.
+              </p>
+            </div>
+          </div>
+
+          <div class="flex gap-6 items-start">
+            <div class="flex-shrink-0 w-10 h-10 bg-accent text-navy rounded-full flex items-center justify-center font-black text-lg">3</div>
+            <div>
+              <h3 class="font-bold text-white text-lg">Customer pays, you get paid</h3>
+              <p class="text-gray-400 mt-1 text-sm leading-relaxed">
+                MoMo or card, via Paystack's secure inline checkout. The webhook fires
+                instantly, your dashboard updates, and the money settles to your merchant
+                account.
+              </p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Payment methods ─────────────────────────────────────── -->
+    <section class="border-t border-white/5 bg-navy-light" aria-labelledby="methods-heading">
+      <div class="max-w-4xl mx-auto px-6 py-16 text-center">
+        <h2 id="methods-heading" class="text-sm font-bold uppercase tracking-widest text-gray-500 mb-6">
+          Your customers can pay with
+        </h2>
+        <div class="flex flex-wrap items-center justify-center gap-6 sm:gap-10 text-gray-400">
+          <span class="font-bold text-sm bg-white/5 border border-white/10 rounded-lg px-5 py-3">MTN Mobile Money</span>
+          <span class="font-bold text-sm bg-white/5 border border-white/10 rounded-lg px-5 py-3">Vodafone Cash</span>
+          <span class="font-bold text-sm bg-white/5 border border-white/10 rounded-lg px-5 py-3">AirtelTigo Money</span>
+          <span class="font-bold text-sm bg-white/5 border border-white/10 rounded-lg px-5 py-3">Visa / Mastercard</span>
+          <span class="font-bold text-sm bg-white/5 border border-white/10 rounded-lg px-5 py-3">Bank Transfer</span>
+        </div>
+        <p class="text-xs text-gray-500 mt-6">
+          Processed securely through <a href="https://paystack.com/gh" target="_blank" rel="noopener noreferrer" class="text-accent hover:underline">Paystack</a>.
+          Valmont Pay never sees or stores card numbers or PINs.
+        </p>
+      </div>
+    </section>
+
+    <!-- ─── Bottom CTA ──────────────────────────────────────────── -->
+    <section class="border-t border-white/5">
+      <div class="max-w-3xl mx-auto px-6 py-20 text-center">
+        <h2 class="text-2xl sm:text-3xl font-black mb-4">Ready to accept payments?</h2>
+        <p class="text-gray-400 mb-8">
+          No setup fees. We'll have your merchant account live within 24 hours.
+        </p>
+        <a href="mailto:hello@valmontweb.com?subject=Valmont%20Pay%20%E2%80%94%20Merchant%20Account%20Request"
+           class="inline-flex items-center gap-2 bg-accent hover:bg-accent-warm text-navy font-extrabold text-sm uppercase tracking-widest px-8 py-4 rounded-lg transition-all shadow-lg shadow-accent/20">
+          hello@valmontweb.com
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"/></svg>
+        </a>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ─── Footer ──────────────────────────────────────────────────── -->
+  <footer class="border-t border-white/5 bg-navy-deep">
+    <div class="max-w-6xl mx-auto px-6 py-10">
+      <div class="flex flex-col sm:flex-row items-center justify-between gap-6">
+        <div class="flex items-center gap-3">
+          <svg class="w-6 h-6" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <defs>
+              <linearGradient id="vGradF" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#f58c14"/>
+                <stop offset="100%" stop-color="#e8b64c"/>
+              </linearGradient>
+            </defs>
+            <polygon points="50,5 90,27.5 90,72.5 50,95 10,72.5 10,27.5" fill="#0f2247" stroke="#1a3a6b" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M 30,30 L 42,30 L 50,65 L 58,30 L 70,30 L 60,75 L 40,75 Z" fill="url(#vGradF)"/>
+          </svg>
+          <span class="text-sm text-gray-500">
+            Accra, Ghana &middot; Valmont Group
+          </span>
+        </div>
+        <div class="flex items-center gap-6 text-xs">
+          <a href="https://valmontweb.com" target="_blank" rel="noopener noreferrer"
+             class="text-gray-400 hover:text-accent transition-colors font-bold uppercase tracking-widest">
+            valmontweb.com
+          </a>
+          <a href="/admin-login.html"
+             class="text-gray-500 hover:text-gray-300 transition-colors font-bold uppercase tracking-widest">
+            Merchant Login
+          </a>
+        </div>
+      </div>
+      <div class="mt-6 pt-6 border-t border-white/5 text-center">
+        <p class="text-xs text-gray-600">
+          &copy; 2025 Valmont Pay. A product of
+          <a href="https://valmontweb.com" target="_blank" rel="noopener noreferrer" class="text-gray-500 hover:text-accent transition-colors">Valmont Web Services</a>.
+          Payments processed by Paystack.
+        </p>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

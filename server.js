@@ -2110,8 +2110,24 @@ app.get('/api/transaction/return', (req, res) => {
 // to the tenant's webhook URL. We monkey-patch after the existing route.
 
 // ─── Serve frontend web routes ──────────────────────────────────────────
+// The public landing page lives at index.html. It is a product page, not
+// the admin login — a logged-out visitor to valmontpay.app/ sees what
+// Valmont Pay is and how to get a merchant account. The dashboard and
+// admin login stay at their own URLs.
 app.get('/', (req, res) => {
-  res.redirect('/dashboard.html');
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// SEO / crawler files — served explicitly so they work on both the
+// Express dev server and Vercel serverless (where express.static may
+// not resolve __dirname the same way).
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain');
+  res.sendFile(path.join(__dirname, 'robots.txt'));
+});
+app.get('/sitemap.xml', (req, res) => {
+  res.type('application/xml');
+  res.sendFile(path.join(__dirname, 'sitemap.xml'));
 });
 
 app.get('/checkout', (req, res) => {

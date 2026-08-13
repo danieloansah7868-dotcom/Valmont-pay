@@ -1,0 +1,20 @@
+User-agent: *
+Allow: /
+Allow: /index.html
+
+# Checkout pages are transactional — not useful in search results and
+# should never be indexed as standalone content.
+Disallow: /pay.html
+Disallow: /checkout.html
+
+# Internal / authenticated pages — not for crawlers.
+Disallow: /dashboard.html
+Disallow: /dashboard
+Disallow: /admin.html
+Disallow: /admin-login.html
+Disallow: /admin-login
+Disallow: /tenants.html
+Disallow: /webhook-status.html
+Disallow: /api/
+
+Sitemap: https://valmontpay.app/sitemap.xml
