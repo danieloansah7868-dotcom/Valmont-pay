@@ -1,0 +1,12 @@
+[
+  {
+    "key": "test-merchant-a",
+    "display_name": "Test Merchant A",
+    "brand_color": "#2563eb",
+    "currency": "GHS",
+    "allowed_domains": ["test-merchant-a.example", "localhost"],
+    "secret_keys": ["test-merchant-a-fixture-key"],
+    "environment": "test",
+    "status": "active"
+  }
+]

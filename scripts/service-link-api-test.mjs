@@ -18,6 +18,7 @@
  */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -26,6 +27,9 @@ for (const name of ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_
   delete process.env[name];
 }
 delete process.env.ALLOW_LEGACY_AMOUNT_URL;
+// The isolated HTTP suite exercises the dashboard endpoint directly; avoid
+// inheriting a deployment-only admin password from the test runner.
+delete process.env.ADMIN_PASSWORD;
 process.env.PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || 'sk_test_fake_service_link';
 process.env.PORT = '4331';
 
@@ -49,6 +53,18 @@ globalThis.fetch = async (url, opts = {}) => {
 };
 
 const catalogue = require('../lib/service-catalogue.js');
+const accessCodeStore = require('../lib/access-code-store.js');
+
+const EXPECTED_SKU_PRICES = {
+  'WEB-LITE-STG1': 1400,
+  'WEB-LITE-FULL': 3500,
+  'WEB-STARTER-STG1': 2000,
+  'WEB-STARTER-FULL': 5000,
+  'WEB-BUSINESS-STG1': 2600,
+  'WEB-BUSINESS-FULL': 6500,
+  'WEB-EMPIRE-STG1': 3200,
+  'WEB-EMPIRE-FULL': 8000
+};
 
 let passed = 0;
 let failed = 0;
@@ -79,24 +95,69 @@ try {
     assert.equal(json.data.allow_legacy_amount_url, false);
   });
 
+  await check('tenant reads resolve valmontweb to one canonical public identity', async () => {
+    const list = await realFetch(`${base}/api/tenants`).then(r => r.json());
+    const catalogueTenants = list.data.filter(tenant =>
+      tenant.key === catalogue.SERVICE_MERCHANT_KEY || tenant.display_name === catalogue.SERVICE_MERCHANT_NAME
+    );
+    assert.equal(catalogueTenants.length, 1, 'only one Valmont Web Services tenant is listed');
+    assert.equal(list.data.some(tenant => tenant.key === 'valmontweb'), false, 'legacy key is not listed as a second tenant');
+
+    const legacyLookup = await realFetch(`${base}/api/tenants/valmontweb`);
+    const legacyJson = await legacyLookup.json();
+    assert.equal(legacyLookup.status, 200);
+    assert.equal(legacyJson.data.key, catalogue.SERVICE_MERCHANT_KEY);
+    assert.equal(legacyJson.data.display_name, catalogue.SERVICE_MERCHANT_NAME);
+  });
+
+  await check('admin tenant creation rejects a third Valmont Web Services identity', async () => {
+    const res = await realFetch(`${base}/api/admin/tenants`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'valmont-web-services-copy', display_name: 'Valmont Web Services' })
+    });
+    const json = await res.json();
+    assert.equal(res.status, 409);
+    assert.equal(json.code, 'CATALOGUE_MERCHANT_RESERVED');
+  });
+
   await check('GET /api/v1/payment-link/catalogue publishes all eight SKUs with their prices', async () => {
     const res = await realFetch(`${base}/api/v1/payment-link/catalogue`);
     const json = await res.json();
     assert.equal(res.status, 200);
     assert.equal(json.status, true);
     assert.equal(json.data.merchant, 'Valmont Web Services');
+    assert.equal(json.data.merchant_key, catalogue.SERVICE_MERCHANT_KEY);
 
     const prices = Object.fromEntries(json.data.items.map(i => [i.sku, i.amount]));
-    assert.deepEqual(prices, {
-      'WEB-LITE-STG1': 1400,
-      'WEB-LITE-FULL': 3500,
-      'WEB-STARTER-STG1': 2000,
-      'WEB-STARTER-FULL': 5000,
-      'WEB-BUSINESS-STG1': 2600,
-      'WEB-BUSINESS-FULL': 6500,
-      'WEB-EMPIRE-STG1': 3200,
-      'WEB-EMPIRE-FULL': 8000
-    });
+    assert.deepEqual(prices, EXPECTED_SKU_PRICES);
+    // A catalogue can never silently acquire a second merchant identity.
+    assert.deepEqual([...new Set(json.data.items.map(i => i.merchant_key))], [catalogue.SERVICE_MERCHANT_KEY]);
+    assert.deepEqual([...new Set(json.data.items.map(i => i.merchant))], [catalogue.SERVICE_MERCHANT_NAME]);
+  });
+
+  await check('POST /api/v1/payment-link/sku mints locked links at the catalogue price for all eight SKUs', async () => {
+    for (const [sku, amount] of Object.entries(EXPECTED_SKU_PRICES)) {
+      const res = await realFetch(`${base}/api/v1/payment-link/sku`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sku, email: 'all-skus@example.com', amount: 1 })
+      });
+      const json = await res.json();
+      assert.equal(res.status, 200, `${sku}: ${JSON.stringify(json)}`);
+      assert.equal(json.status, true, `${sku} should mint`);
+      assert.equal(json.data.amount, amount, `${sku} price is server-owned`);
+      assert.equal(json.data.merchant_key, catalogue.SERVICE_MERCHANT_KEY, `${sku} uses canonical merchant key`);
+      assert.ok(json.data.pay_url.includes('/pay.html?access_code='), `${sku} returns a locked pay URL`);
+      assert.ok(!/[?&]amount=/.test(json.data.pay_url), `${sku} URL contains no editable amount`);
+
+      const resolved = await realFetch(
+        `${base}/api/transaction/access/${encodeURIComponent(json.data.access_code)}`
+      ).then(r => r.json());
+      assert.equal(resolved.status, true, `${sku} access code resolves`);
+      assert.equal(resolved.data.amount, amount, `${sku} stored amount stays locked`);
+      assert.equal(resolved.data.merchant, catalogue.SERVICE_MERCHANT_KEY, `${sku} resolves to canonical merchant`);
+    }
   });
 
   await check('POST /api/v1/payment-link/sku mints a locked access-code link for WEB-LITE-STG1', async () => {
@@ -148,6 +209,49 @@ try {
     assert.equal(resolved.data.merchant, 'valmont-web-services');
   });
 
+  await check('a locked legacy valmontweb access code stays payable under the canonical identity', async () => {
+    const legacy = accessCodeStore.createAccessCode({
+      amount: 1400,
+      reference: 'LEGACY-VALMONTWEB-LINK',
+      currency: 'GHS',
+      email: 'legacy-client@example.com',
+      tenant_key: 'valmontweb',
+      merchant_display_name: 'Valmont Web',
+      merchant_brand_color: '#2563eb',
+      merchant_logo_url: '/logo.svg'
+    });
+
+    const res = await realFetch(
+      `${base}/api/transaction/access/${encodeURIComponent(legacy.access_code)}`
+    );
+    const json = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(json.status, true);
+    assert.equal(json.data.amount, 1400, 'the historical locked amount is unchanged');
+    assert.equal(json.data.reference, 'LEGACY-VALMONTWEB-LINK', 'the historical reference is unchanged');
+    assert.equal(json.data.merchant, catalogue.SERVICE_MERCHANT_KEY, 'old key resolves to canonical merchant');
+    assert.equal(json.data.merchant_display_name, catalogue.SERVICE_MERCHANT_NAME, 'old branding is not republished');
+
+    // The payment initializer must still honour the historical lock. A caller
+    // cannot substitute amount=1 while the old key is canonicalised for
+    // Paystack metadata/routing.
+    const initialize = await realFetch(`${base}/api/initialize-payment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        access_code: legacy.access_code,
+        amount: 1,
+        email: 'legacy-client@example.com',
+        merchant: 'valmontweb'
+      })
+    });
+    const initialized = await initialize.json();
+    assert.equal(initialize.status, 200);
+    assert.equal(initialized.success, true);
+    assert.equal(initialized.amount, 1400, 'payment initialization keeps the historical locked amount');
+    assert.equal(initialized.reference, 'LEGACY-VALMONTWEB-LINK');
+  });
+
   await check('an unknown SKU is rejected with the list of valid ones', async () => {
     const res = await realFetch(`${base}/api/v1/payment-link/sku`, {
       method: 'POST',
@@ -182,7 +286,17 @@ try {
 
     assert.equal(res.status, 200, JSON.stringify(json));
     assert.equal(json.data.amount, 5000);
+    assert.equal(json.data.merchant_key, catalogue.SERVICE_MERCHANT_KEY);
     assert.ok(json.data.pay_url.includes('access_code='));
+    assert.ok(!/[?&]amount=/.test(json.data.pay_url));
+  });
+
+  await check('the dashboard Stage 1 / Full Link panel stays wired to the admin SKU endpoint', async () => {
+    const dashboard = fs.readFileSync(new URL('../dashboard.html', import.meta.url), 'utf8');
+    assert.match(dashboard, /Valmont Web Services — Issue Stage 1 \/ Full Link/);
+    assert.match(dashboard, /fetch\('\/api\/v1\/payment-link'/);
+    assert.match(dashboard, /body: JSON\.stringify\(\{ sku, email \}\)/);
+    assert.doesNotMatch(dashboard, /body: JSON\.stringify\(\{ sku, email, amount/);
   });
 
   await check('the SKU endpoints never echo a secret key', async () => {

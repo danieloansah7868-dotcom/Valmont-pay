@@ -523,7 +523,7 @@
     }
 
     async function deleteTenant(key, name) {
-      if (!confirm('Permanently DELETE tenant "' + name + '" (' + key + ')?\n\nThis cannot be undone. Built-in tenants (valmont-electricals, valmontweb) are protected and cannot be deleted — disable them instead.')) return;
+      if (!confirm('Permanently DELETE tenant "' + name + '" (' + key + ')?\n\nThis cannot be undone. Built-in tenants (valmont-electricals, valmont-web-services) are protected and cannot be deleted — disable them instead.')) return;
       try {
         const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key), { method: 'DELETE', headers: adminHeaders() });
         const json = await res.json();

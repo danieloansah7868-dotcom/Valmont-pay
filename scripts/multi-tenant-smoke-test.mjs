@@ -48,7 +48,11 @@ async function test(name, fn) {
 // ─── Tests ───────────────────────────────────────────────────────────────
 
 const testSecretKey = 'vme_secret_dev_key_1';
-const valmontwebSecretKey = 'vmw_secret_dev_key_1';
+// Test-only second merchant. Start the smoke-test server with
+// TENANTS_JSON="$(cat scripts/fixtures/test-merchant-a.json)"; this fixture
+// is intentionally never part of lib/tenants.js production defaults.
+const testMerchantASecretKey = 'test-merchant-a-fixture-key';
+const testMerchantAKey = 'test-merchant-a';
 const invalidSecretKey = 'sk_test_invalid_key_that_does_not_exist';
 
 test('1. GET /api/tenants — lists tenants', async () => {
@@ -59,7 +63,9 @@ test('1. GET /api/tenants — lists tenants', async () => {
   assert('has status true', json.status === true);
   assert('has data array', Array.isArray(json.data));
   assert('contains valmont-electricals', json.data.some(t => t.key === 'valmont-electricals'));
-  assert('contains valmontweb', json.data.some(t => t.key === 'valmontweb'));
+  assert('contains valmont-web-services', json.data.some(t => t.key === 'valmont-web-services'));
+  assert('contains test-only second merchant', json.data.some(t => t.key === testMerchantAKey));
+  assert('does not publish legacy valmontweb as a tenant', !json.data.some(t => t.key === 'valmontweb'));
   assert('no secrets in response', json.data.every(t => t.has_secret_keys !== undefined));
   assert('display_name is present', json.data[0].display_name && json.data[0].display_name.length > 0);
 });
@@ -242,10 +248,10 @@ test('12. GET /api/transaction/verify/{reference} — cross-tenant isolation', a
     })
   });
 
-  // Try to verify with valmontweb's key — should get 404 because this
+  // Try to verify with test-merchant-a's key — should get 404 because this
   // reference belongs to valmont-electricals
   const res = await fetch(`${BASE}/api/transaction/verify/${ref}`, {
-    headers: { 'Authorization': `Bearer ${valmontwebSecretKey}` }
+    headers: { 'Authorization': `Bearer ${testMerchantASecretKey}` }
   });
   const json = await res.json();
 
@@ -345,32 +351,32 @@ test('17. Tenant valmont-electricals has allowed domains configured', async () =
   assert('includes localhost for dev', json.data.allowed_domains.includes('localhost'));
 });
 
-test('18. POST /api/transaction/initialize — second tenant (valmontweb) works', async () => {
+test('18. POST /api/transaction/initialize — test-only second tenant (test-merchant-a) works', async () => {
   const res = await fetch(`${BASE}/api/transaction/initialize`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${valmontwebSecretKey}`
+      'Authorization': `Bearer ${testMerchantASecretKey}`
     },
     body: JSON.stringify({
       amount: 250.00,
-      reference: `VMWEB-TEST-${Date.now()}`,
-      email: 'vmweb@test.com',
+      reference: `TEST-MERCHANT-A-${Date.now()}`,
+      email: 'test-merchant-a@example.com',
       currency: 'GHS',
-      callback_url: 'https://valmontweb.com/return'
+      callback_url: 'https://test-merchant-a.example/return'
     })
   });
   const json = await res.json();
 
   assert('returns 200', res.status === 200);
   assert('has access_code', json.data && json.data.access_code);
-  assert('merchant is valmontweb', json.data && json.data.merchant === 'valmontweb');
+  assert('merchant is test-merchant-a', json.data && json.data.merchant === testMerchantAKey);
   assert('amount matches', json.data && json.data.amount === 250.00);
 
   // Verify the access code resolves to the correct tenant
   const accessRes = await fetch(`${BASE}/api/transaction/access/${json.data.access_code}`);
   const accessJson = await accessRes.json();
-  assert('access_code resolves to correct tenant', accessJson.data && accessJson.data.merchant === 'valmontweb');
+  assert('access_code resolves to correct tenant', accessJson.data && accessJson.data.merchant === testMerchantAKey);
 });
 
 test('19. POST /api/transaction/initialize — valid domain in callback_url passes validation', async () => {

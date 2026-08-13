@@ -197,6 +197,7 @@ curl -X POST https://valmontpay.app/api/v1/payment-link/sku \
     "currency": "GHS",
     "reference": "WEB-LITE-STG1-MSQF42WD479",
     "merchant": "Valmont Web Services",
+    "merchant_key": "valmont-web-services",
     "access_code": "ac_636a01a0d0d9c999d3a007eb",
     "pay_url": "https://valmontpay.app/pay.html?access_code=ac_636a01a0d0d9c999d3a007eb"
   }
@@ -231,6 +232,25 @@ Rules this endpoint enforces:
   `callback_url` must be on the tenant's `allowed_domains`.
 * Prices change by editing `lib/service-catalogue.js` (or, per SKU at
   deploy time, `SERVICE_PRICE__WEB_LITE_STG1=1500`) — never by a request.
+
+#### 2.4.1 Canonical merchant identity and the legacy alias
+
+Every new catalogue link belongs to **`valmont-web-services`**, the one public
+merchant key for **Valmont Web Services**. Use that key in integrations,
+reports, and operator tooling; it has no baked-in secret because the anonymous
+SKU endpoint is the intended storefront path.
+
+`valmontweb` (displayed historically as **Valmont Web**) is not a second
+merchant. It is a **read-only legacy lookup alias** retained for durable
+`payment_links` and ledger rows that already store the old key. The gateway
+resolves those rows to `valmont-web-services` when an `access_code` or tenant
+identifier is read, preserving the locked amount/reference while rendering the
+canonical name and branding. Do not create, configure, or delete a tenant under
+the old key. The database migration intentionally does not delete legacy rows:
+transactions remain auditable.
+
+`valmontweb.com` may still appear in callback-domain allowlists; a domain is
+not a tenant identity.
 
 Example front-end button, with no secret anywhere in it:
 
