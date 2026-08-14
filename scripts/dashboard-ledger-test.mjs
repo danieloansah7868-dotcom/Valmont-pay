@@ -49,7 +49,10 @@ check(/let transactions = \[\];/.test(dashboardHtml),
   'dashboard.html declares an empty transactions array: let transactions = [];');
 check(dashboardHtml.includes('No transactions yet. Real payments will appear here.'),
   'dashboard.html shows "No transactions yet. Real payments will appear here."');
-check(dashboardHtml.includes("fetch('/api/transactions'"),
+// adminFetch() is the session-aware wrapper around fetch() (it sends the
+// httpOnly admin cookie and redirects to login on 401). Either spelling
+// satisfies the intent: the dashboard reads the REAL ledger endpoint.
+check(/(?:admin)?[Ff]etch\('\/api\/transactions'/.test(dashboardHtml),
   'dashboard.html fetches real transactions from /api/transactions');
 check(serverJs.includes("app.get('/api/transactions'"), 'server.js exposes GET /api/transactions');
 check(serverJs.includes("app.post('/api/webhook'"), 'server.js exposes POST /api/webhook');

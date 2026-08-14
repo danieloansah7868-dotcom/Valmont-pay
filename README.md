@@ -86,11 +86,34 @@ env var can never send customers to a dead domain again. Keep
 fallback.
 
 **Admin API guard:** `/api/admin/*`, tenant key rotation, webhook-URL updates,
-`POST /api/manual-transaction`, `POST /api/webhook-debug` and terminal-status
-order writes (`PAID`/`CANCELLED`/…) now require the `X-Admin-Key` header
-matching `ADMIN_PASSWORD` (the admin pages attach it automatically after
-login). Storefront order creation with non-terminal statuses
-(`PENDING_MOMO`) stays public by design.
+`POST /api/manual-transaction`, `POST /api/webhook-debug`, `GET /api/transactions`,
+`GET /api/webhook-deliveries` and terminal-status order writes
+(`PAID`/`CANCELLED`/…) all require admin authorization. Two credentials are
+accepted:
+
+1. **The admin session cookie** — set by `POST /api/admin/login`. The admin
+   pages use this automatically; the browser never holds the password.
+2. **`X-Admin-Key: <ADMIN_PASSWORD>`** — for server-to-server callers, curl
+   and monitoring. Header only; it is deliberately *not* read from the query
+   string, where it would leak into access logs and `Referer` headers.
+
+Storefront order creation with non-terminal statuses (`PENDING_MOMO`) stays
+public by design.
+
+**Fail-closed:** in a deployed environment (`VERCEL` set, or
+`NODE_ENV=production`) a missing `ADMIN_PASSWORD` makes every guarded endpoint
+return `503` instead of silently opening to the internet. Local development
+without the variable stays open and frictionless.
+
+**Recurring mandates are authenticated.** `/api/v1/mandates*` operates on
+reusable Paystack `authorization_code`s — tokens that pull money from a saved
+card/MoMo wallet. They require either admin credentials or a tenant secret
+(`Authorization: Bearer <key>`), and a tenant can only ever see and charge its
+**own** mandates; cross-tenant access returns `404`.
+
+**Rate limits** (per IP, per process) protect admin login (5 / 15 min),
+mandates (20/min), link generation and payment init (30/min), order writes and
+access-code lookups (60/min).
 
 ---
 
@@ -102,8 +125,17 @@ Set your secret key before starting the server (copy `.env.example` to `.env`):
 export PAYSTACK_SECRET_KEY=sk_test_xxxxxxxxxxxxxxxx
 ```
 
-For the admin dashboard login (`admin-login.html`), credentials are read from environment variables
-at runtime (via `/config/admin.js`) — none are stored in source:
+For the admin dashboard login (`admin-login.html`), credentials are verified
+**server-side only**. `POST /api/admin/login` checks them and returns an
+opaque session token in an `httpOnly` + `SameSite=Strict` cookie; the password
+itself never reaches the browser.
+
+> **Removed:** `GET /config/admin.js`. It used to serve `ADMIN_PASSWORD` in
+> cleartext to any unauthenticated caller — and because that same value is the
+> `X-Admin-Key`, one anonymous request defeated every admin guard. It now
+> returns `410 Gone`.
+
+Set the credentials in the environment:
 
 ```bash
 export ADMIN_EMAIL=support@valmontpay.com

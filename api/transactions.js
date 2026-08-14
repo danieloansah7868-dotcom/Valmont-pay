@@ -27,6 +27,9 @@ export default async function handler(req, res) {
   const requestOrigin = req.headers && req.headers.origin;
   res.setHeader('Access-Control-Allow-Origin', requestOrigin || '*');
   res.setHeader('Vary', 'Origin');
+  // Explicitly refuse credentialed cross-origin reads: the admin session
+  // cookie must never be usable by another site against this endpoint.
+  res.setHeader('Access-Control-Allow-Credentials', 'false');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-valmontpay-signature, x-admin-key');
   res.setHeader('Access-Control-Max-Age', '86400');
@@ -49,7 +52,13 @@ export default async function handler(req, res) {
     });
   }
 
+  // GET returns customer PII (emails), amounts and full sales history.
+  // Guarded to match server.js — it must never be world-readable.
   if (req.method === 'GET') {
+    if (!isAuthorizedAdmin(req)) {
+      return res.status(401).json(unauthorizedPayload());
+    }
+
     const result = await fetchTransactions({ context: 'TRANSACTIONS' });
 
     if (!result.ok) {

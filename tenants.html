@@ -45,13 +45,39 @@
 </head>
 <body class="min-h-screen">
   <script>
+    // Fast client-side redirect for UX only. The REAL gate is the server:
+    // every admin API requires the httpOnly session cookie set by
+    // POST /api/admin/login, which this script cannot read or forge.
     if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
       window.location.href = '/admin-login.html';
     }
-    // Mutating admin APIs are guarded server-side. Attach the key captured
-    // at login (see admin-login.html) as the X-Admin-Key header.
+
+    // No secret is attached here any more. The session cookie travels
+    // automatically on same-origin requests; `credentials: 'same-origin'`
+    // in adminFetch() is what carries it.
     function adminHeaders(extra) {
-      return Object.assign({ 'X-Admin-Key': sessionStorage.getItem('valmontAdminKey') || '' }, extra || {});
+      return Object.assign({}, extra || {});
+    }
+
+    // Single wrapper for every admin API call: sends the session cookie and
+    // bounces to the login page if the session has expired or was revoked.
+    async function adminFetch(url, options) {
+      const opts = Object.assign({ credentials: 'same-origin' }, options || {});
+      const res = await fetch(url, opts);
+      if (res.status === 401) {
+        sessionStorage.removeItem('adminLoggedIn');
+        window.location.href = '/admin-login.html';
+        throw new Error('Session expired. Please sign in again.');
+      }
+      return res;
+    }
+
+    async function adminLogout() {
+      try {
+        await fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' });
+      } catch (_) { /* clear local state regardless */ }
+      sessionStorage.removeItem('adminLoggedIn');
+      window.location.href = '/admin-login.html';
     }
   </script>
 
@@ -63,7 +89,7 @@
       <div class="flex items-center gap-3">
         <span id="tenantCount" class="text-xs text-gray-500 font-bold">0 tenants</span>
         <button onclick="openAddModal()" class="gold-btn">+ Add Tenant</button>
-        <button onclick="sessionStorage.removeItem('adminLoggedIn'); sessionStorage.removeItem('valmontAdminKey'); window.location.href='/admin-login.html'" class="ghost-btn">Logout</button>
+        <button onclick="adminLogout()" class="ghost-btn">Logout</button>
       </div>
     </div>
     <!-- Row 2: Tabs under the logo -->
@@ -262,7 +288,7 @@
       const empty = document.getElementById('tenantEmpty');
       tbody.innerHTML = '<tr><td colspan="7" class="p-6 text-center text-gray-500">Loading…</td></tr>';
       try {
-        const res = await fetch('/api/admin/tenants', { headers: adminHeaders() });
+        const res = await adminFetch('/api/admin/tenants', { headers: adminHeaders() });
         if (res.status === 401) {
           tbody.innerHTML = '<tr><td colspan="7" class="p-6 text-center text-red-400">Authorization failed. Please <a href="/admin-login.html" class="underline">log in again</a>.</td></tr>';
           document.getElementById('tenantSourceWarning').textContent = 'Admin session expired or invalid. Reload the page and log in again.';
@@ -364,7 +390,7 @@
       document.getElementById('modalTitle').textContent = 'Edit Tenant: ' + key;
       document.getElementById('saveBtn').textContent = 'Save Changes';
       try {
-        const res = await fetch('/api/tenants/' + encodeURIComponent(key));
+        const res = await adminFetch('/api/tenants/' + encodeURIComponent(key));
         const json = await res.json();
         if (!json.data) { showError('Tenant not found'); return; }
         const t = json.data;
@@ -420,14 +446,14 @@
         let res, json;
         if (originalKey) {
           // Update
-          res = await fetch('/api/admin/tenants/' + encodeURIComponent(originalKey), {
+          res = await adminFetch('/api/admin/tenants/' + encodeURIComponent(originalKey), {
             method: 'PUT',
             headers: adminHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, environment, status })
           });
         } else {
           // Create
-          res = await fetch('/api/admin/tenants', {
+          res = await adminFetch('/api/admin/tenants', {
             method: 'POST',
             headers: adminHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ key, display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, environment, status })
@@ -480,7 +506,7 @@
       try { new URL(url); } catch(_) { errEl.textContent = 'Invalid URL format'; errEl.classList.remove('hidden'); return; }
 
       try {
-        const res = await fetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
+        const res = await adminFetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
           method: 'PUT',
           headers: adminHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ webhook_url: url })
@@ -499,7 +525,7 @@
       const verb = action === 'disable' ? 'disable' : 'enable';
       if (!confirm('Are you sure you want to ' + verb + ' tenant "' + key + '"?')) return;
       try {
-        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key) + '/' + action, { method: 'POST', headers: adminHeaders() });
+        const res = await adminFetch('/api/admin/tenants/' + encodeURIComponent(key) + '/' + action, { method: 'POST', headers: adminHeaders() });
         const json = await res.json();
         if (!json.status) { alert('Error: ' + json.message); return; }
         loadTenants();
@@ -509,7 +535,7 @@
     async function rotateKeys(key) {
       if (!confirm('Rotate API keys for "' + key + '"?\n\nThe current secret_key_1 will become secret_key_2 (still valid during transition), and a new secret_key_1 will be issued.')) return;
       try {
-        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key) + '/rotate-keys', { method: 'POST', headers: adminHeaders() });
+        const res = await adminFetch('/api/admin/tenants/' + encodeURIComponent(key) + '/rotate-keys', { method: 'POST', headers: adminHeaders() });
         const json = await res.json();
         if (!json.status) { alert('Error: ' + json.message); return; }
         alert(
@@ -525,7 +551,7 @@
     async function deleteTenant(key, name) {
       if (!confirm('Permanently DELETE tenant "' + name + '" (' + key + ')?\n\nThis cannot be undone. Built-in tenants (valmont-electricals, valmont-web-services) are protected and cannot be deleted — disable them instead.')) return;
       try {
-        const res = await fetch('/api/admin/tenants/' + encodeURIComponent(key), { method: 'DELETE', headers: adminHeaders() });
+        const res = await adminFetch('/api/admin/tenants/' + encodeURIComponent(key), { method: 'DELETE', headers: adminHeaders() });
         const json = await res.json();
         if (!json.status) { alert('Error: ' + json.message); return; }
         loadTenants();

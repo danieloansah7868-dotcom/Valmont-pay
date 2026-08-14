@@ -41,13 +41,39 @@
 </head>
 <body class="min-h-screen">
   <script>
+    // Fast client-side redirect for UX only. The REAL gate is the server:
+    // every admin API requires the httpOnly session cookie set by
+    // POST /api/admin/login, which this script cannot read or forge.
     if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
       window.location.href = '/admin-login.html';
     }
-    // Mutating admin APIs are guarded server-side. Attach the key captured
-    // at login (see admin-login.html) as the X-Admin-Key header.
+
+    // No secret is attached here any more. The session cookie travels
+    // automatically on same-origin requests; `credentials: 'same-origin'`
+    // in adminFetch() is what carries it.
     function adminHeaders(extra) {
-      return Object.assign({ 'X-Admin-Key': sessionStorage.getItem('valmontAdminKey') || '' }, extra || {});
+      return Object.assign({}, extra || {});
+    }
+
+    // Single wrapper for every admin API call: sends the session cookie and
+    // bounces to the login page if the session has expired or was revoked.
+    async function adminFetch(url, options) {
+      const opts = Object.assign({ credentials: 'same-origin' }, options || {});
+      const res = await fetch(url, opts);
+      if (res.status === 401) {
+        sessionStorage.removeItem('adminLoggedIn');
+        window.location.href = '/admin-login.html';
+        throw new Error('Session expired. Please sign in again.');
+      }
+      return res;
+    }
+
+    async function adminLogout() {
+      try {
+        await fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' });
+      } catch (_) { /* clear local state regardless */ }
+      sessionStorage.removeItem('adminLoggedIn');
+      window.location.href = '/admin-login.html';
     }
   </script>
 
@@ -59,7 +85,7 @@
     </div>
     <div class="flex items-center gap-3">
       <span id="tenantCount" class="text-xs text-gray-500 font-bold">0 tenants</span>
-      <button onclick="sessionStorage.removeItem('adminLoggedIn'); sessionStorage.removeItem('valmontAdminKey'); window.location.href='/admin-login.html'" class="text-xs text-gray-400 hover:text-white font-bold transition">Logout</button>
+      <button onclick="adminLogout()" class="text-xs text-gray-400 hover:text-white font-bold transition">Logout</button>
     </div>
   </header>
 
@@ -260,7 +286,7 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
     // ─── Tenants ──────────────────────────────────────────────────────
     async function refreshTenants() {
       try {
-        const res = await fetch('/api/tenants');
+        const res = await adminFetch('/api/tenants');
         const json = await res.json();
         const tenants = json.data || [];
         document.getElementById('tenantCount').textContent = tenants.length + ' tenants';
@@ -318,7 +344,7 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
         return;
       }
 
-      fetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
+      adminFetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
         method: 'PUT',
         headers: adminHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ webhook_url: newUrl.trim() })
@@ -339,7 +365,7 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
     function rotateKeys(key) {
       if (!confirm('Rotate API keys for ' + key + '?\n\nBoth current and new keys will remain valid during the transition period.')) return;
 
-      fetch('/api/tenants/' + encodeURIComponent(key) + '/rotate-keys', {
+      adminFetch('/api/tenants/' + encodeURIComponent(key) + '/rotate-keys', {
         method: 'POST',
         headers: adminHeaders()
       })
@@ -373,7 +399,7 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
     // ─── Transactions ────────────────────────────────────────────────
     async function loadTransactions() {
       try {
-        const res = await fetch('/api/transactions');
+        const res = await adminFetch('/api/transactions');
         const json = await res.json();
         const data = json.data || json.transactions || [];
         const tenantFilter = document.getElementById('txFilterTenant').value;
@@ -432,7 +458,7 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
         if (tenant) params.set('tenant_key', tenant);
         if ([...params].length) url += '?' + params.toString();
 
-        const res = await fetch(url);
+        const res = await adminFetch(url);
         const json = await res.json();
         const deliveries = json.data || [];
 

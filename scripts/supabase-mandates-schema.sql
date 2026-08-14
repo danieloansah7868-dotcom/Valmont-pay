@@ -60,5 +60,17 @@ create index if not exists mandates_customer_email_idx
 create index if not exists mandates_status_idx
   on public.mandates (status);
 
--- Deny-by-default for everyone except the service role.
+-- RLS: service-role only.
+--
+-- This table stores reusable Paystack authorization_codes — tokens that can
+-- pull money from a customer's card or MoMo wallet. It is the single most
+-- sensitive table in the schema and must never be readable with the anon key.
+--
+-- Enabling RLS with NO policy is already deny-all, so this was correct by
+-- accident. The explicit policy below makes the intent reviewable and matches
+-- the pattern used by tenants / webhook_deliveries.
 alter table public.mandates enable row level security;
+
+drop policy if exists "mandates service-role only" on public.mandates;
+create policy "mandates service-role only" on public.mandates
+  for all using (auth.role() = 'service_role') with check (auth.role() = 'service_role');

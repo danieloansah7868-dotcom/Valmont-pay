@@ -132,15 +132,29 @@ check(
 );
 
 // --------------------------------------------------------------- diagnostics
+// NOTE: the request host below is the CANONICAL production domain. It used to
+// be an arbitrary `*.vercel.app` hostname, which passed only because the host
+// allowlist carried a `.vercel.app` wildcard — anyone can register a Vercel
+// project, so that wildcard let a forged Host header mint payment links and
+// Paystack callback URLs on an attacker's domain. The wildcard is gone
+// (lib/base-url.js); untrusted hosts now fall back to the canonical domain.
 const report = await diagnostics.buildDiagnostics(
-  { headers: { host: 'valmont-pay.vercel.app', 'x-forwarded-proto': 'https' } },
+  { headers: { host: 'valmontpay.app', 'x-forwarded-proto': 'https' } },
   { includePaystack: false }
 );
 
-check(report.webhookConfiguration.canonicalUrl === 'https://valmont-pay.vercel.app/api/webhook',
+check(report.webhookConfiguration.canonicalUrl === 'https://valmontpay.app/api/webhook',
   'diagnostics report the canonical webhook URL');
-check(report.webhookConfiguration.liveUrl === 'https://valmont-pay.vercel.app/api/webhook',
+check(report.webhookConfiguration.liveUrl === 'https://valmontpay.app/api/webhook',
   'diagnostics derive the live URL from the request host');
+
+// An untrusted host must NOT be reflected into the recommended webhook URL.
+const forged = await diagnostics.buildDiagnostics(
+  { headers: { host: 'attacker-phish.vercel.app', 'x-forwarded-proto': 'https' } },
+  { includePaystack: false }
+);
+check(!forged.webhookConfiguration.canonicalUrl.includes('attacker-phish'),
+  'a forged .vercel.app host is not reflected into the recommended webhook URL');
 check(report.webhookConfiguration.paystackMode === 'test', 'diagnostics detect Paystack TEST mode from sk_test_');
 check(report.webhookConfiguration.signingSecretSource === 'PAYSTACK_SECRET_KEY',
   'diagnostics report the signing secret source');
@@ -168,7 +182,7 @@ check(report.summary.failures === 0, 'a correctly configured deployment reports 
 // A stale WEBHOOK_SECRET must never override the Paystack credential. This is
 // the exact production combination that previously rejected live callbacks.
 process.env.WEBHOOK_SECRET = 'something-completely-different';
-const mismatched = diagnostics.configurationChecks({ headers: { host: 'valmont-pay.vercel.app' } });
+const mismatched = diagnostics.configurationChecks({ headers: { host: 'valmontpay.app' } });
 const mismatchCheck = mismatched.find(c => c.id === 'webhook-secret-matches-paystack-key');
 check(mismatchCheck.status === 'pass', 'check: a differing WEBHOOK_SECRET is safely ignored');
 check(mismatchCheck.fix === null, 'the authoritative Paystack key needs no remediation');

@@ -165,8 +165,24 @@ console.log('\n# lib/base-url.js');
   const req = host => ({ headers: { host, 'x-forwarded-proto': 'https' } });
 
   check(baseUrl.publicBaseUrl(req('valmontpay.app')) === 'https://valmontpay.app', 'request host wins');
-  check(baseUrl.publicBaseUrl(req('my-preview.vercel.app')) === 'https://my-preview.vercel.app', 'vercel previews are allowed');
+
+  // SECURITY: the '.vercel.app' SUFFIX wildcard has been removed. Anyone can
+  // register a Vercel project, so a wildcard over that shared suffix let a
+  // forged Host header mint payment links and Paystack callback URLs on an
+  // attacker-controlled domain. An arbitrary *.vercel.app host is now
+  // untrusted and falls back to the canonical domain.
+  check(baseUrl.publicBaseUrl(req('attacker-phish.vercel.app')) === 'https://valmontpay.app',
+    'a forged *.vercel.app host is NOT trusted (wildcard removed)');
   check(baseUrl.publicBaseUrl(req('evil-phish.example.com')) === 'https://valmontpay.app', 'untrusted hosts fall back to the default domain');
+
+  // Legitimate previews still work — but the hostname is taken from the
+  // platform-set VERCEL_URL env var, which a request header cannot forge.
+  process.env.VERCEL_URL = 'my-preview.vercel.app';
+  check(baseUrl.publicBaseUrl(req('my-preview.vercel.app')) === 'https://my-preview.vercel.app',
+    'THIS deployment\'s own preview host (from VERCEL_URL) is allowed');
+  check(baseUrl.publicBaseUrl(req('another-project.vercel.app')) === 'https://valmontpay.app',
+    'a DIFFERENT vercel host is still rejected while a preview runs');
+  delete process.env.VERCEL_URL;
 
   process.env.PUBLIC_BASE_URL = 'https://stale-env.example.com/';
   check(baseUrl.publicBaseUrl(req('valmontpay.app')) === 'https://valmontpay.app', 'request host beats a stale PUBLIC_BASE_URL');
