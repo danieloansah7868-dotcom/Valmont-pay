@@ -271,6 +271,67 @@ let sessionCookie = '';
 }
 
 {
+  // LOGIN-LOOP REGRESSION (the serverless bug): the dashboard accepted the
+  // correct password, then bounced straight back to login. Sessions were kept
+  // in a per-process Map, and Vercel's instance handling the dashboard's first
+  // API call was usually NOT the one that handled POST /api/admin/login — it
+  // saw no session, returned 401, and the UI redirected back to login. Tokens
+  // must therefore be STATELESS: one minted on instance A must verify on a
+  // fresh instance B that shares NO memory with A.
+  const rawToken = decodeURIComponent(sessionCookie.split('=').slice(1).join('='));
+  const adminSessionPath = require.resolve('../lib/admin-session.js');
+
+  // Simulate instance B: a brand-new module copy whose in-memory state is
+  // guaranteed to be empty (whatever storage the module uses, B starts blank).
+  const freshInstance = (() => {
+    const cached = require.cache[adminSessionPath];
+    delete require.cache[adminSessionPath];
+    try {
+      return require('../lib/admin-session.js');
+    } finally {
+      require.cache[adminSessionPath] = cached;
+    }
+  })();
+
+  check(freshInstance.isValidSession(rawToken),
+    'a session minted on one instance verifies on a FRESH instance (no shared memory)');
+  check(freshInstance.hasValidSession({ headers: { cookie: sessionCookie } }),
+    'the cookie authorizes an admin request on a fresh instance');
+
+  // The signature must bind every field of issuedAt.expiresAt.nonce: flipping
+  // the expiry must invalidate the token.
+  const parts = rawToken.split('.');
+  const tampered = parts.slice();
+  tampered[2] = String(Number(parts[2]) + 24 * 60 * 60 * 1000); // extend by a day
+  check(!freshInstance.isValidSession(tampered.join('.')),
+    'a token with a tampered expiry is rejected (signature covers issuedAt.expiresAt.nonce)');
+
+  // Instances that disagree on the signing secret must not accept each
+  // other's sessions: stateless verification depends on shared config.
+  const savedSecret = process.env.ADMIN_SESSION_SECRET;
+  process.env.ADMIN_SESSION_SECRET = 'a-different-deployment-secret';
+  let foreignToken = '';
+  try {
+    foreignToken = (() => {
+      const cached = require.cache[adminSessionPath];
+      delete require.cache[adminSessionPath];
+      try {
+        return require('../lib/admin-session.js').createSession(ADMIN_EMAIL).token;
+      } finally {
+        require.cache[adminSessionPath] = cached;
+      }
+    })();
+  } finally {
+    // Assigning `undefined` to process.env stores the STRING "undefined", so
+    // an unset variable must be deleted, not reassigned.
+    if (savedSecret === undefined) delete process.env.ADMIN_SESSION_SECRET;
+    else process.env.ADMIN_SESSION_SECRET = savedSecret;
+  }
+  check(!require('../lib/admin-session.js').isValidSession(foreignToken),
+    'a session minted under a different secret is rejected (instances must share config)');
+}
+
+{
   const res = await call('/api/transactions', { headers: { Cookie: sessionCookie } });
   check(res.status === 200, 'the dashboard can still read the ledger with a session');
 }

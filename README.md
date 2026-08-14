@@ -130,6 +130,13 @@ For the admin dashboard login (`admin-login.html`), credentials are verified
 opaque session token in an `httpOnly` + `SameSite=Strict` cookie; the password
 itself never reaches the browser.
 
+> **Stateless sessions:** the cookie is a self-describing token signed with
+> HMAC-SHA256 over `issuedAt.expiresAt.nonce` (see `lib/admin-session.js`), so
+> every Vercel serverless instance can verify a session minted by any other —
+> no per-instance memory, no "correct password but bounced back to login"
+> loop. Set `ADMIN_SESSION_SECRET` for a dedicated signing key (otherwise one
+> is derived from `ADMIN_PASSWORD`).
+
 > **Removed:** `GET /config/admin.js`. It used to serve `ADMIN_PASSWORD` in
 > cleartext to any unauthenticated caller — and because that same value is the
 > `X-Admin-Key`, one anonymous request defeated every admin guard. It now
