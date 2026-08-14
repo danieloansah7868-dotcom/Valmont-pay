@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const crypto = require('crypto');
-const { v4: uuidv4 } = require('uuid');
 const {
   initializePayment,
   initializePaymentWithKey,
@@ -26,7 +25,10 @@ const mandateStore = require('./lib/mandate-store');
 const serviceCatalogue = require('./lib/service-catalogue');
 const legacyLinkPolicy = require('./lib/legacy-link-policy');
 const { publicBaseUrl } = require('./lib/base-url');
-const { requireAdmin, isAuthorizedAdmin, unauthorizedPayload, adminAuthEnforced } = require('./lib/admin-auth');
+const adminAuth = require('./lib/admin-auth');
+const { requireAdmin, isAuthorizedAdmin, unauthorizedPayload, adminAuthEnforced } = adminAuth;
+const adminSession = require('./lib/admin-session');
+const rateLimit = require('./lib/rate-limit');
 
 // Vercel runs the dashboard checkout (POST /api/v1/transaction/charge) in a
 // serverless function whose memory disappears between requests, so a payment
@@ -49,8 +51,20 @@ function baseUrl(req) {
   return publicBaseUrl(req);
 }
 
-// Enable Cross-Origin Resource Sharing & JSON Parsing
-app.use(cors());
+// ─── CORS ────────────────────────────────────────────────────────────────
+// Public checkout/storefront endpoints are genuinely cross-origin, so a
+// permissive default is intentional here. What is NOT safe is combining
+// `*` with credentials: `origin: true` reflects the caller's origin, and
+// `credentials: false` guarantees the admin session cookie is never sent
+// or readable cross-site. Together with SameSite=Strict on the cookie,
+// that closes the "any website reads your ledger / rides your session"
+// path while leaving storefront integrations working.
+app.use(cors({
+  origin: true,
+  credentials: false,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Key', 'x-valmontpay-signature', 'Cache-Control']
+}));
 // Keep the raw body around so the Paystack webhook signature (an HMAC over the
 // exact bytes Paystack sent) can be verified.
 app.use(express.json({
@@ -70,7 +84,10 @@ const TRANSACTIONS = ledger.TRANSACTIONS;
 // durably (Supabase payment_links table) in addition to the in-memory
 // access-code store. When Supabase is configured but the write fails, we
 // return an error rather than hand out a link that will 404 for the client.
-app.post('/api/v1/transaction/initialize', async (req, res) => {
+app.post('/api/v1/transaction/initialize', rateLimit.limit('link-generate', {
+  max: 30, windowMs: 60 * 1000,
+  message: 'Too many payment links generated. Please wait a minute and try again.'
+}), async (req, res) => {
   const { email, amount, callback_url, merchant } = req.body;
 
   if (!email || !amount || isNaN(amount) || amount <= 0) {
@@ -316,33 +333,109 @@ app.get('/api/v1/transaction/verify/:reference', (req, res) => {
 // Allows tenants and merchants to inspect active standing instructions,
 // revoke mandates (mandatory opt-out), or execute merchant-initiated charges.
 
-app.get('/api/v1/mandates', async (req, res) => {
+// ─── Standing mandates / recurring billing ───────────────────────────────
+//
+// SECURITY: these endpoints operate on Paystack `authorization_code`s —
+// reusable tokens that pull money from a customer's card or MoMo wallet
+// WITHOUT further customer interaction. They were previously completely
+// unauthenticated, which made them a self-contained remote theft primitive:
+// GET /api/v1/mandates dumped every authorization_code, and POST
+// /api/v1/mandates/charge then billed any of them for an arbitrary amount.
+// Unauthenticated /revoke was an anonymous denial-of-revenue (and, given
+// consent obligations under Ghana's Act 987 / Act 843, a compliance issue).
+//
+// Access model now:
+//   - Admin (session cookie or X-Admin-Key) → full cross-tenant access.
+//   - Tenant (Authorization: Bearer <secret_key>) → only its OWN mandates,
+//     enforced by mandateVisibleTo() on every read, charge and revoke.
+//   - Anonymous → 401, always.
+const mandateRateLimit = rateLimit.limit('mandates', {
+  max: 20,
+  windowMs: 60 * 1000,
+  message: 'Too many mandate requests. Please slow down.'
+});
+
+function requireMandateAuth(req, res, next) {
+  if (adminAuth.isMisconfigured()) {
+    return res.status(503).json(adminAuth.misconfiguredPayload());
+  }
+
+  if (isAuthorizedAdmin(req)) {
+    req.isAdmin = true;
+    return next();
+  }
+
+  const authHeader = req.headers.authorization || req.headers.Authorization || '';
+  const match = String(authHeader).match(/^Bearer\s+(.+)$/i);
+  if (match) {
+    const tenant = tenants.getTenantBySecretKey(match[1].trim());
+    if (tenant) {
+      req.tenant = tenant;
+      return next();
+    }
+  }
+
+  return res.status(401).json({
+    status: false,
+    message: 'Authorization required. Use a tenant secret key (Authorization: Bearer <key>) or admin credentials.'
+  });
+}
+
+/**
+ * Can the authenticated caller see/act on this mandate?
+ * Admins: everything. Tenants: only rows carrying their own tenant_key —
+ * matched on the canonical key so legacy aliases resolve correctly. A
+ * mandate with no tenant_key is admin-only, never shared across tenants.
+ */
+function mandateVisibleTo(req, mandate) {
+  if (!mandate) return false;
+  if (req.isAdmin) return true;
+  if (!req.tenant) return false;
+
+  const owner = mandate.tenant_key ? tenants.canonicalTenantKey(mandate.tenant_key) : null;
+  if (!owner) return false;
+  return owner === tenants.canonicalTenantKey(req.tenant.key);
+}
+
+app.get('/api/v1/mandates', mandateRateLimit, requireMandateAuth, async (req, res) => {
   const merchant_name = req.query.merchant || req.query.merchant_name || undefined;
   const customer_email = req.query.email || req.query.customer_email || undefined;
   const status = req.query.status || undefined;
 
   const result = await mandateStore.listMandates({ merchant_name, customer_email, status });
+  // A tenant may only ever see its OWN mandates. Admins see everything.
+  const visible = (result.mandates || []).filter(m => mandateVisibleTo(req, m));
+
   return res.status(200).json({
     status: result.ok,
-    count: result.mandates ? result.mandates.length : 0,
-    data: result.mandates || [],
+    count: visible.length,
+    data: visible,
     error: result.error ? result.reason : null
   });
 });
 
-app.get('/api/v1/mandates/:code', async (req, res) => {
+app.get('/api/v1/mandates/:code', mandateRateLimit, requireMandateAuth, async (req, res) => {
   const code = req.params.code;
   const mandate = await mandateStore.getMandate(code);
-  if (!mandate) {
+  // 404 (not 403) on a cross-tenant read, so the API never confirms that
+  // another tenant's authorization_code exists.
+  if (!mandate || !mandateVisibleTo(req, mandate)) {
     return res.status(404).json({ status: false, message: `Mandate ${code} not found.` });
   }
   return res.status(200).json({ status: true, data: mandate });
 });
 
-app.post('/api/v1/mandates/charge', async (req, res) => {
+app.post('/api/v1/mandates/charge', mandateRateLimit, requireMandateAuth, async (req, res) => {
   const { authorization_code, amount, email, reference, currency, subaccount, merchant, metadata } = req.body || {};
   if (!authorization_code || !amount) {
     return res.status(400).json({ status: false, message: 'authorization_code and positive amount are required.' });
+  }
+
+  // Ownership check BEFORE any money moves: a tenant must not be able to
+  // charge a mandate belonging to another merchant.
+  const target = await mandateStore.getMandate(authorization_code);
+  if (!target || !mandateVisibleTo(req, target)) {
+    return res.status(404).json({ status: false, message: `Mandate ${authorization_code} not found.` });
   }
 
   const result = await mandateStore.chargeMandate({
@@ -372,10 +465,15 @@ app.post('/api/v1/mandates/charge', async (req, res) => {
   });
 });
 
-app.post('/api/v1/mandates/revoke', async (req, res) => {
+app.post('/api/v1/mandates/revoke', mandateRateLimit, requireMandateAuth, async (req, res) => {
   const { authorization_code } = req.body || {};
   if (!authorization_code) {
     return res.status(400).json({ status: false, message: 'authorization_code is required.' });
+  }
+
+  const target = await mandateStore.getMandate(authorization_code);
+  if (!target || !mandateVisibleTo(req, target)) {
+    return res.status(404).json({ status: false, message: `Mandate ${authorization_code} not found.` });
   }
 
   const result = await mandateStore.revokeMandate(authorization_code);
@@ -392,7 +490,9 @@ app.post('/api/v1/mandates/revoke', async (req, res) => {
 
 // API 3b: Paystack-backed endpoints (same contract as the /api serverless
 // functions, so local development and Vercel behave identically).
-app.post('/api/initialize-payment', async (req, res) => {
+app.post('/api/initialize-payment', rateLimit.limit('payment-init', {
+  max: 30, windowMs: 60 * 1000
+}), async (req, res) => {
   const body = req.body || {};
   const { email, phone, callback_url } = body;
   let merchant = body.merchant;
@@ -588,7 +688,12 @@ app.get('/api/v1/merchant/dashboard', (req, res) => {
 // configured we fall back to the in-memory ledger so local development keeps
 // working — but a Supabase READ ERROR is surfaced rather than hidden behind an
 // innocent-looking empty list.
-app.get('/api/transactions', async (req, res) => {
+// GUARDED: this returns customer PII (email addresses), amounts and the
+// full sales history. It was public — and served with `CORS: *`, so any
+// website could read a merchant's entire customer list from a visitor's
+// browser. The dashboard already authenticates, so there is no longer a
+// reason to leave it open.
+app.get('/api/transactions', requireAdmin, async (req, res) => {
   const memorySnapshot = ledger.getLedgerSnapshot();
 
   if (!isSupabaseConfigured()) {
@@ -652,7 +757,11 @@ app.get('/api/transactions', async (req, res) => {
 // Used by the storefront checkout to record Cash on
 // Delivery / Manual MoMo orders (status PENDING_MOMO) and by the admin panel to reconcile them (PENDING_MOMO → PAID) and to advance
 // fulfillment status (PAID → SHIPPED / CANCELLED). Upserts by `reference`.
-app.post('/api/transactions', async (req, res) => {
+// Rate-limited: the non-terminal path is public by design (storefront
+// order creation), so it is the one write an anonymous caller can spam.
+app.post('/api/transactions', rateLimit.limit('order-write', {
+  max: 60, windowMs: 60 * 1000
+}), async (req, res) => {
   const body = req.body || {};
   if (!body.reference) {
     return res.status(400).json({ success: false, error: 'Reference is required' });
@@ -1483,7 +1592,10 @@ app.get('/api/transaction/verify/:reference', requireTenantAuth, async (req, res
  * payment_links table — so a link keeps working on a cold serverless
  * instance or a different warm one than the instance that created it.
  */
-app.get('/api/transaction/access/:access_code', async (req, res) => {
+// Rate-limited to make brute-forcing an access_code impractical.
+app.get('/api/transaction/access/:access_code', rateLimit.limit('access-code', {
+  max: 60, windowMs: 60 * 1000
+}), async (req, res) => {
   const { access_code } = req.params;
 
   if (!access_code) {
@@ -1729,7 +1841,9 @@ async function mintCatalogueLink({ req, sku, email, phone, callbackUrl, requeste
 
 // Public, anonymous. Takes ONLY a sku (plus who to bill it to) — never an
 // amount. This is what the Valmont Web Services storefront calls.
-app.post('/api/v1/payment-link/sku', async (req, res) => {
+app.post('/api/v1/payment-link/sku', rateLimit.limit('sku-link', {
+  max: 30, windowMs: 60 * 1000
+}), async (req, res) => {
   const body = req.body || {};
   const result = await mintCatalogueLink({
     req,
@@ -1776,7 +1890,9 @@ app.all('/api/log/bad-amount', (req, res, next) => {
   return next();
 });
 
-app.post('/api/log/bad-amount', (req, res) => {
+app.post('/api/log/bad-amount', rateLimit.limit('bad-amount-log', {
+  max: 20, windowMs: 60 * 1000
+}), (req, res) => {
   try {
     const body = req.body || {};
     const rawAmount = typeof body.rawAmount === 'string' ? body.rawAmount.slice(0, 32) : null;
@@ -1823,10 +1939,16 @@ app.post('/api/log/bad-amount', (req, res) => {
 
 // ─── New: GET /api/tenants — list all tenants (sanitised) ──────────────
 
+// PUBLIC, so checkout pages can render branding without a credential.
+// Authenticated admins get the full operational record; anonymous callers
+// get branding only — the settlement bank account, webhook URL, allowed
+// domains and environment used to be world-readable here.
 app.get('/api/tenants', (req, res) => {
+  const full = tenants.listTenants();
+  const authorized = isAuthorizedAdmin(req);
   res.status(200).json({
     status: true,
-    data: tenants.listTenants()
+    data: authorized ? full : full.map(t => tenants.publicTenant(t))
   });
 });
 
@@ -1839,7 +1961,7 @@ app.get('/api/tenants/:key', (req, res) => {
   }
   res.status(200).json({
     status: true,
-    data: tenants.sanitiseTenant(tenant)
+    data: isAuthorizedAdmin(req) ? tenants.sanitiseTenant(tenant) : tenants.publicTenant(tenant)
   });
 });
 
@@ -1922,9 +2044,25 @@ app.post('/api/tenants/:key/rotate-keys', requireAdmin, (req, res) => {
 const tenantStore = require('./lib/tenant-store');
 
 if (!adminAuthEnforced()) {
-  console.warn('[ADMIN-AUTH] ADMIN_PASSWORD is not set — admin API endpoints are OPEN. Set it before deploying.');
+  if (adminAuth.isMisconfigured()) {
+    console.error(
+      '[ADMIN-AUTH] FATAL POSTURE: ADMIN_PASSWORD is not set in a DEPLOYED environment. ' +
+      'All admin endpoints will return 503 until it is configured.'
+    );
+  } else {
+    console.warn('[ADMIN-AUTH] ADMIN_PASSWORD is not set — local dev posture, admin endpoints are open.');
+  }
 }
-app.use('/api/admin', requireAdmin);
+
+// Guard every /api/admin/* route EXCEPT the auth handshake itself, which
+// must stay reachable to unauthenticated callers (it is how you become
+// authenticated). login is separately rate-limited; session/logout leak
+// nothing.
+const ADMIN_AUTH_PUBLIC_PATHS = new Set(['/login', '/logout', '/session']);
+app.use('/api/admin', (req, res, next) => {
+  if (ADMIN_AUTH_PUBLIC_PATHS.has(req.path)) return next();
+  return requireAdmin(req, res, next);
+});
 
 app.get('/api/admin/tenants', async (req, res) => {
   // First refresh from DB so the UI sees the latest. Report fallback state
@@ -2047,7 +2185,9 @@ app.post('/api/admin/tenants/:key/rotate-keys', async (req, res) => {
 
 // ─── New: GET /api/webhook-deliveries — inspect delivery attempts ──────
 
-app.get('/api/webhook-deliveries', (req, res) => {
+// Guarded: delivery records contain tenant webhook URLs and payment
+// event payloads (references, amounts, customer data).
+app.get('/api/webhook-deliveries', requireAdmin, (req, res) => {
   const { reference, tenant_key } = req.query;
   const filters = {};
   if (reference) filters.reference = reference;
@@ -2185,15 +2325,77 @@ app.get('/dashboard', (req, res) => {
 app.get('/pay', (req, res) => {
   res.sendFile(path.join(__dirname, 'pay.html'));
 });
-// Runtime config for admin-login.html: credentials come from the ADMIN_EMAIL and
-// ADMIN_PASSWORD environment variables so no secrets live in the source tree.
-app.get('/config/admin.js', (req, res) => {
-  const config = {
-    email: process.env.ADMIN_EMAIL || 'support@valmontpay.com',
-    password: process.env.ADMIN_PASSWORD || ''
-  };
+// ─── Admin authentication ────────────────────────────────────────────────
+//
+// REMOVED: `GET /config/admin.js`. It served ADMIN_EMAIL and ADMIN_PASSWORD,
+// in cleartext, to any unauthenticated caller — and since ADMIN_PASSWORD is
+// also the X-Admin-Key shared secret, one anonymous GET defeated every admin
+// guard in this file. `CORS: *` meant any website could read it from a
+// visitor's browser. Credentials are now verified ONLY here, server-side.
+//
+// The password never reaches the browser. A successful login returns an
+// opaque, random, expiring token in an httpOnly + SameSite=Strict cookie
+// that JavaScript cannot read (so XSS cannot exfiltrate the session, and
+// cross-site requests cannot ride it).
+app.post(
+  '/api/admin/login',
+  rateLimit.limit('admin-login', {
+    max: 5,
+    windowMs: 15 * 60 * 1000,
+    message: 'Too many login attempts. Wait 15 minutes and try again.'
+  }),
+  (req, res) => {
+    const { email, password } = req.body || {};
+
+    if (!process.env.ADMIN_PASSWORD) {
+      return res.status(503).json({
+        status: false,
+        message: 'Admin login is not configured on this deployment (ADMIN_PASSWORD is unset).'
+      });
+    }
+
+    if (!adminSession.verifyCredentials(email, password)) {
+      // Deliberately identical response for a bad email and a bad password,
+      // so the endpoint cannot be used to enumerate the admin address.
+      console.warn(`[ADMIN-AUTH] Failed login attempt from ${rateLimit.clientKey(req)}`);
+      return res.status(401).json({ status: false, message: 'Invalid email or password.' });
+    }
+
+    const { token, expiresAt } = adminSession.createSession(email);
+    res.setHeader('Set-Cookie', adminSession.buildSessionCookie(token));
+    res.set('Cache-Control', 'no-store');
+    console.log(`[ADMIN-AUTH] Admin session established for ${adminSession.adminEmail()}`);
+    return res.status(200).json({ status: true, message: 'Signed in.', expires_at: expiresAt });
+  }
+);
+
+app.post('/api/admin/logout', (req, res) => {
+  adminSession.destroySession(adminSession.sessionTokenFromRequest(req));
+  res.setHeader('Set-Cookie', adminSession.buildClearCookie());
+  return res.status(200).json({ status: true, message: 'Signed out.' });
+});
+
+// Lets the admin pages check "am I still logged in?" without shipping any
+// secret. Returns only a boolean.
+app.get('/api/admin/session', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.type('application/javascript').send(`window.ADMIN_CONFIG = ${JSON.stringify(config)};`);
+  return res.status(200).json({
+    status: true,
+    authenticated: adminSession.hasValidSession(req),
+    login_configured: Boolean(process.env.ADMIN_PASSWORD)
+  });
+});
+
+// The old endpoint is kept ONLY to return an explicit, loud error: a stale
+// cached page requesting it must fail visibly rather than silently appear
+// to work with an empty password.
+app.get('/config/admin.js', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(410).type('application/javascript').send(
+    '/* Removed for security: this endpoint used to publish ADMIN_PASSWORD to ' +
+    'anyone. Admin login is now server-side via POST /api/admin/login. */\n' +
+    'window.ADMIN_CONFIG = undefined;\n'
+  );
 });
 
 app.get('/admin-login', (req, res) => {

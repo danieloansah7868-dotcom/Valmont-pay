@@ -92,36 +92,62 @@
     </form>
   </div>
 
-  <!-- Admin credentials are NOT stored in source. They come from the ADMIN_EMAIL and
-       ADMIN_PASSWORD environment variables, injected at runtime via /config/admin.js. -->
-  <script src="/config/admin.js"></script>
+  <!-- The admin password is NEVER sent to the browser. Credentials are
+       POSTed to /api/admin/login and verified server-side; on success the
+       server sets an httpOnly, SameSite=Strict session cookie that this
+       page's JavaScript cannot read. (The old /config/admin.js endpoint,
+       which published ADMIN_PASSWORD to anyone, has been removed.) -->
   <script>
-   const ADMIN_EMAIL = (window.ADMIN_CONFIG && window.ADMIN_CONFIG.email) || 'support@valmontpay.com';
-   const ADMIN_PASSWORD = (window.ADMIN_CONFIG && window.ADMIN_CONFIG.password) || '';
+    const form = document.getElementById('login-form');
+    const errorMessage = document.getElementById('error-message');
+    const submitButton = form.querySelector('button[type="submit"]');
 
-    document.getElementById('login-form').addEventListener('submit', (e) => {
+    function showError(text) {
+      errorMessage.textContent = text;
+      errorMessage.style.display = 'block';
+    }
+
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = document.getElementById('email').value;
-      const password = document.getElementById('password').value;
-      const errorMessage = document.getElementById('error-message');
+      errorMessage.style.display = 'none';
+      submitButton.disabled = true;
+      submitButton.textContent = 'Signing in…';
 
-      if (!ADMIN_PASSWORD) {
-        errorMessage.textContent = 'Admin login is not configured yet. Contact support.';
-        errorMessage.style.display = 'block';
-        return;
-      }
+      try {
+        const res = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          // Same-origin: the Set-Cookie response is stored by the browser.
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            email: document.getElementById('email').value,
+            password: document.getElementById('password').value
+          })
+        });
 
-     if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD) {
-        sessionStorage.setItem('adminLoggedIn', 'true');
-        // The admin APIs are guarded server-side (X-Admin-Key must match
-        // ADMIN_PASSWORD). Keep the key in sessionStorage so the admin
-        // pages can attach it to their mutating API calls. It is only ever
-        // the operator's own password, on their own browser, same-origin.
-        sessionStorage.setItem('valmontAdminKey', password);
-        window.location.href = '/dashboard.html';
-      } else {
-        errorMessage.textContent = 'Invalid email or password';
-        errorMessage.style.display = 'block';
+        let payload = {};
+        try { payload = await res.json(); } catch (_) { /* non-JSON error page */ }
+
+        if (res.ok && payload.status) {
+          // Marks the UI as logged in. This is a convenience flag only —
+          // it grants nothing; the httpOnly cookie is the real credential.
+          sessionStorage.setItem('adminLoggedIn', 'true');
+          window.location.href = '/dashboard.html';
+          return;
+        }
+
+        if (res.status === 429) {
+          showError(payload.message || 'Too many attempts. Please wait and try again.');
+        } else if (res.status === 503) {
+          showError(payload.message || 'Admin login is not configured yet. Contact support.');
+        } else {
+          showError(payload.message || 'Invalid email or password');
+        }
+      } catch (err) {
+        showError('Could not reach the server. Check your connection and try again.');
+      } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = 'Sign In';
       }
     });
   </script>

@@ -7,7 +7,11 @@
 # happens again.
 
 node_modules/
-package-lock.json
+
+# package-lock.json is deliberately TRACKED. This is a payment system: the
+# exact dependency tree that passed CI must be the one that deploys. Leaving
+# it untracked let `npm install` resolve different transitive versions in CI
+# and in production.
 .env
 .env.local
 .vercel

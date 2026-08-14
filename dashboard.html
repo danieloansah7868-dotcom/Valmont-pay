@@ -18,13 +18,39 @@
 </head>
 <body class="min-h-screen flex flex-col justify-between">
   <script>
+    // Fast client-side redirect for UX only. The REAL gate is the server:
+    // every admin API requires the httpOnly session cookie set by
+    // POST /api/admin/login, which this script cannot read or forge.
     if (sessionStorage.getItem('adminLoggedIn') !== 'true') {
       window.location.href = '/admin-login.html';
     }
-    // Mutating admin APIs are guarded server-side. Attach the key captured
-    // at login (see admin-login.html) as the X-Admin-Key header.
+
+    // No secret is attached here any more. The session cookie travels
+    // automatically on same-origin requests; `credentials: 'same-origin'`
+    // in adminFetch() is what carries it.
     function adminHeaders(extra) {
-      return Object.assign({ 'X-Admin-Key': sessionStorage.getItem('valmontAdminKey') || '' }, extra || {});
+      return Object.assign({}, extra || {});
+    }
+
+    // Single wrapper for every admin API call: sends the session cookie and
+    // bounces to the login page if the session has expired or was revoked.
+    async function adminFetch(url, options) {
+      const opts = Object.assign({ credentials: 'same-origin' }, options || {});
+      const res = await fetch(url, opts);
+      if (res.status === 401) {
+        sessionStorage.removeItem('adminLoggedIn');
+        window.location.href = '/admin-login.html';
+        throw new Error('Session expired. Please sign in again.');
+      }
+      return res;
+    }
+
+    async function adminLogout() {
+      try {
+        await fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' });
+      } catch (_) { /* clear local state regardless */ }
+      sessionStorage.removeItem('adminLoggedIn');
+      window.location.href = '/admin-login.html';
     }
   </script>
 
@@ -33,7 +59,7 @@
     <!-- Row 1: Logo + Logout -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
       <img src="/logo.svg" alt="Valmont Pay" style="height: 40px;">
-      <button onclick="sessionStorage.removeItem('adminLoggedIn'); sessionStorage.removeItem('valmontAdminKey'); window.location.href='/admin-login.html'" style="background:transparent;border:1px solid #f58c14;color:#f58c14;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700;">Logout</button>
+      <button onclick="adminLogout()" style="background:transparent;border:1px solid #f58c14;color:#f58c14;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:700;">Logout</button>
     </div>
     <!-- Row 2: Tabs under the logo -->
     <nav style="display:flex;gap:4;">
@@ -293,7 +319,7 @@
 
     async function fetchDashboardData() {
       try {
-        const res = await fetch('/api/transactions', { headers: { 'Cache-Control': 'no-cache' } });
+        const res = await adminFetch('/api/transactions', { headers: { 'Cache-Control': 'no-cache' } });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const payload = await res.json();
@@ -337,7 +363,7 @@
       errorEl.classList.add('hidden');
       metaEl.classList.add('hidden');
 
-      fetch('/api/v1/transaction/initialize', {
+      adminFetch('/api/v1/transaction/initialize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, amount, merchant })
@@ -390,7 +416,7 @@
       const select = document.getElementById('skuSelect');
       if (!select) return;
       try {
-        const res = await fetch('/api/v1/payment-link/catalogue', { cache: 'no-store' });
+        const res = await adminFetch('/api/v1/payment-link/catalogue', { cache: 'no-store' });
         const json = await res.json();
         serviceCatalogue = (json.data && json.data.items) || [];
         if (!serviceCatalogue.length) {
@@ -433,7 +459,7 @@
 
       try {
         // NOTE: no amount in this body. The server prices the SKU.
-        const res = await fetch('/api/v1/payment-link', {
+        const res = await adminFetch('/api/v1/payment-link', {
           method: 'POST',
           headers: adminHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ sku, email })
@@ -475,7 +501,7 @@
     // ─── Webhook Settings ──────────────────────────────────────────────
     async function loadTenantList() {
       try {
-        const res = await fetch('/api/tenants');
+        const res = await adminFetch('/api/tenants');
         const json = await res.json();
         return (json.data || []);
       } catch (err) {
@@ -505,7 +531,7 @@
       status.textContent = 'Loading…';
       status.className = 'mt-3 text-[11px] text-gray-500 font-medium';
       try {
-        const res = await fetch('/api/tenants/' + encodeURIComponent(key));
+        const res = await adminFetch('/api/tenants/' + encodeURIComponent(key));
         const json = await res.json();
         if (json.data) {
           input.value = json.data.webhook_url || '';
@@ -545,7 +571,7 @@
       status.className = 'mt-3 text-[11px] text-gray-500 font-medium';
 
       try {
-        const res = await fetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
+        const res = await adminFetch('/api/tenants/' + encodeURIComponent(key) + '/webhook', {
           method: 'PUT',
           headers: adminHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ webhook_url: url })

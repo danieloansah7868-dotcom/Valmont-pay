@@ -294,7 +294,10 @@ try {
   await check('the dashboard Stage 1 / Full Link panel stays wired to the admin SKU endpoint', async () => {
     const dashboard = fs.readFileSync(new URL('../dashboard.html', import.meta.url), 'utf8');
     assert.match(dashboard, /Valmont Web Services — Issue Stage 1 \/ Full Link/);
-    assert.match(dashboard, /fetch\('\/api\/v1\/payment-link'/);
+    // adminFetch() is the session-aware fetch wrapper (sends the httpOnly
+    // admin cookie, redirects to login on 401). Either spelling is fine —
+    // what matters is that the panel calls the ADMIN endpoint.
+    assert.match(dashboard, /(?:admin)?[Ff]etch\('\/api\/v1\/payment-link'/);
     assert.match(dashboard, /body: JSON\.stringify\(\{ sku, email \}\)/);
     assert.doesNotMatch(dashboard, /body: JSON\.stringify\(\{ sku, email, amount/);
   });
