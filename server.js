@@ -2154,8 +2154,11 @@ app.post('/api/admin/tenants', async (req, res) => {
   const effective = tenants.applyDbTenant(result.raw ? tenantStore.rowToTenant(result.raw) : null);
   res.status(201).json({
     status: true,
-    message: 'Tenant created',
+    message: Array.isArray(result.migrationPending)
+      ? `Tenant created. Warning: the database is missing the ${result.migrationPending.join(' and ')} column(s), so per-tenant receipt routing is unavailable until you run the migration in scripts/supabase-tenants-schema.sql.`
+      : 'Tenant created',
     data: tenants.sanitiseTenant(effective),
+    migrationPending: result.migrationPending || null,
     // Send secrets back ONCE so the admin can copy them — they're never shown again
     secrets: result.rawSecrets || null
   });

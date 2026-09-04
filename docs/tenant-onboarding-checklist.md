@@ -142,6 +142,21 @@ Tenants now carry `notification_phone` / `notification_email` (new nullable colu
 
 ## 4. Runbook: adding a tenant
 
+### Step 0 — deploy prerequisites (once)
+
+Two things must be true in production before the first new tenant:
+
+1. **Run the notification migration** in Supabase → SQL Editor:
+   ```sql
+   alter table public.tenants add column if not exists notification_email text;
+   alter table public.tenants add column if not exists notification_phone text;
+   ```
+   (That block is at the top of `scripts/supabase-tenants-schema.sql`; it is safe to re-run.)
+
+   If you deploy the code *without* it, tenant creation still works — the store retries the write without the new columns and the admin UI shows a **⚠ Database migration pending** banner naming what is missing. Per-tenant receipts just fall back to the gateway-wide target. It will not block onboarding.
+
+2. **Settle the shared dev credential** — run the diagnostic in [`docs/key-rotation.md` § 1](key-rotation.md#1-is-the-valmont-electricals-dev-credential-live-right-now). Do this *before* adding a merchant, not after, so you are not rotating keys while a new integration is mid-rollout.
+
 ### Before you start — collect these
 
 - [ ] **Slug** — lowercase, 2–63 chars, letters/numbers/hyphens, must start with a letter or digit (e.g. `new-shop`)

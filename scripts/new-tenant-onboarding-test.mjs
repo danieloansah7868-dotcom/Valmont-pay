@@ -215,6 +215,71 @@ for (const slug of badSlugs) {
 check((await tenantStore.createTenant({ key: 'ab', display_name: 'Two Chars' })).ok === true, 'a 2-character slug is accepted');
 check((await tenantStore.createTenant({ key: 'a'.repeat(63), display_name: 'Long' })).ok === true, 'a 63-character slug is accepted');
 
+console.log('\n# Creating a tenant must not depend on the newest migration');
+
+// The notification columns were added after the first tenants existed. If a
+// deployment ships the code before the migration is run, PostgREST rejects
+// the upsert — and onboarding a merchant is exactly when that would bite.
+function stubMissingColumnClient() {
+  let attempts = 0;
+  return {
+    from(table) {
+      assert.equal(table, 'tenants');
+      const self = {
+        upsert(record) { self._pending = { op: 'upsert', record }; return self; },
+        update(patch) { self._pending = { op: 'update', patch }; return self; },
+        eq() { return self; },
+        order() { return self; },
+        select() { return self; },
+        single() { return self; },
+        then(resolve) {
+          attempts += 1;
+          const p = self._pending || {};
+          // Old schema: the notification columns do not exist yet.
+          if (p.op === 'upsert' && 'notification_email' in p.record) {
+            return Promise.resolve({
+              data: null,
+              error: {
+                message: "Could not find the 'notification_email' column of 'tenants' in the schema cache"
+              }
+            }).then(resolve);
+          }
+          const row = { id: `uuid-legacy-${attempts}`, ...p.record };
+          rows.push(row);
+          return Promise.resolve({ data: row, error: null }).then(resolve);
+        }
+      };
+      return self;
+    }
+  };
+}
+
+tenantStore.setSupabaseClient(stubMissingColumnClient());
+const legacy = await tenantStore.createTenant({
+  key: 'pre-migration-shop',
+  display_name: 'Pre Migration Shop',
+  notification_email: 'shop@example.com',
+  notification_phone: '0244000002'
+});
+tenantStore.setSupabaseClient(stubClient());
+
+check(legacy.ok === true, 'a tenant is still created when the notification columns are missing');
+check(
+  Array.isArray(legacy.migrationPending) && legacy.migrationPending.includes('notification_email'),
+  'the caller is told which columns the database is missing'
+);
+// Exactly what POST /api/admin/tenants does after the write.
+tenants.applyDbTenant(tenantStore.rowToTenant(legacy.raw));
+check(
+  tenants.getTenant('pre-migration-shop') !== undefined,
+  'the tenant is usable immediately, before the migration is run'
+);
+check(
+  tenants.getTenantBySecretKey(legacy.rawSecrets.secret_key_1)
+    === tenants.getTenant('pre-migration-shop'),
+  'and its issued secret key already authenticates'
+);
+
 console.log('\n# Key rotation must survive a cold start');
 
 // This is the regression guard for the bug this audit found:

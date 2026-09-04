@@ -238,6 +238,11 @@
           </div>
         </div>
 
+        <div id="migrationBox" class="hidden card p-4 border border-amber-800/40 bg-amber-950/20">
+          <h3 class="text-xs font-black text-amber-400 uppercase tracking-widest mb-2">⚠ Database migration pending</h3>
+          <p class="text-[11px] text-gray-400">The tenant was created, but this column<span data-plural="s"> is</span> missing from <span class="mono">public.tenants</span>: <span id="migrationColumns" class="mono text-amber-300"></span>. Per-tenant receipt routing will fall back to the gateway-wide target until you run it. See <span class="mono">scripts/supabase-tenants-schema.sql</span>.</p>
+        </div>
+
         <div id="secretsBox" class="hidden card p-4 border border-green-800/40 bg-green-950/20">
           <h3 class="text-xs font-black text-green-400 uppercase tracking-widest mb-2">🔑 Tenant Credentials — Save These Now!</h3>
           <p class="text-[11px] text-gray-400 mb-3">These are shown ONCE. Copy them to a secure place; the secret key will not be displayed again.</p>
@@ -393,6 +398,7 @@
       document.getElementById('f_status').value = 'active';
       document.getElementById('f_key').disabled = false;
       document.getElementById('secretsBox').classList.add('hidden');
+      document.getElementById('migrationBox').classList.add('hidden');
       clearError();
     }
 
@@ -431,6 +437,14 @@
       } catch (err) {
         alert('Error loading tenant: ' + err.message);
       }
+    }
+
+    function showMigrationWarning(columns) {
+      const box = document.getElementById('migrationBox');
+      const list = document.getElementById('migrationColumns');
+      if (!box || !list) return;
+      list.textContent = columns.join(', ');
+      box.classList.remove('hidden');
     }
 
     function closeModal() {
@@ -488,6 +502,13 @@
           btn.disabled = false;
           btn.textContent = originalKey ? 'Save Changes' : 'Create Tenant';
           return;
+        }
+
+        // A missing migration is worth shouting about: the tenant exists and
+        // takes payments, but per-tenant receipts silently go to the gateway
+        // target instead of the merchant.
+        if (json.migrationPending && json.migrationPending.length) {
+          showMigrationWarning(json.migrationPending);
         }
 
         // If created, show the secrets ONCE
