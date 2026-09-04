@@ -32,6 +32,7 @@ import fs from 'node:fs';
 let BASE = process.env.TEST_BASE_URL || null;
 
 let child = null;
+let selfHosted = false;
 
 async function waitForHealth(base, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
@@ -53,10 +54,30 @@ async function startServer() {
   const base = `http://127.0.0.1:${port}`;
 
   const childEnv = { ...process.env };
+
   // A stray VERCEL/VERCEL_ENV from the developer's shell must not make the
   // child behave like a deployment (see NODE_ENV below).
   delete childEnv.VERCEL;
   delete childEnv.VERCEL_ENV;
+
+  // CRITICAL: never let the test server touch a real database.
+  //
+  // CI passes SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY in as secrets. Inherited
+  // by this child they would make it boot against PRODUCTION: refreshFromDb()
+  // would load real tenants, and the webhook-update and rotate-keys tests
+  // would then write to live merchant rows — rotating a real API secret and
+  // repointing a real webhook URL. A smoke test must never be able to do that.
+  const inheritedDatabase = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY']
+    .filter(name => childEnv[name]);
+  for (const name of ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY']) {
+    delete childEnv[name];
+  }
+  if (inheritedDatabase.length) {
+    console.log(
+      `  ⚠ Database credentials were present in this environment (${inheritedDatabase.join(', ')}). ` +
+      'They have been stripped from the test server so it runs offline.'
+    );
+  }
 
   child = spawn(process.execPath, ['server.js'], {
     cwd: new URL('..', import.meta.url).pathname,
@@ -75,10 +96,15 @@ async function startServer() {
       // or VERCEL set would make the gateway drop its dev credentials and
       // lock the admin endpoints, and the run would fail for the wrong
       // reason. The child is always "a laptop".
-      NODE_ENV: 'test'
+      NODE_ENV: 'test',
+      // Belt and braces: mark the process so nothing downstream mistakes it
+      // for a real deployment.
+      VALMONTPAY_TEST_SERVER: '1'
     },
     stdio: ['ignore', 'ignore', 'inherit']
   });
+
+  selfHosted = true;
 
   if (!(await waitForHealth(base))) {
     child.kill('SIGKILL');
@@ -144,6 +170,27 @@ const testMerchantAFixtureKey = 'test-merchant-a-fixture-key';
 const testMerchantASecretKey = 'test-merchant-a-fixture-key';
 const testMerchantAKey = 'test-merchant-a';
 const invalidSecretKey = 'sk_test_invalid_key_that_does_not_exist';
+
+test('0. the server under test must NOT be connected to a real database', async () => {
+  // Guards the guard. If this suite ever runs against a server that has live
+  // database credentials, the webhook-update and rotate-keys tests would write
+  // to real merchant rows. Refuse to continue if that ever happens.
+  if (!selfHosted) {
+    console.log('  · skipped (TEST_BASE_URL points at a server this script did not start)');
+    return;
+  }
+
+  const res = await fetch(`${BASE}/api/health`);
+  const json = await res.json();
+  const configured = Boolean(json && json.supabase && json.supabase.configured);
+
+  assert('health endpoint answers', res.status === 200 || res.status === 503);
+  assert(
+    'the test server has no database connection — tests 13 and 14 can never write to production',
+    configured === false,
+    `supabase.configured=${configured}`
+  );
+});
 
 test('1. GET /api/tenants — lists tenants', async () => {
   const res = await fetch(`${BASE}/api/tenants`);
