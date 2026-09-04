@@ -13,9 +13,110 @@
  *   9. GET /api/transaction/return redirect
  *  10. Cross-tenant isolation (404 not 403)
  *  11. Callback URL validation
+ *
+ * Run it:  node scripts/multi-tenant-smoke-test.mjs
+ *
+ * By default it boots its OWN server on a spare port with the test-merchant-a
+ * fixture loaded, runs every test against it, and shuts it down. Point it at
+ * an already-running deployment instead with TEST_BASE_URL=… (in that case
+ * nothing is started or stopped).
+ *
+ * Every run needs a FRESH server: test 14 rotates valmont-electricals' API
+ * secret in memory, so a second run against the same process legitimately
+ * fails the "old key still works during rotation" check.
  */
 
-const BASE = process.env.TEST_BASE_URL || 'http://localhost:3000';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+
+let BASE = process.env.TEST_BASE_URL || null;
+
+let child = null;
+let selfHosted = false;
+
+async function waitForHealth(base, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${base}/api/health`);
+      if (res.ok || res.status === 503) return true; // 503 still means it's up
+    } catch (_) {
+      // not listening yet
+    }
+    await new Promise(r => setTimeout(r, 150));
+  }
+  return false;
+}
+
+async function startServer() {
+  const port = 4500 + Math.floor(Math.random() * 400);
+  const fixture = fs.readFileSync(new URL('./fixtures/test-merchant-a.json', import.meta.url), 'utf8');
+  const base = `http://127.0.0.1:${port}`;
+
+  const childEnv = { ...process.env };
+
+  // A stray VERCEL/VERCEL_ENV from the developer's shell must not make the
+  // child behave like a deployment (see NODE_ENV below).
+  delete childEnv.VERCEL;
+  delete childEnv.VERCEL_ENV;
+
+  // CRITICAL: never let the test server touch a real database.
+  //
+  // CI passes SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY in as secrets. Inherited
+  // by this child they would make it boot against PRODUCTION: refreshFromDb()
+  // would load real tenants, and the webhook-update and rotate-keys tests
+  // would then write to live merchant rows — rotating a real API secret and
+  // repointing a real webhook URL. A smoke test must never be able to do that.
+  const inheritedDatabase = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY']
+    .filter(name => childEnv[name]);
+  for (const name of ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY']) {
+    delete childEnv[name];
+  }
+  if (inheritedDatabase.length) {
+    console.log(
+      `  ⚠ Database credentials were present in this environment (${inheritedDatabase.join(', ')}). ` +
+      'They have been stripped from the test server so it runs offline.'
+    );
+  }
+
+  child = spawn(process.execPath, ['server.js'], {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: {
+      ...childEnv,
+      PORT: String(port),
+      // Offline posture: no database, no real Paystack credential, no admin
+      // password (so /api/admin/* stays open, exactly like local dev).
+      PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY || 'sk_test_offline_smoke',
+      TENANTS_JSON: fixture,
+      // Pins the fixture tenant's secret through the environment, using the
+      // same value the fixture carries so the other tests keep working. This
+      // is what makes test 20 able to prove the rotate guard fires.
+      TENANT__TEST_MERCHANT_A__SECRET_KEY_1: testMerchantAFixtureKey,
+      // Force the local posture. A developer shell with NODE_ENV=production
+      // or VERCEL set would make the gateway drop its dev credentials and
+      // lock the admin endpoints, and the run would fail for the wrong
+      // reason. The child is always "a laptop".
+      NODE_ENV: 'test',
+      // Belt and braces: mark the process so nothing downstream mistakes it
+      // for a real deployment.
+      VALMONTPAY_TEST_SERVER: '1'
+    },
+    stdio: ['ignore', 'ignore', 'inherit']
+  });
+
+  selfHosted = true;
+
+  if (!(await waitForHealth(base))) {
+    child.kill('SIGKILL');
+    console.error(`✗ server did not become healthy on ${base}`);
+    process.exit(1);
+  }
+  return base;
+}
+
+function stopServer() {
+  if (child) child.kill('SIGTERM');
+}
 
 let passed = 0;
 let failed = 0;
@@ -33,27 +134,63 @@ function assert(label, condition, detail) {
   }
 }
 
-async function test(name, fn) {
-  console.log(`\n━━━ ${name} ━━━`);
-  try {
-    await fn();
-  } catch (err) {
-    failed++;
-    const msg = `  ✗ EXCEPTION: ${err.message}`;
-    console.error(msg);
-    errors.push(msg);
+// Tests are QUEUED, not run on call. The previous version called `test(...)`
+// fire-and-forget and printed the summary synchronously, so the process exited
+// with "0 passed, 0 failed — All tests passed!" while every assertion was
+// still in flight. Nothing in this file was ever actually verified.
+const queue = [];
+
+function test(name, fn) {
+  queue.push({ name, fn });
+}
+
+async function runQueue() {
+  for (const { name, fn } of queue) {
+    console.log(`\n━━━ ${name} ━━━`);
+    try {
+      await fn();
+    } catch (err) {
+      failed++;
+      const msg = `  ✗ EXCEPTION: ${err.message}`;
+      console.error(msg);
+      errors.push(msg);
+    }
   }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────
 
 const testSecretKey = 'vme_secret_dev_key_1';
+// Kept identical to the value in scripts/fixtures/test-merchant-a.json and
+// pinned through the environment in startServer() — see test 20.
+const testMerchantAFixtureKey = 'test-merchant-a-fixture-key';
 // Test-only second merchant. Start the smoke-test server with
 // TENANTS_JSON="$(cat scripts/fixtures/test-merchant-a.json)"; this fixture
 // is intentionally never part of lib/tenants.js production defaults.
 const testMerchantASecretKey = 'test-merchant-a-fixture-key';
 const testMerchantAKey = 'test-merchant-a';
 const invalidSecretKey = 'sk_test_invalid_key_that_does_not_exist';
+
+test('0. the server under test must NOT be connected to a real database', async () => {
+  // Guards the guard. If this suite ever runs against a server that has live
+  // database credentials, the webhook-update and rotate-keys tests would write
+  // to real merchant rows. Refuse to continue if that ever happens.
+  if (!selfHosted) {
+    console.log('  · skipped (TEST_BASE_URL points at a server this script did not start)');
+    return;
+  }
+
+  const res = await fetch(`${BASE}/api/health`);
+  const json = await res.json();
+  const configured = Boolean(json && json.supabase && json.supabase.configured);
+
+  assert('health endpoint answers', res.status === 200 || res.status === 503);
+  assert(
+    'the test server has no database connection — tests 13 and 14 can never write to production',
+    configured === false,
+    `supabase.configured=${configured}`
+  );
+});
 
 test('1. GET /api/tenants — lists tenants', async () => {
   const res = await fetch(`${BASE}/api/tenants`);
@@ -271,10 +408,29 @@ test('13. PUT /api/tenants/{key}/webhook — update webhook URL', async () => {
   });
   const json = await res.json();
 
+  // The endpoint persists to Supabase FIRST and only then syncs memory, so
+  // without a database the correct behaviour is a loud 503 — never a fake
+  // success. Assert whichever contract the environment is actually running.
+  const noDatabase = res.status === 503 && /Supabase is not configured/i.test(json.message || '');
+
+  if (noDatabase) {
+    // ── Offline contract: refuse, and leave the built-in URL untouched ──
+    assert('returns 503 when Supabase is not configured', res.status === 503);
+    assert('explains why it refused', /Supabase is not configured/i.test(json.message || ''));
+
+    const checkRes = await fetch(`${BASE}/api/tenants/valmont-electricals`);
+    const checkJson = await checkRes.json();
+    assert(
+      'refuses to pretend the write succeeded (URL unchanged)',
+      checkJson.data.webhook_url === 'https://valmontelectricals.com/api/valmontpay/webhook'
+    );
+    return;
+  }
+
+  // ── Database contract: persist, then report the effective value ──
   assert('returns 200', res.status === 200);
   assert('status true', json.status === true);
 
-  // Verify it was saved
   const checkRes = await fetch(`${BASE}/api/tenants/valmont-electricals`);
   const checkJson = await checkRes.json();
   assert('webhook URL persisted', checkJson.data.webhook_url === testUrl);
@@ -286,34 +442,44 @@ test('14. POST /api/tenants/{key}/rotate-keys — rotate API secrets', async () 
   });
   const json = await res.json();
 
+  // Rotation must be DURABLE. It is persisted to Supabase first, so without a
+  // database the correct answer is a loud 503 — an in-memory-only rotation
+  // would let a "revoked" credential come back at the next cold start.
+  const noDatabase = res.status === 503 && /not rotated/i.test(json.message || '');
+
+  if (noDatabase) {
+    assert('returns 503 when rotation cannot be persisted', res.status === 503);
+    assert('says the keys were NOT rotated', /not rotated/i.test(json.message || ''));
+
+    const oldKeyRes = await fetch(`${BASE}/api/transaction/initialize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${testSecretKey}`
+      },
+      body: JSON.stringify({ amount: 10, email: 'rotate@test.com', callback_url: 'https://valmontweb.com/return' })
+    });
+    assert('the existing key is still untouched', oldKeyRes.status === 200);
+    return;
+  }
+
   assert('returns 200', res.status === 200);
   assert('status true', json.status === true);
   assert('has secret_key_1', json.data && json.data.secret_key_1);
   assert('has secret_key_2', json.data && json.data.secret_key_2);
   assert('keys are different', json.data.secret_key_1 !== json.data.secret_key_2);
 
-  // Both old and new keys should work during rotation
-  const oldKeyRes = await fetch(`${BASE}/api/transaction/initialize`, {
+  const init = (key) => fetch(`${BASE}/api/transaction/initialize`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${testSecretKey}` // old key
-    },
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
     body: JSON.stringify({ amount: 10, email: 'rotate@test.com', callback_url: 'https://valmontweb.com/return' })
   });
-  assert('old key still works during rotation', oldKeyRes.status === 200);
 
-  const newKeyRes = await fetch(`${BASE}/api/transaction/initialize`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${json.data.secret_key_1}` // new key (was secret_1/old is now secret_2)
-    },
-    body: JSON.stringify({ amount: 10, email: 'rotate@test.com', callback_url: 'https://valmontweb.com/return' })
-  });
-  // Note: after rotation, secret_key_1 is the old second key, but let's just
-  // check one of them works
-  assert('at least one new key works', oldKeyRes.status === 200 || newKeyRes.status === 200);
+  const newKeyRes = await init(json.data.secret_key_1);
+  assert('the new secret_key_1 works immediately', newKeyRes.status === 200);
+
+  const oldKeyRes = await init(json.data.secret_key_2);
+  assert('the previous key (now secret_key_2) still works during rotation', oldKeyRes.status === 200);
 });
 
 test('15. GET /api/transaction/return — valid redirect', async () => {
@@ -397,7 +563,44 @@ test('19. POST /api/transaction/initialize — valid domain in callback_url pass
   assert('returns 200 for subdomain of allowed domain', res.status === 200);
 });
 
+test('20. POST /api/tenants/{key}/rotate-keys — refuses when the environment pins the key', async () => {
+  // test-merchant-a has TENANT__TEST_MERCHANT_A__SECRET_KEY_1 set, which
+  // overrides the database entirely. Rotating it would write a new key and
+  // change nothing — the operator would walk away believing a credential was
+  // revoked. The API must refuse instead.
+  const res = await fetch(`${BASE}/api/admin/tenants/test-merchant-a/rotate-keys`, {
+    method: 'POST'
+  });
+  const json = await res.json();
+
+  assert('refuses with 409', res.status === 409);
+  assert('says why', json.code === 'KEYS_PINNED_BY_ENV');
+  assert('names the variable', (json.pinned_env_vars || []).includes('TENANT__TEST_MERCHANT_A__SECRET_KEY_1'));
+  assert('explains that nothing changed', /change nothing/i.test(json.message || ''));
+
+  // An unpinned tenant must still rotate normally.
+  const unlocked = await fetch(`${BASE}/api/admin/tenants/valmont-electricals/rotate-keys`, {
+    method: 'POST'
+  });
+  assert('an unpinned tenant is not blocked', unlocked.status === 503 || unlocked.status === 200);
+});
+
 // ─── Summary ─────────────────────────────────────────────────────────────
+
+BASE = BASE || (await startServer());
+
+try {
+  await runQueue();
+} finally {
+  stopServer();
+}
+
+if (passed + failed === 0) {
+  // A silent no-op is worse than a red run: it is the exact bug this file
+  // used to have. Refuse to report success for a run that verified nothing.
+  console.error('\n✗ No assertions ran — refusing to report success.');
+  process.exit(1);
+}
 
 console.log(`\n\n══════════════════════════════════════════`);
 console.log(`  Results: ${passed} passed, ${failed} failed`);

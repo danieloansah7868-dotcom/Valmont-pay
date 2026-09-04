@@ -202,6 +202,32 @@
           </div>
         </div>
 
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="input-label">Notification Phone</label>
+            <input id="f_notification_phone" type="text" placeholder="0244000000" class="input-field mono">
+            <p class="text-[10px] text-gray-500 mt-1">This merchant's own receipt SMS/WhatsApp number. Blank uses the gateway-wide number.</p>
+          </div>
+          <div>
+            <label class="input-label">Notification Email</label>
+            <input id="f_notification_email" type="email" placeholder="merchant@example.com" class="input-field mono">
+            <p class="text-[10px] text-gray-500 mt-1">Receipt email for this merchant. Blank uses the gateway-wide address.</p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="input-label">Own Paystack Secret Key (optional)</label>
+            <input id="f_paystack_secret_key" type="password" placeholder="sk_live_…" class="input-field mono" autocomplete="off">
+            <p class="text-[10px] text-gray-500 mt-1">Leave blank to charge on the gateway's Paystack account. Fill in only if this merchant has their own.</p>
+          </div>
+          <div>
+            <label class="input-label">Own Paystack Public Key (optional)</label>
+            <input id="f_paystack_public_key" type="password" placeholder="pk_live_…" class="input-field mono" autocomplete="off">
+            <p class="text-[10px] text-gray-500 mt-1">Belongs to the secret key above. Blank on edit leaves the stored value untouched.</p>
+          </div>
+        </div>
+
         <div>
           <label class="input-label">Allowed Domains (comma-separated)</label>
           <input id="f_allowed_domains" type="text" placeholder="valmontelectricals.com,valmontpay.app,localhost" class="input-field mono">
@@ -212,9 +238,10 @@
           <div>
             <label class="input-label">Environment</label>
             <select id="f_environment" class="input-field">
-              <option value="test" selected>Test</option>
-              <option value="live">Live</option>
+              <option value="live" selected>Live</option>
+              <option value="test">Test</option>
             </select>
+            <p class="text-[10px] text-gray-500 mt-1">Label only. Payment mode is decided by the Paystack key itself (sk_test_… / sk_live_…), never by this field.</p>
           </div>
           <div>
             <label class="input-label">Status</label>
@@ -223,6 +250,11 @@
               <option value="disabled">Disabled</option>
             </select>
           </div>
+        </div>
+
+        <div id="migrationBox" class="hidden card p-4 border border-amber-800/40 bg-amber-950/20">
+          <h3 class="text-xs font-black text-amber-400 uppercase tracking-widest mb-2">⚠ Database migration pending</h3>
+          <p class="text-[11px] text-gray-400">The tenant was created, but this column<span data-plural="s"> is</span> missing from <span class="mono">public.tenants</span>: <span id="migrationColumns" class="mono text-amber-300"></span>. Per-tenant receipt routing will fall back to the gateway-wide target until you run it. See <span class="mono">scripts/supabase-tenants-schema.sql</span>.</p>
         </div>
 
         <div id="secretsBox" class="hidden card p-4 border border-green-800/40 bg-green-950/20">
@@ -339,6 +371,9 @@
                 : `<span class="text-gray-600 italic text-[11px]">(not set)</span>`}
             </td>
             <td><span class="badge ${t.environment === 'live' ? 'badge-live' : 'badge-test'}">${esc(t.environment || 'test')}</span></td>
+            ${t.rotation_blocked_by_env
+              ? `<td><span class="badge" style="background:rgba(251,191,36,.15);color:#fbbf24;border:1px solid rgba(251,191,36,.4)" title="Keys are set in the deployment environment: ${esc((t.keys_pinned_by_env || []).join(', '))}. Rotate by editing that variable.">env-pinned</span></td>`
+              : '<td></td>'}
             <td><span class="badge ${t.status === 'active' ? 'badge-active' : 'badge-disabled'}">${esc(t.status || 'active')}</span></td>
             <td class="text-gray-500 text-[11px]">${fmtDate(t.created_at)}</td>
             <td class="text-right whitespace-nowrap">
@@ -368,12 +403,21 @@
       document.getElementById('f_brand_color').value = '#f68b1e';
       document.getElementById('f_currency').value = 'GHS';
       document.getElementById('f_paystack_subaccount').value = '';
+      document.getElementById('f_paystack_secret_key').value = '';
+      document.getElementById('f_paystack_public_key').value = '';
       document.getElementById('f_settlement_account').value = '';
-      document.getElementById('f_allowed_domains').value = 'localhost';
-      document.getElementById('f_environment').value = 'test';
+      document.getElementById('f_notification_phone').value = '';
+      document.getElementById('f_notification_email').value = '';
+      // 'localhost' alone is a trap: an operator who accepts the default ships
+      // a tenant whose production callback_url is rejected with
+      // "Domain … is not in the allowlist for this merchant". valmontpay.app
+      // is always a legal callback target, so it is seeded here by default.
+      document.getElementById('f_allowed_domains').value = 'localhost,valmontpay.app';
+      document.getElementById('f_environment').value = 'live';
       document.getElementById('f_status').value = 'active';
       document.getElementById('f_key').disabled = false;
       document.getElementById('secretsBox').classList.add('hidden');
+      document.getElementById('migrationBox').classList.add('hidden');
       clearError();
     }
 
@@ -403,6 +447,8 @@
         document.getElementById('f_currency').value = t.currency || 'GHS';
         document.getElementById('f_paystack_subaccount').value = t.paystack_subaccount || '';
         document.getElementById('f_settlement_account').value = t.settlement_account || '';
+      document.getElementById('f_notification_phone').value = t.notification_phone || '';
+      document.getElementById('f_notification_email').value = t.notification_email || '';
         document.getElementById('f_allowed_domains').value = (t.allowed_domains || []).join(',');
         document.getElementById('f_environment').value = t.environment || 'test';
         document.getElementById('f_status').value = t.status || (t.disabled ? 'disabled' : 'active');
@@ -410,6 +456,14 @@
       } catch (err) {
         alert('Error loading tenant: ' + err.message);
       }
+    }
+
+    function showMigrationWarning(columns) {
+      const box = document.getElementById('migrationBox');
+      const list = document.getElementById('migrationColumns');
+      if (!box || !list) return;
+      list.textContent = columns.join(', ');
+      box.classList.remove('hidden');
     }
 
     function closeModal() {
@@ -428,6 +482,10 @@
       const settlement_account = document.getElementById('f_settlement_account').value.trim();
       const allowed_domains = document.getElementById('f_allowed_domains').value
         .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      const paystack_secret_key = document.getElementById('f_paystack_secret_key').value.trim();
+      const paystack_public_key = document.getElementById('f_paystack_public_key').value.trim();
+      const notification_phone = document.getElementById('f_notification_phone').value.trim();
+      const notification_email = document.getElementById('f_notification_email').value.trim();
       const environment = document.getElementById('f_environment').value;
       const status = document.getElementById('f_status').value;
 
@@ -449,14 +507,28 @@
           res = await adminFetch('/api/admin/tenants/' + encodeURIComponent(originalKey), {
             method: 'PUT',
             headers: adminHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, environment, status })
+            body: JSON.stringify({
+              display_name, webhook_url, brand_color, currency, paystack_subaccount,
+              settlement_account, allowed_domains, notification_phone, notification_email,
+              environment, status,
+              // Omitted when blank so editing some other field cannot wipe a
+              // stored credential.
+              ...(paystack_secret_key ? { paystack_secret_key } : {}),
+              ...(paystack_public_key ? { paystack_public_key } : {})
+            })
           });
         } else {
           // Create
           res = await adminFetch('/api/admin/tenants', {
             method: 'POST',
             headers: adminHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ key, display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, environment, status })
+            body: JSON.stringify({
+              key, display_name, webhook_url, brand_color, currency, paystack_subaccount,
+              settlement_account, allowed_domains, notification_phone, notification_email,
+              environment, status,
+              ...(paystack_secret_key ? { paystack_secret_key } : {}),
+              ...(paystack_public_key ? { paystack_public_key } : {})
+            })
           });
         }
         json = await res.json();
@@ -465,6 +537,13 @@
           btn.disabled = false;
           btn.textContent = originalKey ? 'Save Changes' : 'Create Tenant';
           return;
+        }
+
+        // A missing migration is worth shouting about: the tenant exists and
+        // takes payments, but per-tenant receipts silently go to the gateway
+        // target instead of the merchant.
+        if (json.migrationPending && json.migrationPending.length) {
+          showMigrationWarning(json.migrationPending);
         }
 
         // If created, show the secrets ONCE
@@ -537,7 +616,19 @@
       try {
         const res = await adminFetch('/api/admin/tenants/' + encodeURIComponent(key) + '/rotate-keys', { method: 'POST', headers: adminHeaders() });
         const json = await res.json();
-        if (!json.status) { alert('Error: ' + json.message); return; }
+        if (!json.status) {
+          // A pinned tenant is not an error to dismiss — the operator came
+          // here to revoke a key and must leave knowing nothing happened.
+          if (json.code === 'KEYS_PINNED_BY_ENV') {
+            alert(
+              'Keys NOT rotated — nothing changed.\n\n' + json.message +
+              '\n\nSet in environment: ' + (json.pinned_env_vars || []).join(', ')
+            );
+          } else {
+            alert('Error: ' + json.message);
+          }
+          return;
+        }
         alert(
           'Keys rotated successfully!\n\n' +
           'New secret_key_1: ' + json.data.secret_key_1 + '\n' +

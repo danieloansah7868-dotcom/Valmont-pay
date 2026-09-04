@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node server.js",
     "verify:modules": "node scripts/verify-module-graph.mjs",
-    "test": "node scripts/verify-module-graph.mjs && node scripts/security.test.mjs && node scripts/tenant-configuration-test.mjs && node scripts/api-smoke-test.mjs && node scripts/dashboard-ledger-test.mjs && node scripts/webhook-supabase-test.mjs && node scripts/checkout-supabase-test.mjs && node scripts/webhook-diagnostics-test.mjs && node scripts/notifier-test.mjs && node scripts/pay-html-amount-validation.test.mjs && node scripts/pay-html-legacy-link-test.mjs && node scripts/service-link-api-test.mjs && node scripts/payment-link-store-test.mjs && node scripts/mandate-store-test.mjs && node scripts/mandate-api-test.mjs",
+    "test:onboarding": "node scripts/new-tenant-onboarding-test.mjs",
+    "test:multi-tenant": "node scripts/multi-tenant-smoke-test.mjs",
+    "test:paystack": "node scripts/per-tenant-paystack-test.mjs",
+    "test": "node scripts/verify-module-graph.mjs && node scripts/security.test.mjs && node scripts/tenant-configuration-test.mjs && node scripts/new-tenant-onboarding-test.mjs && node scripts/per-tenant-paystack-test.mjs && node scripts/multi-tenant-smoke-test.mjs && node scripts/api-smoke-test.mjs && node scripts/dashboard-ledger-test.mjs && node scripts/webhook-supabase-test.mjs && node scripts/checkout-supabase-test.mjs && node scripts/webhook-diagnostics-test.mjs && node scripts/notifier-test.mjs && node scripts/pay-html-amount-validation.test.mjs && node scripts/pay-html-legacy-link-test.mjs && node scripts/service-link-api-test.mjs && node scripts/payment-link-store-test.mjs && node scripts/mandate-store-test.mjs && node scripts/mandate-api-test.mjs",
     "test:security": "node scripts/security.test.mjs"
   },
   "dependencies": {

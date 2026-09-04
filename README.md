@@ -166,6 +166,13 @@ curl "http://localhost:3000/api/verify-payment?reference=VP-123456"
 
 ### Tenant configuration precedence
 
+> **Adding a merchant?** Read
+> [`docs/tenant-onboarding-checklist.md`](docs/tenant-onboarding-checklist.md)
+> first. It records what a newly created tenant actually gets — an empty
+> `allowed_domains` (every `callback_url` is rejected until you set it), no
+> Paystack credential of its own, and `environment: test` — plus the
+> post-create verification commands.
+
 Every tenant consumer resolves one effective configuration object in
 `lib/tenants.js` — the tenant-list/admin APIs, Tenants UI, Dashboard Webhook
 Settings and outbound webhook forwarder cannot disagree:

@@ -33,6 +33,13 @@ create table if not exists public.tenants (
   updated_at       timestamptz not null default now()
 );
 
+-- Per-tenant receipt routing (added 2026-09-04). When set, a tenant's own
+-- receipt notifications go to THESE contacts instead of the gateway-wide
+-- MERCHANT_NOTIFICATION_* environment variables. NULL keeps the global target,
+-- which is the behaviour every existing tenant has today.
+alter table public.tenants add column if not exists notification_email text;
+alter table public.tenants add column if not exists notification_phone text;
+
 -- Automatic updated_at trigger
 create or replace function public.touch_updated_at() returns trigger as $$
 begin new.updated_at = now(); return new; end;
@@ -85,8 +92,12 @@ insert into public.tenants as existing (
   null,
   'GCB Bank - 1234567890',
   array['valmontelectricals.com','valmontweb.com','valmontpay.app','localhost'],
-  'vme_secret_dev_key_1',
-  'vme_pub_dev_key_1',
+  -- NEVER seed a credential that also appears in this repository. A fresh
+  -- project gets a random secret here; read it out of this table (or hit
+  -- "Rotate keys" in /tenants.html, which shows the new value once) before
+  -- the first live payment. Existing rows are untouched by this migration.
+  encode(gen_random_bytes(24), 'hex'),
+  encode(gen_random_bytes(16), 'hex'),
   'active'
 )
 on conflict (key) do update set

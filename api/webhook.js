@@ -14,6 +14,7 @@ import notifierModule from '../lib/notifier.js';
 import tenantsModule from '../lib/tenants.js';
 import tenantWebhookForwarderModule from '../lib/tenant-webhook-forwarder.js';
 import mandateStoreModule from '../lib/mandate-store.js';
+import paystackCredentials from '../lib/paystack-credentials.js';
 
 const { getSupabaseClient, supabaseConfigState } = supabaseModule;
 const { saveTransaction } = transactionStore;
@@ -159,6 +160,28 @@ function verifyWithVariants(rawBody, signature, secret, parsedBody) {
   }
 
   return { valid: false, matchedVariant: null, body: rawBody };
+}
+
+/**
+ * Verify against EVERY credential that could have signed the event.
+ *
+ * A tenant paying through its own Paystack account gets webhooks signed with
+ * that account's secret key, not the gateway's. Trying only the gateway key
+ * would reject those events as forgeries — the money is taken, the webhook is
+ * refused, and the payment never reaches the ledger.
+ *
+ * Every candidate is evaluated (no early return) so the duration does not
+ * reveal which key matched.
+ */
+function verifyWithVariantsAnySecret(rawBody, signature, parsedBody) {
+  let result = { valid: false, matchedVariant: null, body: rawBody };
+
+  for (const secret of paystackCredentials.webhookSecretCandidates()) {
+    const attempt = verifyWithVariants(rawBody, signature, secret, parsedBody);
+    if (attempt.valid && !result.valid) result = attempt;
+  }
+
+  return result;
 }
 
 /** Verify an HMAC SHA-512 signature without timing-sensitive string compares. */
@@ -416,7 +439,7 @@ export function createWebhookHandler({
         }
       }
 
-      const verification = verifyWithVariants(rawBody, signature, secret, parsedForVariants);
+      const verification = verifyWithVariantsAnySecret(rawBody, signature, parsedForVariants);
       const signatureIsValid = verification.valid;
 
       if (verification.valid && verification.matchedVariant && verification.matchedVariant !== 'exact') {
@@ -450,8 +473,9 @@ export function createWebhookHandler({
           requestId,
           'STEP 5/9 SIGNATURE',
           signature
-            ? 'signature mismatch. Either PAYSTACK_SECRET_KEY is from the wrong Paystack mode/account, ' +
-                'or the body was modified in transit.'
+            ? 'signature mismatch. No configured credential matches: check that PAYSTACK_SECRET_KEY ' +
+                '(or the paying tenant\u2019s own Paystack secret) belongs to the account/mode that ' +
+                'sent this event, or that the body was not modified in transit.'
             : 'no x-paystack-signature header was sent. A real Paystack webhook always includes one — this request ' +
                 'probably did not come from Paystack.'
         );

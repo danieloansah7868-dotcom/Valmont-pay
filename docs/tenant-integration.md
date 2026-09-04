@@ -5,6 +5,11 @@ with the Valmont-Pay gateway. It exists so every new client site ships
 the right URL, the right units, and the right security posture on the
 first try.
 
+> **Onboarding a new merchant (operator side)?** That is a separate job —
+> see [`docs/tenant-onboarding-checklist.md`](tenant-onboarding-checklist.md)
+> for creating the tenant record, its secrets, `allowed_domains`, webhook
+> URL and Paystack subaccount.
+
 > **You are looking at the v1 contract.** If a piece of sample code in
 > the broader repo disagrees with this file, this file is correct.
 

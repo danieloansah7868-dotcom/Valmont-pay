@@ -17,6 +17,7 @@ const transactionStore = require('./lib/transaction-store');
 const webhookLog = require('./lib/webhook-log');
 const webhookDiagnostics = require('./lib/webhook-diagnostics');
 const tenants = require('./lib/tenants');
+const paystackCredentials = require('./lib/paystack-credentials');
 const accessCodeStore = require('./lib/access-code-store');
 const webhookForwarder = require('./lib/tenant-webhook-forwarder');
 const notifier = require('./lib/notifier');
@@ -516,6 +517,11 @@ app.post('/api/initialize-payment', rateLimit.limit('payment-init', {
   // ──────────────────────────────────────────────────────────────────
   const accessCode = typeof body.access_code === 'string' ? body.access_code.trim() : '';
 
+  // Which Paystack account charges this payment? The tenant's, when it has
+  // one; otherwise the gateway's own credential (today's behaviour for every
+  // existing tenant).
+  let chargeTenant = null;
+
   if (accessCode) {
     const resolved = await paymentLinkStore.resolvePaymentLink(accessCode);
     const intent = resolved && resolved.payment;
@@ -554,6 +560,7 @@ app.post('/api/initialize-payment', rateLimit.limit('payment-init', {
     merchant = canonicalIntentKey || intent.tenant_key || intent.merchant_display_name || merchant;
     const intentTenant = tenants.getTenant(canonicalIntentKey || intent.tenant_key);
     subaccount = subaccount || (intentTenant && intentTenant.paystack_subaccount) || undefined;
+    chargeTenant = intentTenant || null;
   } else if (
     !legacyLinkPolicy.legacyAmountUrlAllowed() &&
     legacyLinkPolicy.refererIsLegacyAmountUrl(req.headers && req.headers.referer)
@@ -569,6 +576,14 @@ app.post('/api/initialize-payment', rateLimit.limit('payment-init', {
     return res.status(400).json({ success: false, error: 'Missing or invalid fields' });
   }
 
+  // No access code (dashboard-issued links) still resolves a tenant from the
+  // merchant name so its own Paystack account is used.
+  if (!chargeTenant && merchant) {
+    chargeTenant = tenants.getTenant(tenants.canonicalTenantKey(String(merchant)))
+      || tenants.getTenantByIdentifier(String(merchant))
+      || null;
+  }
+
   console.log('Reference:', reference);
 
   try {
@@ -579,6 +594,7 @@ app.post('/api/initialize-payment', rateLimit.limit('payment-init', {
       merchant,
       phone,
       subaccount,
+      secretKey: paystackCredentials.chargeSecret(chargeTenant),
       callback_url:
         callback_url ||
         `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(reference)}` +
@@ -608,15 +624,38 @@ app.post('/api/initialize-payment', rateLimit.limit('payment-init', {
 });
 
 app.get('/api/verify-payment', async (req, res) => {
-  const { reference } = req.query;
+  const { reference, merchant } = req.query;
   if (!reference) {
     return res.status(400).json({ status: false, message: 'Missing transaction reference' });
   }
 
   console.log('Reference:', reference);
 
+  // A reference only exists on the Paystack account that charged it, so
+  // verify against the same credential the charge used. Resolution order:
+  // an explicit ?merchant=, then the tenant already recorded against the
+  // reference in the ledger, then the gateway credential (unchanged
+  // behaviour for every tenant without its own account).
+  let verifyTenant = null;
+  if (merchant) {
+    verifyTenant = tenants.getTenant(tenants.canonicalTenantKey(String(merchant)))
+      || tenants.getTenantByIdentifier(String(merchant))
+      || null;
+  }
+  if (!verifyTenant) {
+    const known = ledger.findTransaction(reference);
+    if (known && known.merchant) {
+      verifyTenant = tenants.getTenantByIdentifier(known.merchant)
+        || tenants.getTenant(known.merchant)
+        || null;
+    }
+  }
+
   try {
-    const data = await verifyPayment(reference);
+    const data = await verifyPaymentWithKey(
+      reference,
+      paystackCredentials.chargeSecret(verifyTenant)
+    );
 
     const paystackTrx = data && data.data ? data.data : null;
     const isSuccess = Boolean(data && data.status && paystackTrx && paystackTrx.status === 'success');
@@ -2008,20 +2047,62 @@ app.put('/api/tenants/:key/webhook', requireAdmin, async (req, res) => {
 // in its response. It was previously unauthenticated — a full credential-
 // takeover primitive for any tenant. Admin-guarded now.
 
-app.post('/api/tenants/:key/rotate-keys', requireAdmin, (req, res) => {
+// ─── New: POST /api/tenants/{key}/rotate-keys — rotate API secrets ─────
+// CRITICAL: this endpoint returns freshly minted VALID tenant API secrets
+// in its response. It was previously unauthenticated — a full credential-
+// takeover primitive for any tenant. Admin-guarded now.
+//
+// It also used to rotate the in-memory registry ONLY. On a serverless
+// platform that rotation evaporated at the next cold start while the
+// database still held the old key — an operator could "revoke" a leaked
+// credential and have it silently come back to life. Rotation is now
+// persisted first, exactly like POST /api/admin/tenants/{key}/rotate-keys,
+// and fails loudly with 503 when there is no database to persist to.
+app.post('/api/tenants/:key/rotate-keys', requireAdmin, async (req, res) => {
   if (rejectLegacyTenantAliasWrite(req.params.key, res)) return;
-  const result = tenants.rotateTenantSecrets(tenants.canonicalTenantKey(req.params.key));
-  if (!result) {
+  const canonicalKey = tenants.canonicalTenantKey(req.params.key);
+  const pinnedTenant = tenants.getTenant(canonicalKey);
+
+  if (!pinnedTenant) {
     return res.status(404).json({ status: false, message: 'Tenant not found' });
   }
 
+  // REFUSE TO PRETEND. A pinned secret_1 means the database write below would
+  // succeed and change nothing, leaving the operator believing a leaked
+  // credential was revoked.
+  const pinned = tenants.envPinnedSecretVars(pinnedTenant);
+  if (pinned.blocksRotation) {
+    return res.status(409).json({
+      status: false,
+      code: 'KEYS_PINNED_BY_ENV',
+      message:
+        `This tenant's API secret is pinned by ${pinned.vars.join(' and ')} in the deployment ` +
+        'environment, which overrides the database. Rotating here would change nothing. ' +
+        'Edit that variable (and redeploy) to rotate this tenant — or unset it to hand ' +
+        'control back to the admin UI.',
+      pinned_env_vars: pinned.vars
+    });
+  }
+
+  const result = await tenantStore.rotateSecrets(canonicalKey);
+  if (!result.ok) {
+    return res.status(503).json({
+      status: false,
+      message: `Keys were NOT rotated: ${result.reason}`
+    });
+  }
+
+  tenants.updateTenantInMemory(canonicalKey, {
+    secret_keys: [result.secret_key_1, result.secret_key_2].filter(Boolean)
+  });
+
   res.status(200).json({
     status: true,
-    message: 'API keys rotated. Both old (secret_1) and new (secret_2) are valid.',
+    message: 'API keys rotated and saved. Both old (secret_2) and new (secret_1) are valid.',
     data: {
-      secret_key_1: result.secret_1,
-      secret_key_2: result.secret_2,
-      note: 'Keep both keys valid during rotation. Switch your integration to secret_key_2, then revoke secret_key_1.'
+      secret_key_1: result.secret_key_1,
+      secret_key_2: result.secret_key_2,
+      note: 'Keep both keys valid during rotation. Switch your integration to secret_key_1, then rotate again to drop secret_key_2.'
     }
   });
 });
@@ -2091,8 +2172,11 @@ app.post('/api/admin/tenants', async (req, res) => {
   const effective = tenants.applyDbTenant(result.raw ? tenantStore.rowToTenant(result.raw) : null);
   res.status(201).json({
     status: true,
-    message: 'Tenant created',
+    message: Array.isArray(result.migrationPending)
+      ? `Tenant created. Warning: the database is missing the ${result.migrationPending.join(' and ')} column(s), so per-tenant receipt routing is unavailable until you run the migration in scripts/supabase-tenants-schema.sql.`
+      : 'Tenant created',
     data: tenants.sanitiseTenant(effective),
+    migrationPending: result.migrationPending || null,
     // Send secrets back ONCE so the admin can copy them — they're never shown again
     secrets: result.rawSecrets || null
   });
@@ -2167,8 +2251,30 @@ app.post('/api/admin/tenants/:key/rotate-keys', async (req, res) => {
   const key = req.params.key;
   if (rejectLegacyTenantAliasWrite(key, res)) return;
   const canonicalKey = tenants.canonicalTenantKey(key);
+
+  // Same guard as the /api/tenants route: never rotate into a variable the
+  // environment is going to override anyway.
+  const pinned = tenants.envPinnedSecretVars(tenants.getTenant(canonicalKey));
+  if (pinned.blocksRotation) {
+    return res.status(409).json({
+      status: false,
+      code: 'KEYS_PINNED_BY_ENV',
+      message:
+        `This tenant's API secret is pinned by ${pinned.vars.join(' and ')} in the deployment ` +
+        'environment, which overrides the database. Rotating here would change nothing. ' +
+        'Edit that variable (and redeploy) to rotate this tenant — or unset it to hand ' +
+        'control back to the admin UI.',
+      pinned_env_vars: pinned.vars
+    });
+  }
+
   const result = await tenantStore.rotateSecrets(canonicalKey);
-  if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
+  if (!result.ok) {
+    // Match /api/tenants/{key}/rotate-keys: a rotation that could not be
+    // persisted is a server-side dependency failure (503), not a bad request.
+    const cannotPersist = /not configured|unavailable/i.test(result.reason || '');
+    return res.status(cannotPersist ? 503 : 400).json({ status: false, message: result.reason });
+  }
   tenants.updateTenantInMemory(canonicalKey, {
     secret_keys: [result.secret_key_1, result.secret_key_2].filter(Boolean)
   });
