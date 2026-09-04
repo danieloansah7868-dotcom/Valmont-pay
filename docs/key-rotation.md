@@ -40,7 +40,16 @@ Precedence is **env > database > in-code default**, so this overrides the databa
 > - **Pin in Vercel** — best for a small, fixed set of merchants. Simple, auditable, survives database edits. Rotation means editing the variable and redeploying (§ 2.1).
 > - **Rotate in the database** — best if operators manage merchants through `/tenants.html`. Leave the variable **unset**.
 
-### 2.1 Zero-downtime swap while pinned
+### 2.1 You do not have to remember any of this
+
+Once `SECRET_KEY_1` is pinned, the **Rotate keys** button in `/tenants.html` is a no-op for that tenant — the environment overrides whatever the database holds. Rather than leaving you to remember that:
+
+- the tenant row shows an amber **env-pinned** badge (hover it to see which variable), and
+- if you press **Rotate keys** anyway, the API refuses with `409` and the page tells you **"Keys NOT rotated — nothing changed"**, names the variable, and says to edit it instead.
+
+You cannot silently believe you rotated a key when you did not.
+
+### 2.2 Zero-downtime swap while pinned
 
 1. Set `TENANT__VALMONT_ELECTRICALS__SECRET_KEY_2=<new key>` alongside `SECRET_KEY_1`. Both are now accepted.
 2. Update the integration to the **new** key.

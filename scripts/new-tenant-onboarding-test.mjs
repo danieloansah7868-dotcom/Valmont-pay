@@ -418,6 +418,34 @@ check(
   'a deployed environment gets no baked webhook signing secret either'
 );
 
+console.log('\n# An environment-pinned key must not be silently un-rotatable');
+
+// The operator pins SECRET_KEY_1 in Vercel to kill a leaked credential (see
+// docs/key-rotation.md § 2). From then on the database is ignored for that
+// tenant, so the admin Rotate button would write a new key and change
+// nothing. The registry must be able to say so.
+const pinnedVar = 'TENANT__NEW_SHOP__SECRET_KEY_1';
+const before = tenants.envPinnedSecretVars(tenants.getTenant('new-shop'));
+check(before.blocksRotation === false, 'with no env var set, rotation works normally');
+
+process.env[pinnedVar] = 'pinned-value-for-test';
+const pinned = tenants.envPinnedSecretVars(tenants.getTenant('new-shop'));
+check(pinned.blocksRotation === true, 'pinning SECRET_KEY_1 blocks rotation');
+check(pinned.vars.includes(pinnedVar), 'the blocking variable is named');
+check(
+  tenants.listAllTenants().find(t => t.key === 'new-shop').rotation_blocked_by_env === true,
+  'the admin tenant list shows the tenant as env-pinned'
+);
+
+// Pinning only slot 2 leaves the database in control of secret_key_1, so
+// rotation still has an effect and must stay available.
+delete process.env[pinnedVar];
+process.env.TENANT__NEW_SHOP__SECRET_KEY_2 = 'second-slot-only';
+const halfPinned = tenants.envPinnedSecretVars(tenants.getTenant('new-shop'));
+check(halfPinned.blocksRotation === false, 'pinning only SECRET_KEY_2 still allows rotation');
+check(halfPinned.vars.length === 1, 'and the pinned variable is still reported');
+delete process.env.TENANT__NEW_SHOP__SECRET_KEY_2;
+
 console.log('\n# Architecture facts a new tenant inherits');
 
 const serverSource = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');

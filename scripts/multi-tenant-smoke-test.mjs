@@ -67,6 +67,10 @@ async function startServer() {
       // password (so /api/admin/* stays open, exactly like local dev).
       PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY || 'sk_test_offline_smoke',
       TENANTS_JSON: fixture,
+      // Pins the fixture tenant's secret through the environment, using the
+      // same value the fixture carries so the other tests keep working. This
+      // is what makes test 20 able to prove the rotate guard fires.
+      TENANT__TEST_MERCHANT_A__SECRET_KEY_1: testMerchantAFixtureKey,
       // Force the local posture. A developer shell with NODE_ENV=production
       // or VERCEL set would make the gateway drop its dev credentials and
       // lock the admin endpoints, and the run would fail for the wrong
@@ -131,6 +135,9 @@ async function runQueue() {
 // ─── Tests ───────────────────────────────────────────────────────────────
 
 const testSecretKey = 'vme_secret_dev_key_1';
+// Kept identical to the value in scripts/fixtures/test-merchant-a.json and
+// pinned through the environment in startServer() — see test 20.
+const testMerchantAFixtureKey = 'test-merchant-a-fixture-key';
 // Test-only second merchant. Start the smoke-test server with
 // TENANTS_JSON="$(cat scripts/fixtures/test-merchant-a.json)"; this fixture
 // is intentionally never part of lib/tenants.js production defaults.
@@ -507,6 +514,28 @@ test('19. POST /api/transaction/initialize — valid domain in callback_url pass
     })
   });
   assert('returns 200 for subdomain of allowed domain', res.status === 200);
+});
+
+test('20. POST /api/tenants/{key}/rotate-keys — refuses when the environment pins the key', async () => {
+  // test-merchant-a has TENANT__TEST_MERCHANT_A__SECRET_KEY_1 set, which
+  // overrides the database entirely. Rotating it would write a new key and
+  // change nothing — the operator would walk away believing a credential was
+  // revoked. The API must refuse instead.
+  const res = await fetch(`${BASE}/api/admin/tenants/test-merchant-a/rotate-keys`, {
+    method: 'POST'
+  });
+  const json = await res.json();
+
+  assert('refuses with 409', res.status === 409);
+  assert('says why', json.code === 'KEYS_PINNED_BY_ENV');
+  assert('names the variable', (json.pinned_env_vars || []).includes('TENANT__TEST_MERCHANT_A__SECRET_KEY_1'));
+  assert('explains that nothing changed', /change nothing/i.test(json.message || ''));
+
+  // An unpinned tenant must still rotate normally.
+  const unlocked = await fetch(`${BASE}/api/admin/tenants/valmont-electricals/rotate-keys`, {
+    method: 'POST'
+  });
+  assert('an unpinned tenant is not blocked', unlocked.status === 503 || unlocked.status === 200);
 });
 
 // ─── Summary ─────────────────────────────────────────────────────────────

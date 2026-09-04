@@ -371,6 +371,9 @@
                 : `<span class="text-gray-600 italic text-[11px]">(not set)</span>`}
             </td>
             <td><span class="badge ${t.environment === 'live' ? 'badge-live' : 'badge-test'}">${esc(t.environment || 'test')}</span></td>
+            ${t.rotation_blocked_by_env
+              ? `<td><span class="badge" style="background:rgba(251,191,36,.15);color:#fbbf24;border:1px solid rgba(251,191,36,.4)" title="Keys are set in the deployment environment: ${esc((t.keys_pinned_by_env || []).join(', '))}. Rotate by editing that variable.">env-pinned</span></td>`
+              : '<td></td>'}
             <td><span class="badge ${t.status === 'active' ? 'badge-active' : 'badge-disabled'}">${esc(t.status || 'active')}</span></td>
             <td class="text-gray-500 text-[11px]">${fmtDate(t.created_at)}</td>
             <td class="text-right whitespace-nowrap">
@@ -613,7 +616,19 @@
       try {
         const res = await adminFetch('/api/admin/tenants/' + encodeURIComponent(key) + '/rotate-keys', { method: 'POST', headers: adminHeaders() });
         const json = await res.json();
-        if (!json.status) { alert('Error: ' + json.message); return; }
+        if (!json.status) {
+          // A pinned tenant is not an error to dismiss — the operator came
+          // here to revoke a key and must leave knowing nothing happened.
+          if (json.code === 'KEYS_PINNED_BY_ENV') {
+            alert(
+              'Keys NOT rotated — nothing changed.\n\n' + json.message +
+              '\n\nSet in environment: ' + (json.pinned_env_vars || []).join(', ')
+            );
+          } else {
+            alert('Error: ' + json.message);
+          }
+          return;
+        }
         alert(
           'Keys rotated successfully!\n\n' +
           'New secret_key_1: ' + json.data.secret_key_1 + '\n' +

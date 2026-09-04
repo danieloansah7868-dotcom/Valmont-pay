@@ -2061,9 +2061,27 @@ app.put('/api/tenants/:key/webhook', requireAdmin, async (req, res) => {
 app.post('/api/tenants/:key/rotate-keys', requireAdmin, async (req, res) => {
   if (rejectLegacyTenantAliasWrite(req.params.key, res)) return;
   const canonicalKey = tenants.canonicalTenantKey(req.params.key);
+  const pinnedTenant = tenants.getTenant(canonicalKey);
 
-  if (!tenants.getTenant(canonicalKey)) {
+  if (!pinnedTenant) {
     return res.status(404).json({ status: false, message: 'Tenant not found' });
+  }
+
+  // REFUSE TO PRETEND. A pinned secret_1 means the database write below would
+  // succeed and change nothing, leaving the operator believing a leaked
+  // credential was revoked.
+  const pinned = tenants.envPinnedSecretVars(pinnedTenant);
+  if (pinned.blocksRotation) {
+    return res.status(409).json({
+      status: false,
+      code: 'KEYS_PINNED_BY_ENV',
+      message:
+        `This tenant's API secret is pinned by ${pinned.vars.join(' and ')} in the deployment ` +
+        'environment, which overrides the database. Rotating here would change nothing. ' +
+        'Edit that variable (and redeploy) to rotate this tenant — or unset it to hand ' +
+        'control back to the admin UI.',
+      pinned_env_vars: pinned.vars
+    });
   }
 
   const result = await tenantStore.rotateSecrets(canonicalKey);
@@ -2233,8 +2251,30 @@ app.post('/api/admin/tenants/:key/rotate-keys', async (req, res) => {
   const key = req.params.key;
   if (rejectLegacyTenantAliasWrite(key, res)) return;
   const canonicalKey = tenants.canonicalTenantKey(key);
+
+  // Same guard as the /api/tenants route: never rotate into a variable the
+  // environment is going to override anyway.
+  const pinned = tenants.envPinnedSecretVars(tenants.getTenant(canonicalKey));
+  if (pinned.blocksRotation) {
+    return res.status(409).json({
+      status: false,
+      code: 'KEYS_PINNED_BY_ENV',
+      message:
+        `This tenant's API secret is pinned by ${pinned.vars.join(' and ')} in the deployment ` +
+        'environment, which overrides the database. Rotating here would change nothing. ' +
+        'Edit that variable (and redeploy) to rotate this tenant — or unset it to hand ' +
+        'control back to the admin UI.',
+      pinned_env_vars: pinned.vars
+    });
+  }
+
   const result = await tenantStore.rotateSecrets(canonicalKey);
-  if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
+  if (!result.ok) {
+    // Match /api/tenants/{key}/rotate-keys: a rotation that could not be
+    // persisted is a server-side dependency failure (503), not a bad request.
+    const cannotPersist = /not configured|unavailable/i.test(result.reason || '');
+    return res.status(cannotPersist ? 503 : 400).json({ status: false, message: result.reason });
+  }
   tenants.updateTenantInMemory(canonicalKey, {
     secret_keys: [result.secret_key_1, result.secret_key_2].filter(Boolean)
   });
