@@ -215,6 +215,19 @@
           </div>
         </div>
 
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="input-label">Own Paystack Secret Key (optional)</label>
+            <input id="f_paystack_secret_key" type="password" placeholder="sk_live_…" class="input-field mono" autocomplete="off">
+            <p class="text-[10px] text-gray-500 mt-1">Leave blank to charge on the gateway's Paystack account. Fill in only if this merchant has their own.</p>
+          </div>
+          <div>
+            <label class="input-label">Own Paystack Public Key (optional)</label>
+            <input id="f_paystack_public_key" type="password" placeholder="pk_live_…" class="input-field mono" autocomplete="off">
+            <p class="text-[10px] text-gray-500 mt-1">Belongs to the secret key above. Blank on edit leaves the stored value untouched.</p>
+          </div>
+        </div>
+
         <div>
           <label class="input-label">Allowed Domains (comma-separated)</label>
           <input id="f_allowed_domains" type="text" placeholder="valmontelectricals.com,valmontpay.app,localhost" class="input-field mono">
@@ -225,9 +238,10 @@
           <div>
             <label class="input-label">Environment</label>
             <select id="f_environment" class="input-field">
-              <option value="test" selected>Test</option>
-              <option value="live">Live</option>
+              <option value="live" selected>Live</option>
+              <option value="test">Test</option>
             </select>
+            <p class="text-[10px] text-gray-500 mt-1">Label only. Payment mode is decided by the Paystack key itself (sk_test_… / sk_live_…), never by this field.</p>
           </div>
           <div>
             <label class="input-label">Status</label>
@@ -386,6 +400,8 @@
       document.getElementById('f_brand_color').value = '#f68b1e';
       document.getElementById('f_currency').value = 'GHS';
       document.getElementById('f_paystack_subaccount').value = '';
+      document.getElementById('f_paystack_secret_key').value = '';
+      document.getElementById('f_paystack_public_key').value = '';
       document.getElementById('f_settlement_account').value = '';
       document.getElementById('f_notification_phone').value = '';
       document.getElementById('f_notification_email').value = '';
@@ -394,7 +410,7 @@
       // "Domain … is not in the allowlist for this merchant". valmontpay.app
       // is always a legal callback target, so it is seeded here by default.
       document.getElementById('f_allowed_domains').value = 'localhost,valmontpay.app';
-      document.getElementById('f_environment').value = 'test';
+      document.getElementById('f_environment').value = 'live';
       document.getElementById('f_status').value = 'active';
       document.getElementById('f_key').disabled = false;
       document.getElementById('secretsBox').classList.add('hidden');
@@ -463,6 +479,8 @@
       const settlement_account = document.getElementById('f_settlement_account').value.trim();
       const allowed_domains = document.getElementById('f_allowed_domains').value
         .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      const paystack_secret_key = document.getElementById('f_paystack_secret_key').value.trim();
+      const paystack_public_key = document.getElementById('f_paystack_public_key').value.trim();
       const notification_phone = document.getElementById('f_notification_phone').value.trim();
       const notification_email = document.getElementById('f_notification_email').value.trim();
       const environment = document.getElementById('f_environment').value;
@@ -486,14 +504,28 @@
           res = await adminFetch('/api/admin/tenants/' + encodeURIComponent(originalKey), {
             method: 'PUT',
             headers: adminHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, notification_phone, notification_email, environment, status })
+            body: JSON.stringify({
+              display_name, webhook_url, brand_color, currency, paystack_subaccount,
+              settlement_account, allowed_domains, notification_phone, notification_email,
+              environment, status,
+              // Omitted when blank so editing some other field cannot wipe a
+              // stored credential.
+              ...(paystack_secret_key ? { paystack_secret_key } : {}),
+              ...(paystack_public_key ? { paystack_public_key } : {})
+            })
           });
         } else {
           // Create
           res = await adminFetch('/api/admin/tenants', {
             method: 'POST',
             headers: adminHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ key, display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, notification_phone, notification_email, environment, status })
+            body: JSON.stringify({
+              key, display_name, webhook_url, brand_color, currency, paystack_subaccount,
+              settlement_account, allowed_domains, notification_phone, notification_email,
+              environment, status,
+              ...(paystack_secret_key ? { paystack_secret_key } : {}),
+              ...(paystack_public_key ? { paystack_public_key } : {})
+            })
           });
         }
         json = await res.json();

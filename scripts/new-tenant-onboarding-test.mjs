@@ -57,6 +57,7 @@ function stubClient() {
         order() { return self; },
         select() { return self; },
         single() { return self; },
+        maybeSingle() { return self; },
         then(resolve) {
           let result = { data: null, error: null };
           const p = self._pending || {};
@@ -207,6 +208,45 @@ check(
   'an ordinary new merchant is accepted'
 );
 
+// A display name that slugifies onto ANOTHER tenant's key would capture that
+// tenant's lookups.
+check(
+  tenants.validateTenantIdentityForCreate({ key: 'other-shop', display_name: 'New Shop' }).valid === false,
+  'a display name that resolves to another tenant\'s key is rejected'
+);
+check(
+  tenants.validateTenantIdentityForCreate({ key: 'new-shop', display_name: 'New Shop' }).valid === true,
+  'a tenant may still keep a name that resolves to its OWN key'
+);
+check(
+  tenants.validateTenantIdentityForUpdate('other-shop', { display_name: 'New Shop' }).valid === false,
+  'a rename cannot capture another tenant\'s lookups either'
+);
+check(
+  tenants.validateTenantIdentityForUpdate('new-shop', { display_name: 'New Shop' }).valid === true,
+  'renaming a tenant to its own slug is allowed'
+);
+
+// Re-creating an existing slug used to silently OVERWRITE the live tenant and
+// mint it a fresh API secret, taking a working integration offline.
+const duplicate = await tenantStore.createTenant({
+  key: 'new-shop',
+  display_name: 'New Shop Duplicated'
+});
+check(duplicate.ok === false, 're-creating an existing tenant key is refused, not upserted');
+check(
+  /already exists/i.test(duplicate.reason || ''),
+  'the refusal explains that editing is the safe path'
+);
+check(
+  tenants.getTenant('new-shop').display_name === 'New Shop',
+  'the existing tenant was left untouched'
+);
+check(
+  tenants.getTenantBySecretKey(created.rawSecrets.secret_key_1) === tenants.getTenant('new-shop'),
+  'and its original secret key still works (no silent rotation)'
+);
+
 const badSlugs = ['New Shop!', 'a', 'a'.repeat(64), '-leading', 'Upper_Case'];
 for (const slug of badSlugs) {
   const result = await tenantStore.createTenant({ key: slug, display_name: 'Bad Slug' });
@@ -228,10 +268,11 @@ function stubMissingColumnClient() {
       const self = {
         upsert(record) { self._pending = { op: 'upsert', record }; return self; },
         update(patch) { self._pending = { op: 'update', patch }; return self; },
-        eq() { return self; },
+        eq(col, val) { self._filter = { col, val }; return self; },
         order() { return self; },
         select() { return self; },
         single() { return self; },
+        maybeSingle() { return self; },
         then(resolve) {
           attempts += 1;
           const p = self._pending || {};
@@ -244,6 +285,12 @@ function stubMissingColumnClient() {
               }
             }).then(resolve);
           }
+          // A plain select (the duplicate-key check) — never fabricate a row.
+          if (!p.op && self._filter) {
+            const found = rows.find(r => r[self._filter.col] === self._filter.val) || null;
+            return Promise.resolve({ data: found, error: null }).then(resolve);
+          }
+
           const row = { id: `uuid-legacy-${attempts}`, ...p.record };
           rows.push(row);
           return Promise.resolve({ data: row, error: null }).then(resolve);

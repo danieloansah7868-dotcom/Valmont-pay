@@ -108,9 +108,17 @@ Everything falls back to the gateway credential, so all five existing tenants be
 
 Tenants now carry `notification_phone` / `notification_email` (new nullable columns, `TENANT__<KEY>__NOTIFICATION_PHONE` / `__NOTIFICATION_EMAIL` env overrides, and two fields in the admin form). A tenant's own values win; blank — every tenant that predates this — keeps the gateway-wide target unchanged.
 
-### 🟡 F6 — Display names can shadow tenant keys
+### ✅ F6 — RESOLVED: display names can no longer shadow tenant keys
 
-`getTenantByIdentifier()` slugifies a display name before matching, so a new tenant called e.g. "Valmont Gadget" resolves to the existing `valmont-gadget` key. Keep display names distinct from other tenants' keys and names.
+`getTenantByIdentifier()` slugifies a display name before matching, so a new merchant called "Valmont Gadget" would have captured lookups belonging to the existing `valmont-gadget`. Create **and** rename now refuse a display name that resolves to a different tenant's key, while a tenant may still keep a name that resolves to its own.
+
+### 🔴 F7 — Creating a tenant with an existing slug silently overwrote it
+
+Found while writing this list, and the most dangerous thing here for someone about to add a merchant.
+
+`createTenant` ends in `upsert(..., { onConflict: 'key' })` — an upsert, not an insert — and the record always carries a **freshly generated `secret_key_1`**. So re-creating a key that already existed would overwrite the live tenant *and* issue it a new API secret, returning `201 Tenant created` with no warning. One typo in the slug field could take a working merchant offline and hand back a key nobody copied.
+
+**Fixed:** the store checks for an existing row first and refuses with "A tenant with the key … already exists. Edit it instead of creating it again". Four tests cover it, including that the original secret keeps working afterwards.
 
 ### 🟢 Verified good
 
@@ -131,13 +139,13 @@ Tenants now carry `notification_phone` / `notification_email` (new nullable colu
 | `lib/webhook.js`, `api/webhook.js` | Webhook ingest accepts an event signed by a tenant's own Paystack account |
 | `server.js` | `/api/initialize-payment` and `/api/verify-payment` use the tenant's credential; `rotate-keys` now persists to Supabase (was in-memory only) |
 | `lib/notifier.js` | Per-tenant `notification_phone` / `notification_email` override the gateway-wide target |
-| `lib/tenant-store.js` | New `notification_email` / `notification_phone` columns whitelisted, mapped, sanitised, settable on create/update |
-| `lib/tenants.js` | `TENANT__…__NOTIFICATION_*` env overrides; **dev credentials now resolve to empty in a deployed environment** |
+| `lib/tenant-store.js` | New notification columns; **refuses to re-create an existing tenant key** (was a silent overwrite); survives a database missing those columns |
+| `lib/tenants.js` | `TENANT__…__NOTIFICATION_*` env overrides; **dev credentials now resolve to empty in a deployed environment**; display names can no longer shadow another tenant's key |
 | `scripts/supabase-tenants-schema.sql` | New notification columns; the Electricals seed no longer inserts a known credential |
 | `scripts/multi-tenant-smoke-test.mjs` | Fixed the vacuous harness; self-hosting; environment-aware webhook/rotate tests; wired into `npm test` |
 | `scripts/new-tenant-onboarding-test.mjs` | **New** — 53 checks over the admin create path, rotation durability and the pinned new-tenant defaults |
 | `scripts/per-tenant-paystack-test.mjs` | **New** — 32 checks over per-tenant charging, webhook signing, verification and receipt routing |
-| `tenants.html` | New-tenant form seeds `localhost,valmontpay.app`; notification fields added |
+| `tenants.html` | New-tenant form seeds `localhost,valmontpay.app`; notification fields; optional own-Paystack fields; Environment defaults to Live with a label-only note; migration-pending banner |
 | `package.json` | `test:onboarding`, `test:paystack`, `test:multi-tenant`; all three run in `npm test` |
 
 ## 4. Runbook: adding a tenant
@@ -210,9 +218,28 @@ Then open the returned `pay_url`, pay GH₵1.00, and confirm:
 
 ## 5. Open items
 
-| # | Item | Why it is open |
+**None in the code.** Every finding from this audit (F1–F7) is fixed and covered by tests. What remains is operational — things only you can do because they need your Vercel, Supabase or GitHub access:
+
+| # | Item | Where |
 |---|---|---|
-| F4 | Confirm/rotate the Electricals dev credential | Needs a Vercel env check — follow [`docs/key-rotation.md`](key-rotation.md) |
-| F6 | Display-name shadowing — a new tenant called e.g. "Valmont Gadget" resolves to the existing `valmont-gadget` key | Cosmetic today; would matter if two merchants pick near-identical names |
-| — | `environment` defaults to `test` for new tenants | Display-only, but reads as "this merchant is in test mode" |
-| — | Admin form has no field for a tenant's own Paystack keys | Deliberate: set `TENANT__<KEY>__PAYSTACK_SECRET_KEY` in Vercel |
+| 1 | Run the dev-key diagnostic; rotate if it answers `404` | [`docs/key-rotation.md` § 1](key-rotation.md#1-is-the-valmont-electricals-dev-credential-live-right-now) |
+| 2 | Run the 2-line notification migration | Supabase → SQL Editor (non-blocking, see [Step 0](#step-0--deploy-prerequisites-once)) |
+| 3 | Merge the branch | GitHub — no PR is open yet |
+| 4 | Add the tenant | `/tenants.html` |
+
+### Summary of what the code changes fixed
+
+| | Finding | Status |
+|---|---|---|
+| F1 | Multi-tenant smoke test was a no-op reporting "All tests passed" | ✅ Fixed — 64 assertions now actually run |
+| F2 | New-tenant form pre-filled `allowed_domains` with `localhost` | ✅ Fixed — seeds `localhost,valmontpay.app` |
+| F3 | A tenant could not pay through its own Paystack account | ✅ Fixed — four call sites, one module |
+| F4 | Dev credential could authenticate production | ⚠️ Hardened — **your verification still needed** |
+| F5 | Receipts were global, never per-tenant | ✅ Fixed — `notification_phone` / `notification_email` |
+| F6 | Display names could shadow tenant keys | ✅ Fixed — create and rename both guard |
+| F7 | Re-creating a slug silently overwrote the live tenant | ✅ Fixed — duplicate keys refused |
+| — | `environment` defaulted to `test`, showing a live merchant as amber | ✅ Fixed — form defaults to Live, with a note that the field is label-only |
+| — | Admin form had no field for a tenant's own Paystack keys | ✅ Fixed — two optional fields; blank leaves a stored key untouched |
+| — | Rotation was in-memory only | ✅ Fixed — persists to Supabase, 503 when it cannot |
+| — | Creating a tenant broke if the migration had not run | ✅ Fixed — retries without the new columns and warns |
+
