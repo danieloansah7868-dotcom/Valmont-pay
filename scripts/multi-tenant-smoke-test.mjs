@@ -13,9 +13,69 @@
  *   9. GET /api/transaction/return redirect
  *  10. Cross-tenant isolation (404 not 403)
  *  11. Callback URL validation
+ *
+ * Run it:  node scripts/multi-tenant-smoke-test.mjs
+ *
+ * By default it boots its OWN server on a spare port with the test-merchant-a
+ * fixture loaded, runs every test against it, and shuts it down. Point it at
+ * an already-running deployment instead with TEST_BASE_URL=… (in that case
+ * nothing is started or stopped).
+ *
+ * Every run needs a FRESH server: test 14 rotates valmont-electricals' API
+ * secret in memory, so a second run against the same process legitimately
+ * fails the "old key still works during rotation" check.
  */
 
-const BASE = process.env.TEST_BASE_URL || 'http://localhost:3000';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+
+let BASE = process.env.TEST_BASE_URL || null;
+
+let child = null;
+
+async function waitForHealth(base, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${base}/api/health`);
+      if (res.ok || res.status === 503) return true; // 503 still means it's up
+    } catch (_) {
+      // not listening yet
+    }
+    await new Promise(r => setTimeout(r, 150));
+  }
+  return false;
+}
+
+async function startServer() {
+  const port = 4500 + Math.floor(Math.random() * 400);
+  const fixture = fs.readFileSync(new URL('./fixtures/test-merchant-a.json', import.meta.url), 'utf8');
+  const base = `http://127.0.0.1:${port}`;
+
+  child = spawn(process.execPath, ['server.js'], {
+    cwd: new URL('..', import.meta.url).pathname,
+    env: {
+      ...process.env,
+      PORT: String(port),
+      // Offline posture: no database, no real Paystack credential, no admin
+      // password (so /api/admin/* stays open, exactly like local dev).
+      PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY || 'sk_test_offline_smoke',
+      TENANTS_JSON: fixture
+    },
+    stdio: ['ignore', 'ignore', 'inherit']
+  });
+
+  if (!(await waitForHealth(base))) {
+    child.kill('SIGKILL');
+    console.error(`✗ server did not become healthy on ${base}`);
+    process.exit(1);
+  }
+  return base;
+}
+
+function stopServer() {
+  if (child) child.kill('SIGTERM');
+}
 
 let passed = 0;
 let failed = 0;
@@ -33,15 +93,27 @@ function assert(label, condition, detail) {
   }
 }
 
-async function test(name, fn) {
-  console.log(`\n━━━ ${name} ━━━`);
-  try {
-    await fn();
-  } catch (err) {
-    failed++;
-    const msg = `  ✗ EXCEPTION: ${err.message}`;
-    console.error(msg);
-    errors.push(msg);
+// Tests are QUEUED, not run on call. The previous version called `test(...)`
+// fire-and-forget and printed the summary synchronously, so the process exited
+// with "0 passed, 0 failed — All tests passed!" while every assertion was
+// still in flight. Nothing in this file was ever actually verified.
+const queue = [];
+
+function test(name, fn) {
+  queue.push({ name, fn });
+}
+
+async function runQueue() {
+  for (const { name, fn } of queue) {
+    console.log(`\n━━━ ${name} ━━━`);
+    try {
+      await fn();
+    } catch (err) {
+      failed++;
+      const msg = `  ✗ EXCEPTION: ${err.message}`;
+      console.error(msg);
+      errors.push(msg);
+    }
   }
 }
 
@@ -271,10 +343,29 @@ test('13. PUT /api/tenants/{key}/webhook — update webhook URL', async () => {
   });
   const json = await res.json();
 
+  // The endpoint persists to Supabase FIRST and only then syncs memory, so
+  // without a database the correct behaviour is a loud 503 — never a fake
+  // success. Assert whichever contract the environment is actually running.
+  const noDatabase = res.status === 503 && /Supabase is not configured/i.test(json.message || '');
+
+  if (noDatabase) {
+    // ── Offline contract: refuse, and leave the built-in URL untouched ──
+    assert('returns 503 when Supabase is not configured', res.status === 503);
+    assert('explains why it refused', /Supabase is not configured/i.test(json.message || ''));
+
+    const checkRes = await fetch(`${BASE}/api/tenants/valmont-electricals`);
+    const checkJson = await checkRes.json();
+    assert(
+      'refuses to pretend the write succeeded (URL unchanged)',
+      checkJson.data.webhook_url === 'https://valmontelectricals.com/api/valmontpay/webhook'
+    );
+    return;
+  }
+
+  // ── Database contract: persist, then report the effective value ──
   assert('returns 200', res.status === 200);
   assert('status true', json.status === true);
 
-  // Verify it was saved
   const checkRes = await fetch(`${BASE}/api/tenants/valmont-electricals`);
   const checkJson = await checkRes.json();
   assert('webhook URL persisted', checkJson.data.webhook_url === testUrl);
@@ -398,6 +489,21 @@ test('19. POST /api/transaction/initialize — valid domain in callback_url pass
 });
 
 // ─── Summary ─────────────────────────────────────────────────────────────
+
+BASE = BASE || (await startServer());
+
+try {
+  await runQueue();
+} finally {
+  stopServer();
+}
+
+if (passed + failed === 0) {
+  // A silent no-op is worse than a red run: it is the exact bug this file
+  // used to have. Refuse to report success for a run that verified nothing.
+  console.error('\n✗ No assertions ran — refusing to report success.');
+  process.exit(1);
+}
 
 console.log(`\n\n══════════════════════════════════════════`);
 console.log(`  Results: ${passed} passed, ${failed} failed`);

@@ -369,7 +369,11 @@
       document.getElementById('f_currency').value = 'GHS';
       document.getElementById('f_paystack_subaccount').value = '';
       document.getElementById('f_settlement_account').value = '';
-      document.getElementById('f_allowed_domains').value = 'localhost';
+      // 'localhost' alone is a trap: an operator who accepts the default ships
+      // a tenant whose production callback_url is rejected with
+      // "Domain … is not in the allowlist for this merchant". valmontpay.app
+      // is always a legal callback target, so it is seeded here by default.
+      document.getElementById('f_allowed_domains').value = 'localhost,valmontpay.app';
       document.getElementById('f_environment').value = 'test';
       document.getElementById('f_status').value = 'active';
       document.getElementById('f_key').disabled = false;
