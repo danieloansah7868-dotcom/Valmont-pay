@@ -75,23 +75,38 @@ A new tenant's `allowed_domains` starts **empty** server-side, so *every* callba
 
 **Fixed:** the form now seeds `'localhost,valmontpay.app'`.
 
-### 🟠 F3 — A new tenant cannot take payments on its own Paystack account
+**Also fixed while here:** `POST /api/tenants/{key}/rotate-keys` rotated the in-memory registry ONLY — on Vercel the rotation evaporated at the next cold start while the database still held the old key, so a "revoked" credential came back to life. Rotation now persists to Supabase first and returns 503 when it cannot. See [`docs/key-rotation.md`](key-rotation.md).
 
-The customer-facing charge path (`pay.html` → `POST /api/initialize-payment`) **always** uses the global `PAYSTACK_SECRET_KEY`. The only per-tenant money routing is `paystack_subaccount` (a Paystack split). A tenant's own `paystack_secret_key` is used only for pre-initialisation and for `GET /api/transaction/verify/:reference` fallbacks.
+### ✅ F3 — RESOLVED: a new tenant can now pay through its own Paystack account
 
-So: a new tenant's money lands in **your** Paystack account unless you configure a subaccount. Also note the admin form has **no** field for a tenant's own Paystack keys — consistent with the architecture, but it means `paystack_secret_key` can only be set by env var or direct DB edit.
+Previously `pay.html` → `POST /api/initialize-payment` always charged the global `PAYSTACK_SECRET_KEY`, so every merchant's money landed in the gateway account and a tenant's own `paystack_secret_key` was half-wired (used for pre-init, ignored at charge time).
 
-Edge case worth knowing: if you *do* give a tenant its own `paystack_secret_key` from a different Paystack account, `verify` falls back to that key only when the transaction is not already in the ledger — and it fails closed (404) rather than mis-reporting.
+Per-tenant Paystack touches **four** call sites, and missing the webhook one produces the worst failure in payments: Paystack takes the money, our single-key verifier rejects the event as a forgery, and the payment never reaches the ledger. All four now resolve through one module, `lib/paystack-credentials.js`:
+
+| Call site | Behaviour now |
+|---|---|
+| Initialize (`/api/initialize-payment`) | Charges the tenant's account when it has one |
+| Webhook ingest (`/api/webhook`) | Accepts an event signed by **any** configured credential |
+| Verify (`/api/verify-payment`) | Verifies against the account that charged the reference |
+| Split settlement | `paystack_subaccount`, already per tenant |
+
+Everything falls back to the gateway credential, so all five existing tenants behave **exactly** as before.
+
+**Security note:** signature verification tries every candidate and never returns on first match, so the time taken does not reveal which tenants hold their own account.
+
+**Still true:** the admin form has no field for a tenant's own Paystack keys. Set `TENANT__<KEY>__PAYSTACK_SECRET_KEY` in Vercel, or write the column directly.
 
 ### 🟡 F4 — `valmont-electricals` may still be using a committed dev credential
 
 `lib/tenants.js` defaults this tenant's secret to `vme_secret_dev_key_1`, and `scripts/supabase-tenants-schema.sql` seeds that **same literal string** into the database. Precedence is `env > DB > default`, so unless `TENANT__VALMONT_ELECTRICALS__SECRET_KEY_1` is set in Vercel, that public, repo-committed value is the live API credential for your flagship merchant.
 
-**Action:** check Vercel → if the var is unset, rotate immediately (`/tenants.html` → *Rotate keys*).
+**Action:** run the one-line diagnostic in [`docs/key-rotation.md` § 1](key-rotation.md#1-is-the-valmont-electricals-dev-credential-live-right-now) and follow § 2 or § 3 there.
 
-### 🟡 F5 — Notifications are global, not per-tenant
+### ✅ F5 — RESOLVED: per-tenant receipt routing
 
-`lib/notifier.js` reads `ADMIN_NOTIFICATION_PHONE`, `MERCHANT_NOTIFICATION_EMAIL`, etc. — one global target. A new merchant does not get their own receipt SMS/email; their only private signal is their `webhook_url`.
+`lib/notifier.js` previously read one global target (`MERCHANT_NOTIFICATION_PHONE`, `MERCHANT_NOTIFICATION_EMAIL`, …), so a new merchant never received their own receipt.
+
+Tenants now carry `notification_phone` / `notification_email` (new nullable columns, `TENANT__<KEY>__NOTIFICATION_PHONE` / `__NOTIFICATION_EMAIL` env overrides, and two fields in the admin form). A tenant's own values win; blank — every tenant that predates this — keeps the gateway-wide target unchanged.
 
 ### 🟡 F6 — Display names can shadow tenant keys
 
@@ -112,12 +127,18 @@ Edge case worth knowing: if you *do* give a tenant its own `paystack_secret_key`
 
 | File | Change |
 |---|---|
-| `scripts/multi-tenant-smoke-test.mjs` | Fixed the vacuous harness; self-hosting; environment-aware webhook test; wired into `npm test` |
-| `scripts/new-tenant-onboarding-test.mjs` | **New** — 38 checks that drive the real admin create path against a stubbed Supabase and pin the defaults a new tenant receives |
-| `tenants.html` | New-tenant form seeds `allowed_domains` with `localhost,valmontpay.app` |
-| `package.json` | Added `test:onboarding` and `test:multi-tenant`; both now run in `npm test` |
-
----
+| `lib/paystack-credentials.js` | **New** — single source of truth for which Paystack credential charges, signs and verifies per tenant |
+| `lib/webhook.js`, `api/webhook.js` | Webhook ingest accepts an event signed by a tenant's own Paystack account |
+| `server.js` | `/api/initialize-payment` and `/api/verify-payment` use the tenant's credential; `rotate-keys` now persists to Supabase (was in-memory only) |
+| `lib/notifier.js` | Per-tenant `notification_phone` / `notification_email` override the gateway-wide target |
+| `lib/tenant-store.js` | New `notification_email` / `notification_phone` columns whitelisted, mapped, sanitised, settable on create/update |
+| `lib/tenants.js` | `TENANT__…__NOTIFICATION_*` env overrides; **dev credentials now resolve to empty in a deployed environment** |
+| `scripts/supabase-tenants-schema.sql` | New notification columns; the Electricals seed no longer inserts a known credential |
+| `scripts/multi-tenant-smoke-test.mjs` | Fixed the vacuous harness; self-hosting; environment-aware webhook/rotate tests; wired into `npm test` |
+| `scripts/new-tenant-onboarding-test.mjs` | **New** — 53 checks over the admin create path, rotation durability and the pinned new-tenant defaults |
+| `scripts/per-tenant-paystack-test.mjs` | **New** — 32 checks over per-tenant charging, webhook signing, verification and receipt routing |
+| `tenants.html` | New-tenant form seeds `localhost,valmontpay.app`; notification fields added |
+| `package.json` | `test:onboarding`, `test:paystack`, `test:multi-tenant`; all three run in `npm test` |
 
 ## 4. Runbook: adding a tenant
 
@@ -128,6 +149,8 @@ Edge case worth knowing: if you *do* give a tenant its own `paystack_secret_key`
 - [ ] **Allowed domains** — the storefront domain(s) that will send `callback_url`, **plus** `valmontpay.app`
 - [ ] **Webhook URL** — `https://<their-site>/api/valmontpay/webhook` (optional but recommended)
 - [ ] **Paystack subaccount** — `ACCT_…` if their money must settle separately
+- [ ] **Own Paystack account?** — optional; set `TENANT__<KEY>__PAYSTACK_SECRET_KEY` in Vercel if this merchant should charge on their own account instead of the gateway's (see F3)
+- [ ] **Notification phone / email** — this merchant's own receipt target; blank means the gateway-wide one
 
 ### Create
 
@@ -136,7 +159,8 @@ Edge case worth knowing: if you *do* give a tenant its own `paystack_secret_key`
 3. **Replace the `allowed_domains` default** — keep `valmontpay.app`, add their storefront domain.
 4. Set **Environment → Live** (cosmetic badge, but avoid the amber "test" on a live merchant).
 5. Set the webhook URL and, if needed, the subaccount.
-6. **Copy the three secrets immediately.** They are shown once and never again.
+6. Fill in **Notification Phone / Email** if this merchant should get their own receipt messages.
+7. **Copy the three secrets immediately.** They are shown once and never again.
 
 ### Post-create verification
 
@@ -158,7 +182,8 @@ curl -s -X POST https://valmontpay.app/api/transaction/initialize \
 
 Then open the returned `pay_url`, pay GH₵1.00, and confirm:
 - the transaction appears on `/dashboard.html` attributed to the new tenant,
-- their webhook receives a signed `charge.success` (`x-valmontpay-signature`, HMAC-SHA512 of the raw body with their signing secret).
+- their webhook receives a signed `charge.success` (`x-valmontpay-signature`, HMAC-SHA512 of the raw body with their signing secret),
+- the receipt goes to **their** notification target (check the Vercel log line `[VALMONT-NOTIFIER] Merchant contact for … [source: tenant (…)]`).
 
 ### Tell the storefront integrator
 
@@ -168,11 +193,11 @@ Then open the returned `pay_url`, pay GH₵1.00, and confirm:
 
 ---
 
-## 5. Open items (not fixed here)
+## 5. Open items
 
 | # | Item | Why it is open |
 |---|---|---|
-| F4 | Confirm/rotate the Electricals dev credential | Needs a Vercel env check or an admin session — cannot be verified from outside |
-| F3 | Per-tenant Paystack accounts for the hosted flow | Architectural: `/api/initialize-payment` hard-wires the global key |
-| F5 | Per-tenant notification routing | `lib/notifier.js` is global by design; needs a product decision |
+| F4 | Confirm/rotate the Electricals dev credential | Needs a Vercel env check — follow [`docs/key-rotation.md`](key-rotation.md) |
+| F6 | Display-name shadowing — a new tenant called e.g. "Valmont Gadget" resolves to the existing `valmont-gadget` key | Cosmetic today; would matter if two merchants pick near-identical names |
 | — | `environment` defaults to `test` for new tenants | Display-only, but reads as "this merchant is in test mode" |
+| — | Admin form has no field for a tenant's own Paystack keys | Deliberate: set `TENANT__<KEY>__PAYSTACK_SECRET_KEY` in Vercel |

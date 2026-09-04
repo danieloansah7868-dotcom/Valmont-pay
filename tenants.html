@@ -202,6 +202,19 @@
           </div>
         </div>
 
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="input-label">Notification Phone</label>
+            <input id="f_notification_phone" type="text" placeholder="0244000000" class="input-field mono">
+            <p class="text-[10px] text-gray-500 mt-1">This merchant's own receipt SMS/WhatsApp number. Blank uses the gateway-wide number.</p>
+          </div>
+          <div>
+            <label class="input-label">Notification Email</label>
+            <input id="f_notification_email" type="email" placeholder="merchant@example.com" class="input-field mono">
+            <p class="text-[10px] text-gray-500 mt-1">Receipt email for this merchant. Blank uses the gateway-wide address.</p>
+          </div>
+        </div>
+
         <div>
           <label class="input-label">Allowed Domains (comma-separated)</label>
           <input id="f_allowed_domains" type="text" placeholder="valmontelectricals.com,valmontpay.app,localhost" class="input-field mono">
@@ -369,6 +382,8 @@
       document.getElementById('f_currency').value = 'GHS';
       document.getElementById('f_paystack_subaccount').value = '';
       document.getElementById('f_settlement_account').value = '';
+      document.getElementById('f_notification_phone').value = '';
+      document.getElementById('f_notification_email').value = '';
       // 'localhost' alone is a trap: an operator who accepts the default ships
       // a tenant whose production callback_url is rejected with
       // "Domain … is not in the allowlist for this merchant". valmontpay.app
@@ -407,6 +422,8 @@
         document.getElementById('f_currency').value = t.currency || 'GHS';
         document.getElementById('f_paystack_subaccount').value = t.paystack_subaccount || '';
         document.getElementById('f_settlement_account').value = t.settlement_account || '';
+      document.getElementById('f_notification_phone').value = t.notification_phone || '';
+      document.getElementById('f_notification_email').value = t.notification_email || '';
         document.getElementById('f_allowed_domains').value = (t.allowed_domains || []).join(',');
         document.getElementById('f_environment').value = t.environment || 'test';
         document.getElementById('f_status').value = t.status || (t.disabled ? 'disabled' : 'active');
@@ -432,6 +449,8 @@
       const settlement_account = document.getElementById('f_settlement_account').value.trim();
       const allowed_domains = document.getElementById('f_allowed_domains').value
         .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      const notification_phone = document.getElementById('f_notification_phone').value.trim();
+      const notification_email = document.getElementById('f_notification_email').value.trim();
       const environment = document.getElementById('f_environment').value;
       const status = document.getElementById('f_status').value;
 
@@ -453,14 +472,14 @@
           res = await adminFetch('/api/admin/tenants/' + encodeURIComponent(originalKey), {
             method: 'PUT',
             headers: adminHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, environment, status })
+            body: JSON.stringify({ display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, notification_phone, notification_email, environment, status })
           });
         } else {
           // Create
           res = await adminFetch('/api/admin/tenants', {
             method: 'POST',
             headers: adminHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ key, display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, environment, status })
+            body: JSON.stringify({ key, display_name, webhook_url, brand_color, currency, paystack_subaccount, settlement_account, allowed_domains, notification_phone, notification_email, environment, status })
           });
         }
         json = await res.json();

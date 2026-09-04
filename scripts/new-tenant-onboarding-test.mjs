@@ -68,7 +68,11 @@ function stubClient() {
             const row = rows.find(r => r.key === self._filter.val);
             if (row) Object.assign(row, p.patch);
             result.data = row || null;
+          } else if (self._filter) {
+            // select(...).eq(col, val).single()
+            result.data = rows.find(r => r[self._filter.col] === self._filter.val) || null;
           } else {
+            // select('*').order(...)
             result.data = rows;
           }
           return Promise.resolve(result).then(resolve);
@@ -211,16 +215,128 @@ for (const slug of badSlugs) {
 check((await tenantStore.createTenant({ key: 'ab', display_name: 'Two Chars' })).ok === true, 'a 2-character slug is accepted');
 check((await tenantStore.createTenant({ key: 'a'.repeat(63), display_name: 'Long' })).ok === true, 'a 63-character slug is accepted');
 
+console.log('\n# Key rotation must survive a cold start');
+
+// This is the regression guard for the bug this audit found:
+// POST /api/tenants/{key}/rotate-keys used to rewrite the in-memory registry
+// only, so on a serverless platform the "revoked" credential came back at the
+// next cold start while the database still held it.
+const beforeRotate = tenants.getTenant('new-shop').secret_keys[0];
+const rotated = await tenantStore.rotateSecrets('new-shop');
+check(rotated.ok === true, 'rotateSecrets persists to the database');
+check(
+  rotated.secret_key_2 === beforeRotate,
+  'the previous key is preserved as secret_key_2 during rotation (zero downtime)'
+);
+check(rotated.secret_key_1 !== beforeRotate, 'a new secret_key_1 is issued');
+
+tenants.updateTenantInMemory('new-shop', {
+  secret_keys: [rotated.secret_key_1, rotated.secret_key_2].filter(Boolean)
+});
+check(
+  tenants.getTenantBySecretKey(rotated.secret_key_1) === tenants.getTenant('new-shop'),
+  'the new key authenticates immediately'
+);
+check(
+  tenants.getTenantBySecretKey(beforeRotate) === tenants.getTenant('new-shop'),
+  'the old key still authenticates during the rotation window'
+);
+
+// Simulate a serverless cold start: rebuild the registry from the database.
+tenants.resetRegistryForTests();
+const { tenants: dbRows } = await tenantStore.loadTenants({ client: stubClient() });
+for (const row of dbRows) tenants.applyDbTenant(row);
+
+const afterColdStart = tenants.getTenant('new-shop');
+check(
+  tenants.getTenantBySecretKey(rotated.secret_key_1) === afterColdStart,
+  'the new key STILL authenticates after a cold start (rotation was durable)'
+);
+
+// One rotation keeps the old key alive as secret_key_2 (that is the point of
+// a rotation window). A SECOND rotation is what actually retires it.
+const second = await tenantStore.rotateSecrets('new-shop');
+tenants.updateTenantInMemory('new-shop', {
+  secret_keys: [second.secret_key_1, second.secret_key_2].filter(Boolean)
+});
+check(
+  tenants.getTenantBySecretKey(beforeRotate) === undefined,
+  'a second rotation permanently retires the original key'
+);
+check(
+  tenants.getTenantBySecretKey(second.secret_key_1) === tenants.getTenant('new-shop'),
+  'the newest key authenticates after the second rotation'
+);
+
+console.log('\n# Committed dev credentials must never reach a deployment');
+
+// The literals in lib/tenants.js are public (they are in git). They are fine
+// for a laptop and indefensible in production, so a deployed environment
+// resolves them to empty and the tenant fails closed instead.
+const { execFileSync } = require('node:child_process');
+const repoRoot = new URL('..', import.meta.url).pathname;
+const tenantsModulePath = new URL('../lib/tenants.js', import.meta.url).pathname;
+
+// The path is passed as argv rather than written into the script text: the
+// build guard (scripts/verify-module-graph.mjs) scans source for relative
+// require() specifiers, and a literal one here would be read as an import of
+// ./lib/tenants.js from scripts/, which does not exist.
+const probe = (envAssignment) => JSON.parse(
+  execFileSync(process.execPath, [
+    '-e',
+    `${envAssignment}` +
+      'const modulePath = process.argv[1];' +
+      'const t = require(modulePath);' +
+      "const e = t.getTenant('valmont-electricals');" +
+      'process.stdout.write(JSON.stringify({ secrets: e.secret_keys, signing: e.webhook_signing_secret || null }));',
+    tenantsModulePath
+  ], { cwd: repoRoot }).toString()
+);
+
+const local = probe('');
+const deployed = probe("process.env.VERCEL='1';");
+
+check(local.secrets.length > 0, 'local runs keep the dev credential so tests and laptops work');
+check(
+  deployed.secrets.length === 0,
+  'a deployed environment gets NO baked credential (fails closed, no public secret)'
+);
+check(
+  deployed.signing === null || deployed.signing === '',
+  'a deployed environment gets no baked webhook signing secret either'
+);
+
 console.log('\n# Architecture facts a new tenant inherits');
 
 const serverSource = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
 check(
-  /app\.post\('\/api\/initialize-payment'[\s\S]*?await initializePayment\(/.test(serverSource),
-  'the customer-facing charge (pay.html → /api/initialize-payment) uses the GLOBAL Paystack key'
+  /secretKey: paystackCredentials\.chargeSecret\(chargeTenant\)/.test(serverSource),
+  'the customer-facing charge uses the TENANT Paystack key when it has one, else the gateway key'
+);
+check(
+  /verifyPaymentWithKey\(\s*reference,\s*paystackCredentials\.chargeSecret\(verifyTenant\)/.test(serverSource),
+  'verification uses the same credential the charge used'
 );
 check(
   /subaccount = subaccount \|\| \(intentTenant && intentTenant\.paystack_subaccount\) \|\| undefined/.test(serverSource),
-  'the only per-tenant money routing is paystack_subaccount'
+  'paystack_subaccount still splits settlement per tenant'
+);
+
+const webhookSource = fs.readFileSync(new URL('../lib/webhook.js', import.meta.url), 'utf8');
+const apiWebhookSource = fs.readFileSync(new URL('../api/webhook.js', import.meta.url), 'utf8');
+check(
+  /matchesAnyWebhookSecret\(raw, signature\)/.test(webhookSource),
+  'webhook ingestion accepts an event signed by a tenant\'s own Paystack account'
+);
+check(
+  /verifyWithVariantsAnySecret\(rawBody, signature, parsedForVariants\)/.test(apiWebhookSource),
+  'the serverless webhook handler does the same'
+);
+
+const notifierSource = fs.readFileSync(new URL('../lib/notifier.js', import.meta.url), 'utf8');
+check(
+  /tenantPhone \|\|\s*process\.env\.MERCHANT_NOTIFICATION_PHONE/.test(notifierSource),
+  'a tenant\'s own notification target wins over the gateway-wide one'
 );
 
 const payHtml = fs.readFileSync(new URL('../pay.html', import.meta.url), 'utf8');

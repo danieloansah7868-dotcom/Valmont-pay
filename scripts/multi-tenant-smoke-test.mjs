@@ -52,15 +52,26 @@ async function startServer() {
   const fixture = fs.readFileSync(new URL('./fixtures/test-merchant-a.json', import.meta.url), 'utf8');
   const base = `http://127.0.0.1:${port}`;
 
+  const childEnv = { ...process.env };
+  // A stray VERCEL/VERCEL_ENV from the developer's shell must not make the
+  // child behave like a deployment (see NODE_ENV below).
+  delete childEnv.VERCEL;
+  delete childEnv.VERCEL_ENV;
+
   child = spawn(process.execPath, ['server.js'], {
     cwd: new URL('..', import.meta.url).pathname,
     env: {
-      ...process.env,
+      ...childEnv,
       PORT: String(port),
       // Offline posture: no database, no real Paystack credential, no admin
       // password (so /api/admin/* stays open, exactly like local dev).
       PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY || 'sk_test_offline_smoke',
-      TENANTS_JSON: fixture
+      TENANTS_JSON: fixture,
+      // Force the local posture. A developer shell with NODE_ENV=production
+      // or VERCEL set would make the gateway drop its dev credentials and
+      // lock the admin endpoints, and the run would fail for the wrong
+      // reason. The child is always "a laptop".
+      NODE_ENV: 'test'
     },
     stdio: ['ignore', 'ignore', 'inherit']
   });
@@ -377,34 +388,44 @@ test('14. POST /api/tenants/{key}/rotate-keys — rotate API secrets', async () 
   });
   const json = await res.json();
 
+  // Rotation must be DURABLE. It is persisted to Supabase first, so without a
+  // database the correct answer is a loud 503 — an in-memory-only rotation
+  // would let a "revoked" credential come back at the next cold start.
+  const noDatabase = res.status === 503 && /not rotated/i.test(json.message || '');
+
+  if (noDatabase) {
+    assert('returns 503 when rotation cannot be persisted', res.status === 503);
+    assert('says the keys were NOT rotated', /not rotated/i.test(json.message || ''));
+
+    const oldKeyRes = await fetch(`${BASE}/api/transaction/initialize`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${testSecretKey}`
+      },
+      body: JSON.stringify({ amount: 10, email: 'rotate@test.com', callback_url: 'https://valmontweb.com/return' })
+    });
+    assert('the existing key is still untouched', oldKeyRes.status === 200);
+    return;
+  }
+
   assert('returns 200', res.status === 200);
   assert('status true', json.status === true);
   assert('has secret_key_1', json.data && json.data.secret_key_1);
   assert('has secret_key_2', json.data && json.data.secret_key_2);
   assert('keys are different', json.data.secret_key_1 !== json.data.secret_key_2);
 
-  // Both old and new keys should work during rotation
-  const oldKeyRes = await fetch(`${BASE}/api/transaction/initialize`, {
+  const init = (key) => fetch(`${BASE}/api/transaction/initialize`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${testSecretKey}` // old key
-    },
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
     body: JSON.stringify({ amount: 10, email: 'rotate@test.com', callback_url: 'https://valmontweb.com/return' })
   });
-  assert('old key still works during rotation', oldKeyRes.status === 200);
 
-  const newKeyRes = await fetch(`${BASE}/api/transaction/initialize`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${json.data.secret_key_1}` // new key (was secret_1/old is now secret_2)
-    },
-    body: JSON.stringify({ amount: 10, email: 'rotate@test.com', callback_url: 'https://valmontweb.com/return' })
-  });
-  // Note: after rotation, secret_key_1 is the old second key, but let's just
-  // check one of them works
-  assert('at least one new key works', oldKeyRes.status === 200 || newKeyRes.status === 200);
+  const newKeyRes = await init(json.data.secret_key_1);
+  assert('the new secret_key_1 works immediately', newKeyRes.status === 200);
+
+  const oldKeyRes = await init(json.data.secret_key_2);
+  assert('the previous key (now secret_key_2) still works during rotation', oldKeyRes.status === 200);
 });
 
 test('15. GET /api/transaction/return — valid redirect', async () => {
