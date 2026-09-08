@@ -276,6 +276,30 @@
     </div>
   </div>
 
+  <!-- Rotated API key modal -->
+  <div id="rotateModal" class="modal-backdrop">
+    <div class="modal" style="max-width:520px;">
+      <div class="p-5 border-b border-[#142850] flex items-center justify-between">
+        <h2 class="text-base font-black text-green-400">Keys Rotated Successfully</h2>
+        <button onclick="document.getElementById('rotateModal').classList.remove('open')" class="ghost-btn">✕</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <p class="text-xs text-gray-400">Update your integration with this new <span class="mono">secret_key_1</span>. Both keys remain valid during the transition.</p>
+        <div>
+          <p class="input-label">New Secret Key</p>
+          <div class="flex items-start gap-2">
+            <span id="new-key" class="mono text-green-300 flex-1 p-3 rounded border border-green-800/40 bg-green-950/20"></span>
+            <button onclick="navigator.clipboard.writeText(document.getElementById('new-key').innerText)" class="ghost-btn">Copy</button>
+          </div>
+        </div>
+        <p class="text-[11px] text-amber-300">Keep the previous key available until every integration has been updated. Rotate again later to revoke it.</p>
+      </div>
+      <div class="p-5 border-t border-[#142850] flex justify-end">
+        <button onclick="document.getElementById('rotateModal').classList.remove('open')" class="gold-btn">Done</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Webhook Edit mini-modal -->
   <div id="webhookModal" class="modal-backdrop">
     <div class="modal" style="max-width:520px;">
@@ -629,12 +653,8 @@
           }
           return;
         }
-        alert(
-          'Keys rotated successfully!\n\n' +
-          'New secret_key_1: ' + json.data.secret_key_1 + '\n' +
-          'Previous secret (now secret_key_2): ' + (json.data.secret_key_2 || '(none)') + '\n\n' +
-          'Update your integration with the new key. Both keys remain valid during the transition.'
-        );
+        document.getElementById('new-key').innerText = json.data.secret_key_1;
+        document.getElementById('rotateModal').classList.add('open');
         loadTenants();
       } catch (err) { alert('Error: ' + err.message); }
     }
@@ -655,6 +675,7 @@
       if (e.key === 'Escape') {
         closeModal();
         document.getElementById('webhookModal').classList.remove('open');
+        document.getElementById('rotateModal').classList.remove('open');
       }
     });
   </script>
