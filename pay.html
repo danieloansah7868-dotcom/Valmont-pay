@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Valmont-Pay — Secure Payment</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/favicon.svg">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -56,7 +58,10 @@
     <!-- Header -->
     <div id="merchantHeader" class="bg-[#0b1a38] text-white p-6 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <div class="h-3 w-3 rounded-full bg-[#f68b1e] animate-pulse"></div>
+        <!-- The merchant's own logo when the tenant sets one, else the
+             Valmont-Pay wordmark. Both are SVGs (see /logo.svg), so the mark
+             stays crisp on every screen density. -->
+        <img id="merchantLogo" src="/logo.svg" alt="" class="h-7 w-auto" />
         <span class="font-extrabold text-sm uppercase tracking-widest text-[#f68b1e]" id="merchantLabel">Valmont-Pay</span>
       </div>
       <span class="text-xs text-gray-400 font-bold">Secure Payment</span>
@@ -523,6 +528,19 @@
       document.getElementById('merchantLabel').textContent = displayName;
       document.getElementById('merchantName').innerHTML = safeName;
 
+      // Merchant logo: a tenant-configured SVG when there is one, otherwise
+      // the Valmont-Pay wordmark. Only same-origin paths and https URLs are
+      // honoured — anything else (javascript:, data:, protocol-relative) falls
+      // back to the built-in mark instead of being rendered.
+      const logoEl = document.getElementById('merchantLogo');
+      if (logoEl) {
+        logoEl.src = safeLogoUrl(paymentData.merchant_logo_url);
+        logoEl.alt = safeName + ' logo';
+        logoEl.onerror = function () {
+          this.style.display = 'none';
+        };
+      }
+
       const locked = paymentData && paymentData.amount > 0;
       if (locked) {
         document.getElementById('lockedInfo').classList.remove('hidden');
@@ -867,6 +885,20 @@
       const div = document.createElement('div');
       div.textContent = str || '';
       return div.innerHTML;
+    }
+
+    /**
+     * Only accept a logo the gateway would legitimately serve: a root-relative
+     * same-origin path, or an absolute https URL. Everything else (javascript:,
+     * data:, //host/…) falls back to the built-in /logo.svg so tenant config
+     * can never turn into an injected image source.
+     */
+    function safeLogoUrl(value) {
+      const url = String(value || '').trim();
+      if (!url) return '/logo.svg';
+      if (/^\/[^/\\]/.test(url)) return url;         // /logo.svg, /brand/x.svg
+      if (/^https:\/\//i.test(url)) return url;
+      return '/logo.svg';
     }
 
     // Boot
