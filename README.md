@@ -408,6 +408,48 @@ npm test
 
 ---
 
+## 🚨 Debugging: "the dashboard is empty — my balance disappeared"
+
+**Symptom:** the dashboard showed a real total (say GH₵55.00) and now shows an
+empty ledger and GH₵0.00. Nothing was deleted: the ledger could not be *read*.
+
+**First, look at the banner on the dashboard.** A failed read now shows a red
+**"Ledger could not be loaded"** banner with the server's own reason, and the
+balance renders as `GH₵ —`, not `GH₵0.00`. If you see `GH₵0.00` with no banner,
+the ledger genuinely returned no rows.
+
+**Then check one URL:**
+
+```bash
+curl -s https://valmontpay.app/api/health | python3 -m json.tool
+```
+
+Read `supabase.transport`:
+
+| `transport` | Meaning | What to do |
+|---|---|---|
+| `npm` | Official `@supabase/supabase-js` is loaded — healthy | Look elsewhere (e.g. the table really is empty) |
+| `rest-fallback` | The SDK is **missing from the deployment bundle**, so the gateway is talking to Supabase over plain HTTP | Reads and writes work, but rebuild/redeploy so the SDK ships with the bundle |
+| `unavailable` | Supabase is configured but no client could be built at all | Read `supabase.error`, fix it, redeploy |
+
+**Why this happened once before (2026-10-09).** `/api/transactions` 500'd because
+`require('@supabase/supabase-js')` failed inside the serverless bundle, and
+dashboard.html swallowed the error and rendered an empty ledger — a real
+GH₵55.00 looked like it had been wiped. Three things now prevent that:
+
+1. **`lib/postgrest-client.js`** — a dependency-free PostgREST transport. Supabase's
+   data endpoint is plain HTTP, so the ledger stays readable and writable even
+   when the npm package is missing from the bundle. It is a fallback only: when
+   the SDK loads, nothing changes.
+2. **`/api/health`** reports the *transport actually in use* (not just whether the
+   env vars are set) and answers **503** when Supabase is configured but unusable.
+3. **dashboard.html** shows an error banner and `GH₵ —` instead of silently
+   painting an empty ledger.
+
+Regression coverage: `node scripts/postgrest-fallback-test.mjs` (also in `npm test`).
+
+---
+
 ## 🧱 Build guard: every import must be in the repository
 
 ```bash

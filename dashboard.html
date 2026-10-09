@@ -70,7 +70,32 @@
 
   <!-- Main Content Layout -->
   <main class="max-w-[1200px] mx-auto p-6 flex-1 w-full space-y-6">
-    
+
+    <!-- Ledger health banner.
+         An empty ledger and a BROKEN ledger used to look identical: both
+         rendered an empty table and GH₵0.00, so a 500 from /api/transactions
+         read as "no sales yet". This banner is the difference between
+         "you have no payments" and "we could not load your payments". -->
+    <div id="ledgerErrorBanner" class="hidden border border-red-900/60 bg-red-950/40 rounded-lg p-4">
+      <div class="flex items-start gap-3">
+        <span class="text-red-400 text-lg leading-none mt-0.5">⚠️</span>
+        <div class="flex-1">
+          <p class="text-red-300 text-[13px] font-extrabold uppercase tracking-widest mb-1">
+            Ledger could not be loaded
+          </p>
+          <p id="ledgerErrorMessage" class="text-gray-300 text-[12px] font-medium leading-relaxed"></p>
+          <p class="text-gray-500 text-[11px] font-medium mt-2">
+            Your transactions are safe — this is a read error, not missing money. Check
+            <a href="/api/health" target="_blank" rel="noopener" class="text-[#f68b1e] underline">/api/health</a>
+            for the Supabase transport status, then reload this page.
+          </p>
+        </div>
+        <button onclick="fetchDashboardData();" class="shrink-0 border border-red-800 text-red-300 hover:bg-red-900/40 text-[11px] font-black uppercase tracking-widest px-3 py-1.5 rounded transition">
+          Retry
+        </button>
+      </div>
+    </div>
+
     <!-- Balance & Analytics Cards -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
       
@@ -234,6 +259,8 @@
     // rendered below comes from a real transaction returned by /api/transactions.
     let transactions = [];
     let currentBalance = 0;
+    /** True when the last /api/transactions read failed. See showLedgerError(). */
+    let ledgerLoadFailed = false;
 
     const SUCCESS_STATUSES = ['SUCCESS', 'SUCCESSFUL', 'PAID', 'COMPLETED'];
 
@@ -273,6 +300,16 @@
     function renderDashboard() {
       const ledgerRows = document.getElementById('ledgerRows');
       const emptyState = document.getElementById('ledgerEmptyState');
+
+      // A failed read is NOT an empty ledger. Keep the "unavailable" state
+      // (banner + GH₵ —) instead of painting a confident GH₵0.00.
+      if (ledgerLoadFailed) {
+        document.getElementById('walletBalance').textContent = 'GH\u20b5 —';
+        document.getElementById('ledgerCount').textContent = 'Ledger unavailable';
+        ledgerRows.innerHTML = '';
+        emptyState.classList.add('hidden');
+        return;
+      }
 
       currentBalance = calculateBalance(transactions);
       document.getElementById('walletBalance').textContent = `GH\u20b5 ${formatMoney(currentBalance)}`;
@@ -317,12 +354,52 @@
       return null;
     }
 
+    function showLedgerError(message) {
+      ledgerLoadFailed = true;
+      const banner = document.getElementById('ledgerErrorBanner');
+      const text = document.getElementById('ledgerErrorMessage');
+      if (banner) banner.classList.remove('hidden');
+      if (text) text.textContent = message;
+      // A failed read must never be rendered as a settled GH₵0.00 balance:
+      // "unknown" is honest, "0.00" is a lie about how much money you took.
+      const balanceEl = document.getElementById('walletBalance');
+      if (balanceEl) balanceEl.textContent = 'GH\u20b5 —';
+      const countEl = document.getElementById('ledgerCount');
+      if (countEl) countEl.textContent = 'Ledger unavailable';
+    }
+
+    function clearLedgerError() {
+      ledgerLoadFailed = false;
+      const banner = document.getElementById('ledgerErrorBanner');
+      if (banner) banner.classList.add('hidden');
+    }
+
     async function fetchDashboardData() {
       try {
         const res = await adminFetch('/api/transactions', { headers: { 'Cache-Control': 'no-cache' } });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        // A 500 (or any other failure) used to be swallowed and rendered as an
+        // empty ledger. Surface the server's own reason instead.
+        if (!res.ok) {
+          let message = `The server answered HTTP ${res.status}.`;
+          try {
+            const body = await res.json();
+            message = body.message || body.error || message;
+          } catch (_) { /* non-JSON error body — keep the status message */ }
+          showLedgerError(message);
+          throw new Error(message);
+        }
 
         const payload = await res.json();
+
+        if (payload && payload.success === false) {
+          showLedgerError(payload.message || payload.error || 'The server refused to return the ledger.');
+          transactions = [];
+          renderDashboard();
+          return;
+        }
+
+        clearLedgerError();
         transactions = extractTransactions(payload).map(t => ({
           ...t,
           customer: t.customer || t.customer_email || 'unknown@customer',
@@ -341,7 +418,8 @@
         }
       } catch (error) {
         console.error('Could not load transactions:', error);
-        // Never fall back to fake data - show a genuinely empty ledger.
+        // Never fall back to fake data - show a genuinely empty ledger (and the
+        // error banner, so "empty" can never again be mistaken for "broken").
         transactions = [];
         renderDashboard();
       }

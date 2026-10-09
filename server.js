@@ -12,7 +12,7 @@ const {
 } = require('./lib/paystack');
 const ledger = require('./lib/ledger');
 const { handleWebhookEvent, toLedgerRecord } = require('./lib/webhook');
-const { isSupabaseConfigured, supabaseConfigState, getSupabaseClient } = require('./lib/supabase');
+const { isSupabaseConfigured, supabaseConfigState, getSupabaseClient, clientDiagnostics } = require('./lib/supabase');
 const transactionStore = require('./lib/transaction-store');
 const webhookLog = require('./lib/webhook-log');
 const webhookDiagnostics = require('./lib/webhook-diagnostics');
@@ -869,10 +869,34 @@ app.get('/api/health', (req, res) => {
     process.env.PAYSTACK_SECRET_KEY || process.env.WEBHOOK_SECRET
   );
 
+  // Environment variables PRESENT is not the same as a database client that
+  // WORKS. On 2026-10-09 every variable was set and /api/health reported
+  // ok:true while the ledger read 500'd and the dashboard rendered an empty
+  // GH₵0.00 board. Building the client here (and reporting which transport
+  // answered) makes that failure visible in a single GET.
+  let transport = 'unconfigured';
+  let clientReady = false;
+  let clientError = null;
+  if (supabase.configured) {
+    try {
+      clientReady = Boolean(getSupabaseClient());
+    } catch (error) {
+      clientError = error && error.message ? error.message : String(error);
+    }
+    const diagnostics = clientDiagnostics();
+    transport = diagnostics.transport;
+    clientError = clientError || (diagnostics.lastError ? diagnostics.lastError.message : null);
+  }
+
   const missing = [];
   if (!supabase.urlConfigured) missing.push('SUPABASE_URL');
   if (!supabase.keyConfigured) missing.push('SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)');
   if (!paystackConfigured) missing.push('PAYSTACK_SECRET_KEY');
+  // Configured but unusable: the dashboard would show an empty ledger that
+  // looks like "no sales yet", so this must be a hard failure, not a warning.
+  if (supabase.configured && !clientReady) {
+    missing.push('Supabase client could not be created (see transport / error below)');
+  }
 
   const warnings = [];
   if (supabase.urlConfigured && !supabase.serviceRoleKeyConfigured && supabase.anonKeyConfigured) {
@@ -882,6 +906,14 @@ app.get('/api/health', (req, res) => {
   }
   if (!process.env.WEBHOOK_SECRET && paystackConfigured) {
     warnings.push('WEBHOOK_SECRET is unset — PAYSTACK_SECRET_KEY is used directly (recommended for Paystack).');
+  }
+  // The fallback keeps the ledger alive, but it means the deployment bundle is
+  // broken and should be fixed at the source.
+  if (transport === 'rest-fallback') {
+    warnings.push(
+      'Supabase is reachable only through the dependency-free PostgREST fallback: ' +
+      '@supabase/supabase-js is missing from this deployment bundle. Rebuild/redeploy so the SDK is included.'
+    );
   }
 
   res.set('Cache-Control', 'no-store');
@@ -897,7 +929,15 @@ app.get('/api/health', (req, res) => {
     optional: { WEBHOOK_SECRET: Boolean(process.env.WEBHOOK_SECRET) },
     supabase: {
       configured: supabase.configured,
-      credentialType: supabase.credentialType
+      credentialType: supabase.credentialType,
+      // 'npm' = official SDK, 'rest-fallback' = HTTP transport, 'unavailable' = nothing works.
+      transport,
+      clientReady,
+      error: clientError
+    },
+    ledger: {
+      // True only when the dashboard's own endpoint can actually be served.
+      readable: clientReady
     },
     webhook: { signingSecretConfigured: webhookSecretConfigured },
     missing,
