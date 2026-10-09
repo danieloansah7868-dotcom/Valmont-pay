@@ -1,15 +1,33 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 100">
   <defs>
-    <linearGradient id="vGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#f58c14"/>
-      <stop offset="100%" stop-color="#e8b64c"/>
+    <linearGradient id="orangeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff8c1a"/>
+      <stop offset="100%" stop-color="#f97316"/>
     </linearGradient>
   </defs>
+  <!-- Dark navy background -->
   <rect width="400" height="100" fill="#0b1a38"/>
-  <g transform="translate(15, 10)">
-    <polygon points="40,5 75,25 75,65 40,85 5,65 5,25" fill="#0f2247" stroke="#1a3a6b" stroke-width="1" stroke-linejoin="round"/>
-    <path d="M 25,25 L 35,25 L 40,55 L 45,25 L 55,25 L 48,60 L 32,60 Z" fill="url(#vGrad)"/>
+  <!-- Hexagon icon -->
+  <g transform="translate(8, 8)">
+    <!-- Outer orange hexagon -->
+    <polygon points="42,4 76,23 76,61 42,80 8,61 8,23"
+             fill="none" stroke="url(#orangeGrad)" stroke-width="8" stroke-linejoin="round"/>
+    <!-- Inner white hexagon -->
+    <polygon points="42,12 68,27 68,57 42,72 16,57 16,27"
+             fill="#ffffff" stroke="#0b1a38" stroke-width="2" stroke-linejoin="round"/>
+    <!-- Wallet (simplified) -->
+    <rect x="26" y="34" width="32" height="26" rx="3" fill="#0b1a38" stroke="#ffffff" stroke-width="1.5"/>
+    <!-- Wallet clasp -->
+    <rect x="46" y="42" width="12" height="10" rx="2" fill="#0b1a38" stroke="#ffffff" stroke-width="1.5"/>
+    <circle cx="52" cy="47" r="2.5" fill="#ffffff"/>
+    <!-- Dollar circle -->
+    <circle cx="58" cy="34" r="11" fill="#ffffff" stroke="#0b1a38" stroke-width="1.5"/>
+    <path d="M 58,25 A 9,9 0 1,1 49,34" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round"/>
+    <polygon points="49,30 49,38 44,34" fill="#f97316"/>
+    <text x="58" y="42" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="900" fill="#f97316" text-anchor="middle">$</text>
   </g>
-  <text x="110" y="62" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="800" fill="#ffffff" letter-spacing="1">VALMONT</text>
-  <text x="295" y="62" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="800" fill="#f58c14" letter-spacing="1">PAY</text>
+  <!-- VALMONT text -->
+  <text x="100" y="62" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="800" fill="#ffffff" letter-spacing="1">VALMONT</text>
+  <!-- PAY text -->
+  <text x="268" y="62" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="800" fill="#f97316" letter-spacing="1">PAY</text>
 </svg>
