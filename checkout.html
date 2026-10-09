@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Valmont-Pay Secure Checkout Widget</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/favicon.svg">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,8 +24,10 @@
     <!-- Top Header -->
     <div class="bg-[#0b1a38] text-white p-4 flex items-center justify-between shrink-0">
       <div class="flex items-center gap-2">
-        <div class="h-2 w-2 rounded-full bg-[#f68b1e] animate-pulse"></div>
-        <span class="font-extrabold text-[11px] uppercase tracking-widest text-[#f68b1e]">Valmont-Pay Secured</span>
+        <!-- Same mark as the rest of the gateway: /logo.svg, so the customer
+             sees one consistent brand from storefront to checkout. -->
+        <img src="/logo.svg" alt="Valmont Pay" class="h-5 w-auto" />
+        <span class="font-extrabold text-[11px] uppercase tracking-widest text-[#f68b1e]">Secured</span>
       </div>
       <span class="text-[11px] text-gray-400 font-bold" id="checkoutRef">VP-------</span>
     </div>
