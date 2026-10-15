@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Valmont Pay — Receive Money (Pay Me) — MoMo / Bank Direct</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>body{font-family:'Inter',sans-serif;background:#050d24;color:#fff}.mono{font-family:'JetBrains Mono',monospace}</style>
+</head>
+<body class="min-h-screen flex flex-col">
+<header style="background:#0b1a38;padding:16px 24px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:space-between">
+  <div class="flex items-center gap-3">
+    <img src="/logo.svg" alt="Valmont Pay" style="height:32px">
+    <span class="text-[11px] font-black tracking-widest uppercase bg-[#f68b1e] text-white px-2 py-1 rounded">PAY ME • DIRECT</span>
+  </div>
+  <div class="flex items-center gap-3">
+    <a href="/dashboard.html" class="text-[11px] font-bold uppercase tracking-widest text-gray-400 hover:text-white">Dashboard</a>
+    <a href="/virtual-card.html" class="text-[11px] font-bold uppercase tracking-widest text-gray-400 hover:text-white">Virtual Card</a>
+  </div>
+</header>
+
+<main class="max-w-[1100px] mx-auto w-full p-6 flex-1">
+  <div id="payerView" class="hidden">
+    <!-- PAYER: someone opened your receive link to pay you -->
+    <div class="max-w-[560px] mx-auto">
+      <div class="bg-[#0b1a38] border border-[#142850] rounded-2xl overflow-hidden shadow-2xl">
+        <div class="p-6">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 rounded-full bg-[#f68b1e] flex items-center justify-center font-black text-white">₵</div>
+            <div>
+              <div class="font-black text-white" id="payerReceiverName">—</div>
+              <div class="text-xs text-gray-400">wants to receive money via Valmont Pay</div>
+            </div>
+            <span id="payerBadge" class="ml-auto text-[10px] font-black uppercase tracking-widest bg-green-900 text-green-300 border border-green-800 px-2 py-1 rounded">Direct to MoMo/Bank</span>
+          </div>
+
+          <div class="bg-[#050d24] border border-[#142850] rounded-xl p-4">
+            <div class="text-[10px] font-black uppercase tracking-widest text-gray-500">You will pay</div>
+            <div id="payerAmountDisplay" class="text-2xl font-black mt-1">GH₵ —</div>
+            <div id="payerNote" class="text-xs text-gray-400 mt-1"></div>
+            <div class="mt-2 text-[11px] font-bold text-gray-500">Funds go <b class="text-white">directly</b> to: <span id="payerDestination" class="text-[#f68b1e] mono"></span> <span id="payerDestType" class="text-gray-400"></span></div>
+            <div class="text-[10px] text-gray-600 mt-1">Valmont Pay never holds the money — Paystack settles it straight to the entitled account.</div>
+          </div>
+
+          <form onsubmit="payerPay(event)" class="mt-5 space-y-3">
+            <div id="payerAmountWrap">
+              <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Amount to send (GHS)</label>
+              <input id="payerAmount" type="number" min="1" step="0.01" placeholder="100.00" class="w-full bg-[#050d24] border border-[#142850] p-3 rounded text-white outline-none focus:border-[#f68b1e]" required>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Your email (receipt)</label>
+                <input id="payerEmail" type="email" placeholder="you@example.com" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded text-white outline-none focus:border-[#f68b1e]" required>
+              </div>
+              <div>
+                <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Your MoMo (optional)</label>
+                <input id="payerPhone" type="tel" placeholder="0544 000 000" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded text-white outline-none focus:border-[#f68b1e]">
+              </div>
+            </div>
+            <button type="submit" id="payerBtn" class="w-full bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded">Pay <span id="payerBtnAmount"></span> →</button>
+            <p id="payerStatus" class="text-xs font-bold hidden"></p>
+            <div id="payerPaystackBox" class="hidden p-3 bg-amber-950/30 border border-amber-900/40 rounded">
+              <p class="text-xs font-bold text-amber-300">Paystack checkout ready:</p>
+              <a id="payerPaystackLink" href="#" target="_blank" class="inline-block mt-2 bg-white text-[#0b1a38] font-black text-xs uppercase px-4 py-2 rounded">Open Paystack to Pay →</a>
+            </div>
+          </form>
+        </div>
+        <div class="px-6 py-3 bg-[#050d24] border-t border-[#142850] text-center text-[10px] text-gray-600">Secured by Valmont Pay • MoMo / Card / Bank Transfer via Paystack</div>
+      </div>
+      <p class="text-center mt-4"><a href="/receive.html" class="text-xs font-bold uppercase tracking-widest text-[#f68b1e] hover:underline">Create your own Pay Me link →</a></p>
+    </div>
+  </div>
+
+  <div id="creatorView">
+    <div class="mb-6">
+      <h1 class="text-2xl font-black">Receive Money <span class="text-[#f68b1e]">— Direct to your MoMo or Bank</span></h1>
+      <p class="text-gray-400 text-sm mt-1 max-w-2xl">Someone pays you via MoMo / Card / Bank Transfer and it lands <b class="text-white">directly</b> in your entitled account. You choose where: your MoMo number, your bank account, or any Paystack subaccount (<code class="text-[#f68b1e]">ACCT_…</code>). Valmont Pay never holds the money — Paystack settles it for you.</p>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
+      <!-- LEFT: Form -->
+      <div class="lg:col-span-3 space-y-4">
+        <div class="bg-[#0b1a38] border border-[#142850] rounded-xl p-5">
+          <h3 class="font-black text-xs uppercase tracking-widest text-[#f68b1e]">Create your Pay Me link</h3>
+          <form onsubmit="createLink(event)" class="mt-4 space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Your email (to manage links)</label>
+                <input id="receiverEmail" type="email" placeholder="you@example.com" required class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded text-sm text-white outline-none focus:border-[#f68b1e]">
+              </div>
+              <div>
+                <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Display name (who is being paid)</label>
+                <input id="receiverName" type="text" placeholder="Daniel • Valmont" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded text-sm text-white outline-none focus:border-[#f68b1e]">
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Where should money land? (entitled account)</label>
+              <div class="grid grid-cols-3 gap-2 mb-2">
+                <button type="button" onclick="setDest('momo')" id="btnMomo" class="dest-btn bg-[#f68b1e] text-white font-black text-xs uppercase py-2 rounded">📱 MoMo</button>
+                <button type="button" onclick="setDest('bank')" id="btnBank" class="dest-btn bg-[#050d24] border border-[#142850] text-gray-400 font-bold text-xs uppercase py-2 rounded">🏦 Bank</button>
+                <button type="button" onclick="setDest('subaccount')" id="btnSub" class="dest-btn bg-[#050d24] border border-[#142850] text-gray-400 font-bold text-xs uppercase py-2 rounded">ACCT_ Subaccount</button>
+              </div>
+              <input id="destInput" type="text" placeholder="0544 000 000" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded text-sm text-white outline-none focus:border-[#f68b1e]" required>
+              <p id="destHint" class="text-[10px] text-gray-500 mt-1">MoMo: MTN / Telecel / AT number. Funds arrive instantly via Paystack Transfer after payer succeeds.</p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Amount (optional)</label>
+                <input id="fixedAmount" type="number" min="1" step="0.01" placeholder="Leave empty = payer chooses" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded text-sm text-white outline-none focus:border-[#f68b1e]">
+                <p class="text-[10px] text-gray-500 mt-1">Fixed: payer cannot edit. Empty: payer types amount.</p>
+              </div>
+              <div>
+                <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Note (optional)</label>
+                <input id="note" type="text" placeholder="e.g. For rent — April, or Invoice #123" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded text-sm text-white outline-none focus:border-[#f68b1e]">
+              </div>
+            </div>
+
+            <button type="submit" id="createBtn" class="w-full bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded">Generate Pay Me Link →</button>
+            <p id="createStatus" class="text-xs font-bold hidden"></p>
+          </form>
+        </div>
+
+        <!-- Result -->
+        <div id="resultBox" class="hidden bg-[#0b1a38] border border-green-900/40 rounded-xl p-5">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="w-6 h-6 rounded-full bg-green-600 text-white flex items-center justify-center text-xs font-black">✓</span>
+            <h3 class="font-black text-sm text-green-300">Your Pay Me link is ready — share it!</h3>
+            <span class="ml-auto text-[10px] font-bold uppercase tracking-widest bg-green-900/40 text-green-300 border border-green-900 px-2 py-1 rounded">Direct settlement</span>
+          </div>
+          <div class="space-y-3">
+            <div>
+              <div class="text-[10px] font-black uppercase tracking-widest text-gray-500">Share this link (WhatsApp, SMS, email)</div>
+              <div class="mt-1 flex gap-2">
+                <input id="shareUrl" readonly class="flex-1 bg-[#050d24] border border-green-900/40 p-2.5 rounded text-xs mono text-white">
+                <button onclick="copyShare()" class="bg-white text-[#0b1a38] font-black text-xs uppercase px-4 rounded">Copy</button>
+              </div>
+            </div>
+            <div id="shareAccessRow" class="hidden">
+              <div class="text-[10px] font-black uppercase tracking-widest text-gray-500">Locked Paystack checkout (fixed amount)</div>
+              <div class="mt-1 flex gap-2">
+                <input id="shareAccessUrl" readonly class="flex-1 bg-[#050d24] border border-[#142850] p-2.5 rounded text-xs mono text-gray-300">
+                <button onclick="copyAccess()" class="bg-[#142850] text-white font-bold text-xs uppercase px-4 rounded">Copy</button>
+              </div>
+              <p class="text-[10px] text-gray-500 mt-1">Payer amount is locked server-side — they cannot change GH₵ via URL.</p>
+            </div>
+            <div class="bg-[#050d24] border border-[#142850] rounded p-3 text-xs leading-relaxed">
+              <div><span class="text-gray-500">Receiver:</span> <b id="resReceiver" class="text-white"></b> (<span id="resEmail" class="mono text-gray-400"></span>)</div>
+              <div><span class="text-gray-500">Lands directly to:</span> <b id="resDest" class="text-[#f68b1e] mono"></b> <span id="resDestType" class="text-gray-400"></span></div>
+              <div><span class="text-gray-500">Amount:</span> <b id="resAmount" class="text-white"></b></div>
+            </div>
+            <div class="flex gap-2">
+              <a id="openAsPayer" href="#" target="_blank" class="flex-1 text-center bg-white text-[#0b1a38] font-black text-xs uppercase tracking-widest py-3 rounded">Open as payer (test) →</a>
+              <button onclick="document.getElementById('resultBox').classList.add('hidden')" class="px-4 bg-[#050d24] border border-[#142850] text-white font-bold text-xs uppercase rounded">Create another</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Your links -->
+        <div class="bg-[#0b1a38] border border-[#142850] rounded-xl overflow-hidden">
+          <div class="px-5 py-3 border-b border-[#142850] flex justify-between items-center">
+            <h3 class="font-black text-xs uppercase tracking-widest">Your Pay Me links</h3>
+            <button onclick="loadMyLinks()" class="text-[11px] font-bold uppercase tracking-widest text-[#f68b1e] hover:underline">↻ Refresh</button>
+          </div>
+          <div id="myLinks" class="divide-y divide-[#142850]/50">
+            <div class="p-6 text-center text-gray-500 text-sm">Enter your email above and create a link to see it here.<br><span class="text-xs">Also works: <code class="text-gray-400">?email=you@example.com</code> in URL.</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Explain -->
+      <div class="lg:col-span-2 space-y-4">
+        <div class="bg-[#0b1a38] border border-[#142850] rounded-xl p-5">
+          <h3 class="font-black text-xs uppercase tracking-widest text-[#f68b1e]">How direct settlement works</h3>
+          <div class="mt-3 space-y-4 text-sm leading-relaxed">
+            <div class="flex gap-3">
+              <span class="bg-[#f68b1e] text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0">1</span>
+              <div><b>You</b> create a Pay Me link and choose the <b>entitled account</b> — your MoMo, your bank, or any <code class="text-[#f68b1e] mono text-xs">ACCT_…</code> subaccount.</div>
+            </div>
+            <div class="flex gap-3">
+              <span class="bg-[#f68b1e] text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0">2</span>
+              <div><b>Payer</b> opens link, enters amount (if you left it open) + email, pays via <b>MoMo / Card / Bank Transfer</b> through Paystack.</div>
+            </div>
+            <div class="flex gap-3">
+              <span class="bg-[#f68b1e] text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0">3</span>
+              <div><b>Settlement:</b>
+                <ul class="mt-1 space-y-1 text-xs text-gray-300 list-disc list-inside">
+                  <li><b>Subaccount (<code>ACCT_…</code>):</b> Paystack <b>splits at source</b> — your share settles to that account’s bank instantly.</li>
+                  <li><b>Bank freeform:</b> Paystack settles T+1 to the main settlement bank (or you add that bank as a subaccount).</li>
+                  <li><b>MoMo number:</b> On <code>charge.success</code> webhook, Valmont triggers a <b>Paystack Transfer</b> (recipients API) → instant MoMo credit. <i class="text-gray-500">Needs Paystack balance + transfer enabled.</i></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <div class="mt-4 p-3 bg-[#050d24] border border-[#142850] rounded">
+            <p class="text-[11px] font-black uppercase tracking-widest text-gray-400">Valmont Pay never holds money</p>
+            <p class="text-xs text-gray-300 mt-1">Same as your dashboard: “Funds settle directly to your bank via Paystack.” This page just lets the <b>receiver</b> name the destination per link, instead of one global settlement account.</p>
+          </div>
+        </div>
+
+        <div class="bg-amber-950/30 border border-amber-900/40 rounded-xl p-5">
+          <h3 class="font-black text-xs uppercase tracking-widest text-amber-400">Which destination should you use?</h3>
+          <table class="w-full mt-3 text-xs">
+            <tr class="border-b border-amber-900/20"><td class="py-2 font-bold text-white">📱 MoMo number</td><td class="py-2 text-right text-gray-300">Best for P2P / freelancers. Instant payout via Transfer API.</td></tr>
+            <tr class="border-b border-amber-900/20"><td class="py-2 font-bold text-white">🏦 Bank account</td><td class="py-2 text-right text-gray-300">Name it freeform for record; for real split use ACCT_.</td></tr>
+            <tr><td class="py-2 font-bold text-white">ACCT_… subaccount</td><td class="py-2 text-right text-gray-300">True Paystack split — merchant’s own ledger & settlement.</td></tr>
+          </table>
+          <p class="text-[10px] text-gray-500 mt-2">Create a Paystack subaccount in Dashboard → Paystack → Subaccounts, then paste <code>ACCT_…</code> here. That merchant sees the ledger under their tenant.</p>
+        </div>
+
+        <div class="bg-[#0b1a38] border border-[#142850] rounded-xl p-5">
+          <h3 class="font-black text-xs uppercase tracking-widest">API (same as your other links)</h3>
+<pre class="mono text-[11px] bg-[#050d24] border border-[#142850] rounded p-3 mt-2 overflow-auto text-gray-300">POST /api/v1/receive-links
+{
+  "receiver_email": "you@example.com",
+  "receiver_name": "Daniel",
+  "destination_type": "momo",         // momo | bank | subaccount
+  "momo_number": "0544000000",        // or bank_account / subaccount
+  "amount": 200,                      // null = payer chooses
+  "note": "Rent April"
+}
+// → { code:"rv_…", pay_url:"…/receive.html?code=rv_…" }
+
+POST /api/v1/receive-links/rv_xxx/pay
+{
+  "payer_email": "sender@example.com",
+  "amount": 200  // ignored if receiver fixed amount
+}
+// → { paystack_authorization_url } or demo success</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="text-center py-6 text-[11px] text-gray-600">Paystack is the settlement rail • Valmont Pay is the lock + routing • Bank T+1 • MoMo instant via Transfer</footer>
+
+<script>
+let destType='momo';
+function setDest(type){
+  destType=type;
+  ['momo','bank','subaccount'].forEach(t=>{
+    const b=document.getElementById(t==='momo'?'btnMomo':t==='bank'?'btnBank':'btnSub');
+    const active=t===type;
+    b.className= active ? 'dest-btn bg-[#f68b1e] text-white font-black text-xs uppercase py-2 rounded' : 'dest-btn bg-[#050d24] border border-[#142850] text-gray-400 font-bold text-xs uppercase py-2 rounded';
+  });
+  const input=document.getElementById('destInput');
+  const hint=document.getElementById('destHint');
+  if(type==='momo'){ input.placeholder='0544 000 000'; input.type='tel'; hint.textContent='MoMo: MTN / Telecel / AT. Instant payout via Paystack Transfer after payer succeeds.'; }
+  else if(type==='bank'){ input.placeholder='GCB Bank - 1234567890 or 0123456789012'; input.type='text'; hint.textContent='Bank: freeform for record. For true Paystack split, use the ACCT_ subaccount option.'; }
+  else { input.placeholder='ACCT_xxxxxxxx'; input.type='text'; hint.textContent='Subaccount: Paystack splits at source — funds settle to that subaccount’s bank directly.'; }
+  input.focus();
+}
+
+async function createLink(e){
+  e.preventDefault();
+  const receiver_email=document.getElementById('receiverEmail').value.trim();
+  const receiver_name=document.getElementById('receiverName').value.trim();
+  const dest=document.getElementById('destInput').value.trim();
+  const amountRaw=document.getElementById('fixedAmount').value.trim();
+  const note=document.getElementById('note').value.trim();
+  const status=document.getElementById('createStatus');
+  const btn=document.getElementById('createBtn');
+  if(!dest){ status.textContent='❌ Enter the entitled account (MoMo / bank / ACCT_)'; status.className='text-xs font-bold text-red-400'; status.classList.remove('hidden'); return; }
+  btn.disabled=true; btn.textContent='Creating…'; status.classList.add('hidden');
+  try{
+    const payload={ receiver_email, receiver_name, destination_type: destType, note };
+    if(destType==='momo') payload.momo_number=dest;
+    else if(destType==='bank') payload.bank_account=dest;
+    else payload.subaccount=dest;
+    if(amountRaw!=='') payload.amount=parseFloat(amountRaw);
+    const r=await fetch('/api/v1/receive-links',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const j=await r.json();
+    if(!r.ok || !j.status){ status.textContent='❌ '+(j.message||'Failed'); status.className='text-xs font-bold text-red-400'; status.classList.remove('hidden'); return; }
+    const d=j.data;
+    document.getElementById('shareUrl').value= location.origin + '/receive.html?code=' + d.code;
+    const accessRow=document.getElementById('shareAccessRow');
+    if(d.pay_access_url){ document.getElementById('shareAccessUrl').value=d.pay_access_url; accessRow.classList.remove('hidden'); } else accessRow.classList.add('hidden');
+    document.getElementById('resReceiver').textContent=d.receiver_name;
+    document.getElementById('resEmail').textContent=d.receiver_email;
+    document.getElementById('resDest').textContent=d.destination;
+    document.getElementById('resDestType').textContent='(' + d.destination_type + ')';
+    document.getElementById('resAmount').textContent= d.amount!=null ? 'GH₵ '+Number(d.amount).toFixed(2) + ' (fixed)' : 'Payer chooses';
+    document.getElementById('openAsPayer').href= location.origin + '/receive.html?code=' + d.code;
+    document.getElementById('resultBox').classList.remove('hidden');
+    status.textContent='✅ Link ready — share it!'; status.className='text-xs font-bold text-green-400'; status.classList.remove('hidden');
+    loadMyLinks();
+    window.scrollTo({top: document.getElementById('resultBox').offsetTop - 20, behavior:'smooth'});
+  }catch(err){ status.textContent='❌ '+err.message; status.className='text-xs font-bold text-red-400'; status.classList.remove('hidden'); }
+  finally{ btn.disabled=false; btn.textContent='Generate Pay Me Link →'; }
+}
+function copyShare(){ navigator.clipboard.writeText(document.getElementById('shareUrl').value); alert('Link copied!'); }
+function copyAccess(){ navigator.clipboard.writeText(document.getElementById('shareAccessUrl').value); alert('Locked checkout link copied!'); }
+
+async function loadMyLinks(){
+  const email=document.getElementById('receiverEmail').value.trim() || new URLSearchParams(location.search).get('email') || localStorage.getItem('receive_email') || '';
+  if(!email || !email.includes('@')) return;
+  localStorage.setItem('receive_email', email);
+  try{
+    const r=await fetch('/api/v1/receive-links?receiver_email='+encodeURIComponent(email));
+    const j=await r.json();
+    const el=document.getElementById('myLinks');
+    if(!j.status || !j.data || !j.data.length){ el.innerHTML='<div class="p-6 text-center text-gray-500 text-sm">No links yet for '+email+'</div>'; return; }
+    el.innerHTML=j.data.map(d=>`
+      <div class="p-4 hover:bg-[#0d1e3d]/30 flex justify-between items-center gap-3">
+        <div class="min-w-0">
+          <div class="text-sm font-bold text-white truncate">${escapeHtml(d.note || 'Pay Me')}</div>
+          <div class="text-xs mono text-gray-400 truncate">${location.origin}/receive.html?code=${d.code}</div>
+          <div class="text-[11px] text-gray-500">To: <b class="text-[#f68b1e]">${escapeHtml(d.destination)}</b> (${d.destination_type}) • ${d.amount!=null ? 'GH₵ '+Number(d.amount).toFixed(2) : 'any amount'} • ${new Date(d.created_at).toLocaleDateString()}</div>
+        </div>
+        <div class="flex gap-1 shrink-0">
+          <button onclick="navigator.clipboard.writeText('${location.origin}/receive.html?code=${d.code}'); alert('Copied')" class="text-[10px] font-black uppercase bg-[#142850] text-white px-2 py-1 rounded">Copy</button>
+          <a href="/receive.html?code=${d.code}" target="_blank" class="text-[10px] font-black uppercase bg-white text-[#0b1a38] px-2 py-1 rounded">Open</a>
+        </div>
+      </div>
+    `).join('');
+  }catch(_){}
+}
+function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// payer view
+async function loadPayerView(code){
+  try{
+    const r=await fetch('/api/v1/receive-links/'+encodeURIComponent(code));
+    const j=await r.json();
+    if(!r.ok || !j.status) throw new Error(j.message || 'Link not found');
+    const d=j.data;
+    document.getElementById('creatorView').classList.add('hidden');
+    document.getElementById('payerView').classList.remove('hidden');
+    document.getElementById('payerReceiverName').textContent=d.receiver_name;
+    document.getElementById('payerDestination').textContent=d.destination;
+    document.getElementById('payerDestType').textContent='('+d.destination_type+')';
+    document.getElementById('payerNote').textContent=d.note || '';
+    if(d.amount!=null){
+      document.getElementById('payerAmountDisplay').textContent='GH₵ '+Number(d.amount).toFixed(2);
+      document.getElementById('payerAmountWrap').classList.add('hidden');
+      document.getElementById('payerAmount').value=d.amount;
+      document.getElementById('payerAmount').required=false;
+      document.getElementById('payerBtnAmount').textContent='GH₵ '+Number(d.amount).toFixed(2);
+    } else {
+      document.getElementById('payerAmountDisplay').textContent='Any amount (you choose)';
+      document.getElementById('payerAmountWrap').classList.remove('hidden');
+      document.getElementById('payerBtnAmount').textContent='';
+      document.getElementById('payerAmount').addEventListener('input', e=>{
+        const v=parseFloat(e.target.value); document.getElementById('payerBtnAmount').textContent= v? 'GH₵ '+v.toFixed(2) : '';
+        document.getElementById('payerAmountDisplay').textContent= v? 'GH₵ '+v.toFixed(2) : 'Any amount (you choose)';
+      });
+    }
+    document.title='Pay ' + d.receiver_name + ' — GH₵' + (d.amount!=null?Number(d.amount).toFixed(2):'…') + ' — Valmont Pay';
+    // handle ?paid=1 success
+    const params=new URLSearchParams(location.search);
+    if(params.get('paid')==='1'){
+      document.getElementById('payerStatus').textContent='✅ Payment recorded for ref '+ (params.get('ref')||'') +' — funds will land directly to ' + d.destination + ' ('+d.destination_type+').';
+      document.getElementById('payerStatus').className='text-xs font-bold text-green-400';
+      document.getElementById('payerStatus').classList.remove('hidden');
+    }
+  }catch(e){
+    document.getElementById('payerView').innerHTML='<div class="max-w-[560px] mx-auto bg-red-950/40 border border-red-900 rounded-xl p-8 text-center"><div class="text-xl mb-2">⚠️</div><p class="font-black text-white">Link not found or expired</p><p class="text-sm text-gray-400 mt-1">'+e.message+'</p><a href="/receive.html" class="inline-block mt-4 bg-white text-[#0b1a38] font-black text-xs uppercase px-5 py-3 rounded">Create your own Pay Me link</a></div>';
+    document.getElementById('payerView').classList.remove('hidden');
+    document.getElementById('creatorView').classList.add('hidden');
+  }
+}
+async function payerPay(e){
+  e.preventDefault();
+  const code=new URLSearchParams(location.search).get('code');
+  const amount=parseFloat(document.getElementById('payerAmount').value);
+  const payer_email=document.getElementById('payerEmail').value.trim();
+  const payer_phone=document.getElementById('payerPhone').value.trim();
+  const btn=document.getElementById('payerBtn'), status=document.getElementById('payerStatus');
+  btn.disabled=true; btn.textContent='Processing…'; status.classList.add('hidden'); document.getElementById('payerPaystackBox').classList.add('hidden');
+  try{
+    const r=await fetch('/api/v1/receive-links/'+encodeURIComponent(code)+'/pay',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ payer_email, payer_phone, amount }) });
+    const j=await r.json();
+    if(!r.ok || !j.status){ status.textContent='❌ '+(j.message||'Failed'); status.className='text-xs font-bold text-red-400'; status.classList.remove('hidden'); return; }
+    if(j.data && j.data.paystack_authorization_url){
+      document.getElementById('payerPaystackLink').href=j.data.paystack_authorization_url;
+      document.getElementById('payerPaystackBox').classList.remove('hidden');
+      status.textContent='✅ Checkout ready — open Paystack to pay. After you pay, funds go directly to ' + j.data.destination + '.'; status.className='text-xs font-bold text-green-400'; status.classList.remove('hidden');
+      // auto-open
+      window.open(j.data.paystack_authorization_url, '_blank');
+    } else {
+      status.textContent='✅ ' + j.message; status.className='text-xs font-bold text-green-400'; status.classList.remove('hidden');
+    }
+  }catch(err){ status.textContent='❌ '+err.message; status.className='text-xs font-bold text-red-400'; status.classList.remove('hidden'); }
+  finally{ btn.disabled=false; btn.textContent='Pay ' + (document.getElementById('payerBtnAmount').textContent||'') + ' →'; }
+}
+
+// init routing: ?code= => payer, else creator
+(function init(){
+  const params=new URLSearchParams(location.search);
+  const code=params.get('code');
+  const email=params.get('email');
+  if(code){ loadPayerView(code); }
+  else {
+    if(email) document.getElementById('receiverEmail').value=email;
+    else {
+      const saved=localStorage.getItem('receive_email');
+      if(saved) document.getElementById('receiverEmail').value=saved;
+    }
+    setDest('momo');
+    loadMyLinks();
+    document.getElementById('receiverEmail').addEventListener('change', loadMyLinks);
+  }
+})();
+</script>
+</body>
+</html>

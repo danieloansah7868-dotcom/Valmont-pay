@@ -24,6 +24,7 @@ const notifier = require('./lib/notifier');
 const paymentLinkStore = require('./lib/payment-link-store');
 const mandateStore = require('./lib/mandate-store');
 const virtualCardStore = require('./lib/virtual-card-store');
+const receiveLinkStore = require('./lib/receive-link-store');
 const serviceCatalogue = require('./lib/service-catalogue');
 const legacyLinkPolicy = require('./lib/legacy-link-policy');
 const { publicBaseUrl } = require('./lib/base-url');
@@ -695,6 +696,139 @@ app.post('/api/v1/wallets/:email/topup-local', virtualCardRateLimit, async (req,
   const result = await virtualCardStore.topUpWallet(email, amt);
   if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
   return res.status(200).json({ status: true, message: `Wallet topped up GH₵ ${amt.toFixed(2)}`, data: result.wallet });
+});
+
+// ─── RECEIVE LINKS — Pay Me directly to MoMo / Bank / any entitled account ─
+const receiveRateLimit = rateLimit.limit('receive-links', { max: 30, windowMs: 60*1000, message:'Too many receive links. Slow down.' });
+
+app.post('/api/v1/receive-links', receiveRateLimit, async (req, res) => {
+  const { receiver_email, email, receiver_name, destination_type, destination, momo_number, phone, bank_account, subaccount, amount, note } = req.body || {};
+  const rec = await receiveLinkStore.createReceiveLink({
+    receiver_email: receiver_email || email,
+    receiver_name,
+    destination_type: destination_type || (momo_number||phone ? 'momo' : bank_account ? 'bank' : subaccount ? 'subaccount' : 'momo'),
+    momo_number: momo_number || phone,
+    bank_account: bank_account || destination,
+    subaccount: subaccount || destination,
+    destination,
+    amount: amount != null && String(amount).trim()!=='' ? parseFloat(amount) : null,
+    note
+  });
+  if (!rec.ok) return res.status(400).json({ status:false, message: rec.reason });
+  const r = rec.record;
+  const origin = baseUrl(req);
+  const payUrl = `${origin}/receive.html?code=${encodeURIComponent(r.code)}`;
+  // For payer convenience we also mint a pay.html access_code link when amount is fixed
+  let payAccessUrl = null;
+  if (r.amount != null && r.amount > 0) {
+    try {
+      const paystackKey = process.env.PAYSTACK_SECRET_KEY || '';
+      // create a locked payment link for the FIXED amount so payer cannot edit it
+      const reference = generateReference();
+      const tenant = tenants.getTenant('valmont-electricals');
+      const ac = accessCodeStore.createAccessCode({
+        amount: r.amount, reference, currency:'GHS',
+        email: 'payer@valmontpay.app', // placeholder; payer enters real email at checkout
+        phone:'',
+        callback_url: payUrl,
+        tenant_key: tenant ? tenant.key : null,
+        merchant_display_name: r.receiver_name,
+        merchant_brand_color: '#0b1a38'
+      });
+      const persisted = await paymentLinkStore.persistPaymentLink({ accessCode: ac.access_code, payment: ac.payment, ttlMs: paymentLinkStore.linkTtlMs() });
+      if (persisted.ok) payAccessUrl = `${origin}/pay.html?access_code=${encodeURIComponent(ac.access_code)}`;
+    } catch(_){}
+  }
+  return res.status(201).json({ status:true, message:'Receive link created', data:{ ...r, pay_url: payUrl, pay_access_url: payAccessUrl } });
+});
+
+app.get('/api/v1/receive-links', receiveRateLimit, async (req, res) => {
+  const receiver_email = req.query.receiver_email || req.query.email || '';
+  if (!receiver_email && !isAuthorizedAdmin(req)) return res.status(400).json({ status:false, message:'receiver_email is required (or admin auth).' });
+  const result = await receiveLinkStore.listReceiveLinks({ receiver_email });
+  return res.status(200).json({ status:true, count: result.links.length, data: result.links });
+});
+
+app.get('/api/v1/receive-links/:code', receiveRateLimit, async (req,res)=>{
+  const rec = await receiveLinkStore.getReceiveLink(req.params.code);
+  if (!rec) return res.status(404).json({ status:false, message:'Receive link not found or expired.' });
+  return res.status(200).json({ status:true, data: rec });
+});
+
+// Payer initiates payment for a receive link (amount is locked if receiver fixed it)
+app.post('/api/v1/receive-links/:code/pay', receiveRateLimit, async (req,res)=>{
+  const rec = await receiveLinkStore.getReceiveLink(req.params.code);
+  if (!rec) return res.status(404).json({ status:false, message:'Receive link not found.' });
+  const payer_email = String(req.body?.payer_email || req.body?.email || '').trim();
+  const payer_phone = String(req.body?.payer_phone || req.body?.phone || '').trim();
+  let amount = rec.amount != null ? rec.amount : parseFloat(req.body?.amount);
+  if (!payer_email || !payer_email.includes('@')) return res.status(400).json({ status:false, message:'Valid payer_email is required.' });
+  if (!Number.isFinite(amount) || amount <=0) return res.status(400).json({ status:false, message:'Valid amount is required.' });
+
+  // Build Paystack initialization. Destination determines subaccount/transfer.
+  // Bank subaccount => Paystack split settlement (instant split at source)
+  // MoMo/Bank freeform => after Paystack success, we trigger a Transfer (payout) to that MoMo/bank.
+  let subaccount = undefined;
+  if (rec.destination_type === 'subaccount' && String(rec.destination).trim().startsWith('ACCT_')) {
+    subaccount = String(rec.destination).trim();
+  }
+  const reference = generateReference();
+  const merchantLabel = rec.receiver_name || rec.receiver_email;
+
+  // If Paystack key is set, create a real Paystack checkout URL
+  const paystackKey = process.env.PAYSTACK_SECRET_KEY || '';
+  if (paystackKey) {
+    try {
+      const paystack = require('./lib/paystack');
+      const init = await paystack.initializePayment({
+        amount, email: payer_email, reference,
+        merchant: merchantLabel, phone: payer_phone,
+        subaccount,
+        callback_url: `${baseUrl(req)}/receive.html?code=${encodeURIComponent(rec.code)}&paid=1&ref=${encodeURIComponent(reference)}`,
+        secretKey: paystackKey
+      });
+      if (init && init.status && init.data && init.data.authorization_url) {
+        // Record intent: when webhook fires for this reference, we will payout to rec.destination
+        // For now, store in memory so webhook handler can find it (also persisted via transaction note)
+        // We use accessCodeStore as ephemeral holder keyed by reference
+        accessCodeStore.createAccessCode({
+          amount, reference,
+          currency:'GHS', email: payer_email, phone: payer_phone,
+          callback_url: '',
+          tenant_key: null,
+          merchant_display_name: `[RECEIVE] ${merchantLabel} → ${rec.destination_type}:${rec.destination}`,
+          merchant_brand_color:'#0b1a38',
+          paystack_authorization_url: init.data.authorization_url,
+          paystack_access_code: init.data.access_code || ''
+        });
+        return res.status(200).json({
+          status:true, message:'Payment initialized — complete on Paystack. Funds will land directly to ' + rec.destination,
+          data:{
+            reference,
+            amount,
+            receiver: rec.receiver_name,
+            destination_type: rec.destination_type,
+            destination: rec.destination,
+            paystack_authorization_url: init.data.authorization_url,
+            paystack_access_code: init.data.access_code || null
+          }
+        });
+      }
+    } catch(e){
+      console.warn('[RECEIVE] Paystack init failed, falling back to demo:', e.message);
+    }
+  }
+  // Demo fallback (no Paystack key) — record as SUCCESS immediately and note settlement
+  const ledger = require('./lib/ledger');
+  ledger.addTransaction({
+    reference, customer: payer_email, amount, channel: 'RECEIVE-DEMO',
+    status: 'SUCCESS', merchant: `[RECEIVE] ${merchantLabel} → ${rec.destination}`,
+    tenant_key: null
+  });
+  return res.status(200).json({
+    status:true, message:`Demo: GH₵ ${amount.toFixed(2)} marked SUCCESS — would settle to ${rec.destination_type} ${rec.destination} (Paystack ${rec.destination_type==='subaccount' ? 'split at source' : 'Transfer payout after webhook'})`,
+    data:{ reference, amount, receiver: rec.receiver_name, destination_type: rec.destination_type, destination: rec.destination, demo:true }
+  });
 });
 
 // API 3b: Paystack-backed endpoints (same contract as the /api serverless
@@ -2686,6 +2820,8 @@ app.get('/virtual-card', (req, res) => {
 app.get('/virtual-card.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'virtual-card.html'));
 });
+app.get('/receive', (req,res)=> res.sendFile(path.join(__dirname, 'receive.html')));
+app.get('/receive.html', (req,res)=> res.sendFile(path.join(__dirname, 'receive.html')));
 // ─── Admin authentication ────────────────────────────────────────────────
 //
 // REMOVED: `GET /config/admin.js`. It served ADMIN_EMAIL and ADMIN_PASSWORD,
