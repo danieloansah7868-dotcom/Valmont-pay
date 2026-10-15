@@ -52,6 +52,58 @@
     </div>
   </div>
 
+  <!-- Declined State — shown when the gateway refuses the payment.
+       The gateway's own wording is echoed VERBATIM (the customer will be asked
+       for it by their bank, and the merchant needs it to look the attempt up),
+       and the one piece of advice nobody reads anywhere else is spelled out:
+       retrying a blocked transaction is what keeps the block alive. -->
+  <div id="declinedState" class="bg-white w-full max-w-[480px] rounded-xl shadow-2xl overflow-hidden border border-gray-100 hidden">
+    <div class="bg-[#0b1a38] text-white p-6 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="h-3 w-3 rounded-full bg-red-500"></div>
+        <span class="font-extrabold text-sm uppercase tracking-widest text-[#f68b1e]">Valmont-Pay</span>
+      </div>
+      <span class="text-xs text-gray-400 font-bold">Not Completed</span>
+    </div>
+    <div class="p-8 text-center">
+      <div class="h-16 w-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center text-3xl font-black mx-auto mb-4">✕</div>
+      <h2 class="text-xl font-black text-gray-800 mb-2">Payment Not Completed</h2>
+      <p class="text-gray-500 font-medium text-sm">This attempt did not go through — no money has left your account.</p>
+
+      <div class="bg-gray-50 border border-gray-100 rounded-lg p-4 mt-5 text-left">
+        <span class="block text-[10px] font-black uppercase text-gray-400 mb-1">What the payment gateway said</span>
+        <p id="declinedMessage" class="text-sm font-bold text-gray-800 break-words">—</p>
+      </div>
+
+      <div id="declinedBlockWarning" class="hidden bg-amber-50 border border-amber-200 rounded-lg p-4 mt-4 text-left">
+        <span class="block text-[10px] font-black uppercase text-amber-700 mb-1">Please do not keep retrying</span>
+        <p id="declinedBlockBody" class="text-xs font-semibold text-amber-900 leading-relaxed"></p>
+      </div>
+
+      <ul class="text-left text-xs text-gray-500 font-medium space-y-2 mt-5">
+        <li>• <strong class="text-gray-700">Try a different card</strong>, or ask the merchant for another way to pay (bank transfer or mobile money).</li>
+        <li>• If the message mentions your bank, call the number on the back of your card and quote it.</li>
+        <li>• Nothing is charged twice — the reference below is for this single attempt.</li>
+      </ul>
+
+      <p class="text-[11px] text-gray-400 font-semibold mt-5">Reference to give the merchant: <span id="declinedReference" class="font-mono text-gray-600 break-all">—</span></p>
+
+      <div class="space-y-3 mt-6">
+        <button id="btnDeclineBack" onclick="returnToPayment()"
+                class="w-full bg-[#0b1a38] hover:bg-[#1e355c] text-white font-black text-xs tracking-widest uppercase py-4 rounded-lg transition">
+          Try Again
+        </button>
+        <button id="btnDeclineClose" onclick="closeDeclinedPage()"
+                class="w-full text-gray-400 hover:text-gray-600 font-bold text-[11px] uppercase tracking-widest py-2">
+          Close This Page
+        </button>
+        <p id="declineCloseHint" class="hidden text-[11px] text-gray-400 font-medium">
+          Your browser blocked the automatic close — you can safely close this tab.
+        </p>
+      </div>
+    </div>
+  </div>
+
   <!-- Payment Card Container -->
   <div id="paymentCard" class="bg-white w-full max-w-[480px] rounded-xl shadow-2xl overflow-hidden border border-gray-100 hidden">
 
@@ -654,6 +706,91 @@
       btn.textContent = 'Pay Securely via Valmont-Pay';
     }
 
+    // ---------------------------------------------------------------
+    // DECLINED GUIDANCE
+    //
+    // A failed attempt used to produce a bare alert() and drop the customer
+    // straight back onto the Pay button — which is exactly how a card gets
+    // hotlisted. Paystack's fraud block reacts to repeated attempts and stays
+    // active for ~24 hours from the LAST one, so the customer who taps Pay five
+    // times extends their own block every time. The screen after a failure is
+    // therefore the most useful place in the whole flow to say so.
+    //
+    // The gateway message is echoed VERBATIM: it is what the customer's bank
+    // will ask for, and what the merchant can match against the Paystack
+    // dashboard. Nothing here tries to interpret or soften it.
+    // ---------------------------------------------------------------
+
+    // Messages that mean "a security layer blocked this", not "your card
+    // details were wrong". Retrying one of these immediately is harmful.
+    const BLOCKED_BY_GATEWAY =
+      /fraud|unable to process|blocked|not permitted|restricted|do not honour|do not honor/i;
+
+    // Attempts that failed in THIS page session. Used to escalate the copy from
+    // "please wait" to "you have now tried N times — stop here".
+    let declineAttempts = 0;
+
+    function showDeclineGuidance(message, reference) {
+      const text = String(message || '').trim() || 'The payment could not be completed.';
+      declineAttempts += 1;
+
+      // textContent, never innerHTML: this string comes straight from the
+      // gateway. It must never be able to inject markup into our page.
+      document.getElementById('declinedMessage').textContent = text;
+      document.getElementById('declinedReference').textContent =
+        reference || (paymentData && paymentData.reference) || '—';
+
+      const blocked = BLOCKED_BY_GATEWAY.test(text);
+      const warning = document.getElementById('declinedBlockWarning');
+      const backBtn = document.getElementById('btnDeclineBack');
+
+      if (blocked) {
+        warning.classList.remove('hidden');
+        document.getElementById('declinedBlockBody').textContent =
+          declineAttempts >= 2
+            ? 'You have now tried ' + declineAttempts + ' times. Each new attempt restarts the ' +
+              'block, so please stop here: wait about 24 hours from your last attempt, then try ' +
+              'once — or ask the merchant for another way to pay.'
+            : 'This looks like a security block on the transaction rather than a problem with your ' +
+              'card details. Trying again right now can extend the block for about 24 hours. ' +
+              'Please wait, or ask the merchant for another way to pay.';
+        // Deliberately not labelled "Try Again": the useful action after a
+        // block is to wait, and a button that invites an immediate retry is
+        // how the customer ends up locked out for another day.
+        backBtn.textContent = 'Back to Payment Details';
+      } else {
+        warning.classList.add('hidden');
+        backBtn.textContent = 'Try Again';
+      }
+
+      document.getElementById('loadingState').classList.add('hidden');
+      document.getElementById('paymentCard').classList.add('hidden');
+      document.getElementById('errorState').classList.add('hidden');
+      document.getElementById('declinedState').classList.remove('hidden');
+      window.scrollTo(0, 0);
+    }
+
+    // Back to the payment form. The Pay button is re-armed here (never on the
+    // failure path itself), so returning is always an explicit choice.
+    function returnToPayment() {
+      resetPayButton();
+      document.getElementById('declinedState').classList.add('hidden');
+      document.getElementById('paymentCard').classList.remove('hidden');
+      window.scrollTo(0, 0);
+    }
+
+    // Same browser restriction as the success card: window.close() only works
+    // on windows a script opened, so fall back to a hint.
+    function closeDeclinedPage() {
+      window.close();
+      setTimeout(function () {
+        document.getElementById('declineCloseHint').classList.remove('hidden');
+        const btn = document.getElementById('btnDeclineClose');
+        btn.disabled = true;
+        btn.classList.add('opacity-60', 'cursor-not-allowed');
+      }, 300);
+    }
+
     // Ghana MoMo numbers: 0XXXXXXXXX (10 digits) or +233XXXXXXXXX
     function isValidMomoNumber(raw) {
       const digits = (raw || '').replace(/[\s\-()]/g, '');
@@ -763,8 +900,10 @@
           resetPayButton();
         },
         onError: function (error) {
-          alert((error && error.message) || 'Payment could not be completed. Please try again.');
-          resetPayButton();
+          // Was: alert(message) + re-arm the Pay button, i.e. an invitation to
+          // retry a transaction the gateway had just blocked. Show the reason
+          // and the guidance instead.
+          showDeclineGuidance(error && error.message, reference);
         }
       });
     }

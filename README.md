@@ -462,6 +462,16 @@ reason is still in the runtime logs — Vercel → Logs, search for
 | `Pickup card` / `lost card` / `stolen` | Reported lost/stolen and blocked by the bank. |
 | `Identification required`, OTP/3-D Secure failures | The customer could not complete the bank's PIN/OTP/3-D Secure step — very common for foreign customers whose bank sends the OTP to a SIM they no longer carry. |
 
+**What the customer sees now.** A failed attempt used to be a bare `alert()` and
+a re-armed Pay button — an invitation to retry the very transaction that was just
+blocked, which is what keeps a fraud block alive. `pay.html` now shows a
+**Payment Not Completed** card: the gateway's wording verbatim (their bank will
+ask for it), the attempt's reference, and — for block-type messages ("Denied by
+Fraud System", "Unable to process transaction") — an explicit *do not keep
+retrying, this can extend the block for about 24 hours* warning, with the
+attempt count escalating on repeat failures. A benign decline ("Insufficient
+Funds") keeps a plain **Try Again**.
+
 **Also check the merchant side (two things we cannot see from here):**
 
 * **"Accept international payments"** ticked in Paystack → Settings → Preferences.
@@ -470,7 +480,8 @@ reason is still in the runtime logs — Vercel → Logs, search for
 * The tenant is not on an `sk_test_…` key. A live card can never be charged in
   test mode.
 
-Regression coverage: `node scripts/failure-reason-test.mjs` (also in `npm test`).
+Regression coverage: `node scripts/failure-reason-test.mjs` and
+`node scripts/pay-html-decline-guidance-test.mjs` (both in `npm test`).
 
 ---
 
