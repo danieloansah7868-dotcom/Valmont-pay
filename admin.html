@@ -438,7 +438,12 @@ https://valmontweb.com/orders/thanks?ref=VM-ORDER-123&status=success
               <td class="p-3 text-gray-400">${escapeHtml(t.customer || t.customer_email || '-')}</td>
               <td class="p-3 text-right font-bold">${formatAmount(t.amount)}</td>
               <td class="p-3 text-gray-400">${escapeHtml(t.channel || t.payment_method || '-')}</td>
-              <td class="p-3"><span class="badge ${statusClass}">${status}</span></td>
+              <td class="p-3">
+                <span class="badge ${statusClass}">${status}</span>
+                ${(t.failure_reason || t.failureReason)
+                  ? `<p class="mt-1 text-[10px] leading-snug text-red-300/80 max-w-[220px]" title="${escapeHtml(String(t.failure_reason || t.failureReason))}">${escapeHtml(String(t.failure_reason || t.failureReason))}</p>`
+                  : ''}
+              </td>
               <td class="p-3 text-gray-400 text-[10px]">${formatDate(t.paid_at || t.timestamp)}</td>
             </tr>
           `;

@@ -23,6 +23,7 @@ const webhookForwarder = require('./lib/tenant-webhook-forwarder');
 const notifier = require('./lib/notifier');
 const paymentLinkStore = require('./lib/payment-link-store');
 const mandateStore = require('./lib/mandate-store');
+const { extractFailureReason } = require('./lib/failure-reason');
 const serviceCatalogue = require('./lib/service-catalogue');
 const legacyLinkPolicy = require('./lib/legacy-link-policy');
 const { publicBaseUrl } = require('./lib/base-url');
@@ -235,11 +236,14 @@ app.post('/api/v1/transaction/charge', async (req, res) => {
   }
 
   if (trx.status === 'FAILED') {
+    // Re-sending a declined reference answers with the SAME reason the first
+    // attempt recorded, so the customer's second attempt is not a dead end.
     return res.status(200).json({
       status: false,
       message: 'This transaction was previously declined.',
       reference,
-      trx_status: 'FAILED'
+      trx_status: 'FAILED',
+      failure_reason: trx.failure_reason || null
     });
   }
 
@@ -282,11 +286,42 @@ app.post('/api/v1/transaction/charge', async (req, res) => {
         });
       }
       if (result && result.data && result.data.status === 'failed') {
+        // Paystack has spoken. Record the decline AND the reason it gave, so the
+        // dashboard answers "why was this declined?" without a support round-trip.
+        const failureReason = extractFailureReason(result.data);
+
+        ledger.upsertTransaction({
+          reference,
+          status: 'FAILED',
+          failure_reason: failureReason || undefined
+        });
+
+        if (isSupabaseConfigured()) {
+          const client = getSupabaseClient();
+          if (client) {
+            await transactionStore.saveTransaction(
+              {
+                reference,
+                merchant: trx.merchant,
+                customer: trx.customer,
+                amount: trx.amount,
+                channel: trx.channel,
+                status: 'FAILED',
+                failure_reason: failureReason || undefined
+              },
+              { context: 'CHARGE-DECLINED', client }
+            );
+          }
+        }
+
         return res.status(200).json({
           status: false,
-          message: 'Transaction was declined by the payment provider.',
+          message: failureReason
+            ? `Transaction was declined: ${failureReason}.`
+            : 'Transaction was declined by the payment provider.',
           reference,
-          trx_status: 'FAILED'
+          trx_status: 'FAILED',
+          failure_reason: failureReason || null
         });
       }
     } catch (err) {
@@ -773,7 +808,10 @@ app.get('/api/transactions', requireAdmin, async (req, res) => {
       amount: row.amount,
       payment_method: row.channel,
       status: row.status,
-      paid_at: row.timestamp
+      paid_at: row.timestamp,
+      // A decline recorded seconds ago (webhook or /api/verify-payment) must show
+      // its reason immediately, not only after Supabase is read back.
+      failure_reason: row.failure_reason || row.gateway_response
     }));
   }
   for (const row of result.transactions) byReference.set(row.reference, row);
@@ -1606,6 +1644,10 @@ app.get('/api/transaction/verify/:reference', requireTenantAuth, async (req, res
           merchant: tenant.display_name,
           timestamp: pd.paid_at || pd.created_at || new Date().toISOString(),
           gateway_response: pd.gateway_response || '',
+          // Keep the decline explanation on the row itself so the dashboard can
+          // show it, instead of leaving it in a `gateway_response` field only the
+          // logs ever see.
+          failure_reason: pd.status === 'success' ? null : pd.gateway_response || '',
           paid_at: pd.paid_at || null,
           currency: pd.currency || tenant.currency
         };
@@ -1654,7 +1696,9 @@ app.get('/api/transaction/verify/:reference', requireTenantAuth, async (req, res
       paid_at: trx.paid_at || trx.timestamp || null,
       merchant: tenant.key,
       gateway_reference: trx.reference,
-      customer: trx.customer || trx.customer_email || 'unknown'
+      customer: trx.customer || trx.customer_email || 'unknown',
+      // Why it failed, verbatim from Paystack. null on anything that settled.
+      failure_reason: isSuccess ? null : trx.failure_reason || trx.gateway_response || null
     }
   };
 

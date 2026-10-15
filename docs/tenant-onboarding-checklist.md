@@ -152,7 +152,8 @@ Found while writing this list, and the most dangerous thing here for someone abo
 
 ### Step 0 — deploy prerequisites (once)
 
-Two things must be true in production before the first new tenant:
+Two things must be true in production before the first new tenant — plus one
+recommended migration that costs nothing to run:
 
 1. **Run the notification migration** in Supabase → SQL Editor:
    ```sql
@@ -163,7 +164,19 @@ Two things must be true in production before the first new tenant:
 
    If you deploy the code *without* it, tenant creation still works — the store retries the write without the new columns and the admin UI shows a **⚠ Database migration pending** banner naming what is missing. Per-tenant receipts just fall back to the gateway-wide target. It will not block onboarding.
 
-2. **Settle the shared dev credential** — run the diagnostic in [`docs/key-rotation.md` § 1](key-rotation.md#1-is-the-valmont-electricals-dev-credential-live-right-now). Do this *before* adding a merchant, not after, so you are not rotating keys while a new integration is mid-rollout.
+2. **Run the failure-reason migration** (optional but recommended) — records
+   *why* a card was declined on the FAILED row, so no one has to log into
+   Paystack to answer a customer:
+   ```sql
+   alter table public.transactions add column if not exists failure_reason text;
+   ```
+   (That is the whole of `scripts/supabase-transactions-failure-reason-schema.sql`;
+   it is safe to re-run.) Deploying *without* it is fine — a FAILED row is still
+   written, just without its reason, and the reason stays visible in the Vercel
+   logs and in the Paystack dashboard. See
+   [README → "the customer's card was declined — why?"](../README.md#-debugging-the-customers-card-was-declined--why).
+
+3. **Settle the shared dev credential** — run the diagnostic in [`docs/key-rotation.md` § 1](key-rotation.md#1-is-the-valmont-electricals-dev-credential-live-right-now). Do this *before* adding a merchant, not after, so you are not rotating keys while a new integration is mid-rollout.
 
 ### Before you start — collect these
 

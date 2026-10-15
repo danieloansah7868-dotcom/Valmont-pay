@@ -166,6 +166,25 @@ check(
 );
 check(!('updated_at' in failedRecord), 'the failed record does NOT contain updated_at either');
 
+// ── Optional column: WHY a payment failed ────────────────────────────────
+// Attached only when Paystack supplied a reason, and never to a settled row —
+// keeping the success payload byte-identical to the seven required columns.
+// The missing-column retry that protects an unmigrated deployment is pinned in
+// scripts/failure-reason-test.mjs.
+const declinedRecord = store.buildTransactionRecord({
+  reference: 'VP-CHECKOUT-DECLINED',
+  amount: '20',
+  status: 'FAILED',
+  gateway_response: 'Denied by Fraud System'
+});
+check(declinedRecord.failure_reason === 'Denied by Fraud System',
+  'a declined row keeps Paystack\'s reason (gateway_response -> failure_reason)');
+check(!('failure_reason' in failedRecord),
+  'a FAILED row with no gateway reason omits failure_reason entirely');
+check(!('failure_reason' in record), 'a SUCCESS row never carries a failure_reason');
+check(store.OPTIONAL_TRANSACTION_COLUMNS.join(',') === 'failure_reason',
+  'failure_reason is the ONLY optional column; the seven required ones are unchanged');
+
 // ------------------------------------------------------- 2. successful write
 console.log('\n# saveTransaction');
 let result = await store.saveTransaction(record, { context: 'TEST' });

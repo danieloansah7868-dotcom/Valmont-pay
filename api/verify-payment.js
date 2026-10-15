@@ -16,11 +16,13 @@ import paystackModule from '../lib/paystack.js';
 import transactionStore from '../lib/transaction-store.js';
 import supabaseModule from '../lib/supabase.js';
 import mandateStoreModule from '../lib/mandate-store.js';
+import failureReasonModule from '../lib/failure-reason.js';
 
 const { verifyPayment } = paystackModule;
 const { saveTransaction } = transactionStore;
 const { getSupabaseClient, isSupabaseConfigured } = supabaseModule;
 const { saveMandateFromAuthorization } = mandateStoreModule;
+const { extractFailureReason } = failureReasonModule;
 
 /** Map a Paystack channel + authorization to a human-friendly label. */
 function formatChannel(channel, authorization) {
@@ -96,7 +98,11 @@ export default async function handler(req, res) {
           status: isSuccess ? 'SUCCESS' : (paystackTrx.status || 'PENDING').toUpperCase(),
           paid_at: isSuccess
             ? (paystackTrx.paid_at || paystackTrx.paidAt || new Date().toISOString())
-            : null
+            : null,
+          // A failed verification is the OTHER half of the safety net: when the
+          // webhook never arrives, this write is what records the decline — so it
+          // must carry Paystack's reason too, not just the status.
+          failure_reason: isSuccess ? undefined : extractFailureReason(paystackTrx) || undefined
         };
 
         const result = await saveTransaction(transaction, {
@@ -142,6 +148,9 @@ export default async function handler(req, res) {
             email: paystackTrx.customer ? paystackTrx.customer.email : null,
             channel: paystackTrx.channel,
             paid_at: paystackTrx.paid_at,
+            // Present only on a decline: Paystack's own explanation, e.g.
+            // "Denied by Fraud System" or "Declined".
+            failure_reason: isSuccess ? null : extractFailureReason(paystackTrx) || null,
             merchant:
               paystackTrx.metadata && paystackTrx.metadata.merchant
                 ? paystackTrx.metadata.merchant

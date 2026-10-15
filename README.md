@@ -212,9 +212,27 @@ columns:
 | `status` | `SUCCESS` / `FAILED` / `PENDING`. |
 | `paid_at` | Timestamp for settled payments, `null` for anything else. |
 
+Plus one **optional** column:
+
+| Column | Notes |
+|---|---|
+| `failure_reason` | *Why* a payment failed, verbatim from Paystack (`Denied by Fraud System`, `Declined`, `Insufficient Funds`, …). Only ever written on a FAILED row. Requires `scripts/supabase-transactions-failure-reason-schema.sql`. |
+
 > ⚠️ **Never send `updated_at`.** The deployed table has no such column, and
 > PostgREST rejects the *entire* write with `PGRST204`. That is exactly what made
 > successful checkouts never appear on the dashboard.
+
+**Optional columns never break a write.** `failure_reason` is written only when
+it carries a value, and only on a non-settled row — so a SUCCESS row is still
+exactly the seven columns above. If the deployment has not run the migration yet,
+PostgREST rejects the write naming that column, `saveTransaction()` **retries
+without it**, and reports `degraded: true` (the payment is still recorded; only
+the reason is missing). Run the migration in Supabase → SQL Editor to start
+collecting reasons:
+
+```sql
+alter table public.transactions add column if not exists failure_reason text;
+```
 
 ```sql
 create table if not exists public.transactions (
@@ -226,6 +244,7 @@ create table if not exists public.transactions (
   payment_method text,
   status         text not null default 'PENDING',
   paid_at        timestamptz,
+  failure_reason text,          -- optional: why a FAILED payment failed
   created_at     timestamptz not null default now()
 );
 ```
@@ -405,6 +424,53 @@ Run the offline test suite (stubs the network, no secret key needed):
 ```bash
 npm test
 ```
+
+---
+
+## 🚨 Debugging: "the customer's card was declined — why?"
+
+**First: a declined card is not a broken payment link.** Only two things on our
+side can stop a checkout before the customer reaches card entry — an invalid or
+expired link, and a rejected amount — and both render their own message. Once
+Paystack's checkout is on screen, every card message ("Unable to process
+transaction", "Declined", "Insufficient Funds") comes from **Paystack or the
+issuing bank**, and it is now recorded on the transaction row.
+
+**Where to look, in order:**
+
+1. **The dashboard**, under the red FAILED badge — the reason Paystack gave, plus
+   a plain-English hint (hover) for the common ones.
+2. **`admin.html` → Transactions** — the same reason on the FAILED badge.
+3. **Paystack Dashboard → Transactions**, search the `VP-…` reference — the
+   authoritative view, including decline codes we do not store.
+4. **The API**, one call, no auth needed for the raw Paystack payload:
+   `curl -s "https://<your-domain>/api/verify-payment?reference=VP-…"` →
+   `summary.failure_reason` / `data.gateway_response`.
+   On the admin API: `GET /api/transaction/verify/{reference}` → `failure_reason`.
+
+**If the reason is blank,** the migration has not been run on the deployment
+(`scripts/supabase-transactions-failure-reason-schema.sql`). Until it is, the
+reason is still in the runtime logs — Vercel → Logs, search for
+`gatewayResponse` — and always in the Paystack dashboard.
+
+| Paystack reason | What it actually means |
+|---|---|
+| `Denied by Fraud System` (shown to the customer as *"Unable to process transaction"*) | Paystack's fraud check hotlisted the card — typically after several cards or several failed attempts in a short window. It clears ~24 hours after the last attempt; retrying inside that window keeps it blocked. Escalate to Paystack support if it persists. |
+| `Declined` | The bank blocked the card for this transaction. The customer must call the bank — and enable **online/e-commerce** payments on the card (and, for a foreign card, **international** transactions). |
+| `Insufficient Funds` | Not enough money on the card. |
+| `Unrecognized card type` | Unsupported scheme. Paystack accepts Visa, Mastercard and Verve (Amex only for Nigeria/South Africa-based accounts — so never on a Ghana account). |
+| `Pickup card` / `lost card` / `stolen` | Reported lost/stolen and blocked by the bank. |
+| `Identification required`, OTP/3-D Secure failures | The customer could not complete the bank's PIN/OTP/3-D Secure step — very common for foreign customers whose bank sends the OTP to a SIM they no longer carry. |
+
+**Also check the merchant side (two things we cannot see from here):**
+
+* **"Accept international payments"** ticked in Paystack → Settings → Preferences.
+  Foreign-issued cards are declined for a Ghana business without it. (Settlement
+  stays in GHS; the customer's bank does the FX.)
+* The tenant is not on an `sk_test_…` key. A live card can never be charged in
+  test mode.
+
+Regression coverage: `node scripts/failure-reason-test.mjs` (also in `npm test`).
 
 ---
 
