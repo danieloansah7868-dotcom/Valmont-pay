@@ -148,13 +148,14 @@
                readonly />
       </div>
 
-      <!-- Mobile Money Number (REQUIRED) -->
+      <!-- Optional MoMo prefill; the payment method is selected inside checkout. -->
       <div>
         <label for="customerPhone" class="block text-xs font-black uppercase text-gray-400 mb-2">
-          Mobile Money Number <span class="text-red-500">*</span>
+          Mobile Money Number <span class="normal-case font-medium">(optional)</span>
         </label>
-        <input id="customerPhone" type="tel" placeholder="+233 XX XXX XXXX" required aria-required="true"
+        <input id="customerPhone" type="tel" placeholder="+233 XX XXX XXXX" aria-describedby="phoneHint phoneError"
                class="w-full border-2 border-gray-100 p-4 rounded-lg text-sm outline-none font-semibold focus:border-[#f68b1e] transition" />
+        <p id="phoneHint" class="text-gray-500 text-xs mt-2">Paying by card? Leave this blank. For Mobile Money, enter a Ghanaian number here or in checkout.</p>
         <p id="phoneError" class="hidden text-red-500 text-xs font-bold mt-2">Please enter a valid Mobile Money number (e.g. 024 XXX XXXX or +233 24 XXX XXXX).</p>
       </div>
 
@@ -804,11 +805,12 @@
         return;
       }
 
-      // Mobile Money number is REQUIRED
+      // This is an optional MoMo prefill, not a prerequisite for card checkout.
+      // Paystack collects the required number when Mobile Money is selected.
       const phoneInput = document.getElementById('customerPhone');
       const phoneError = document.getElementById('phoneError');
       const phone = phoneInput.value.trim();
-      if (!isValidMomoNumber(phone)) {
+      if (phone && !isValidMomoNumber(phone)) {
         phoneError.classList.remove('hidden');
         phoneInput.classList.remove('border-gray-100');
         phoneInput.classList.add('border-red-400');
@@ -844,7 +846,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             email: email,
-            phone: phone,
+            phone: phone || undefined,
             // Authoritative when present: the server re-resolves the
             // amount/merchant/reference from this code.
             access_code: accessCode || undefined,
