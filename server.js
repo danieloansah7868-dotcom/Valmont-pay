@@ -815,7 +815,7 @@ app.post('/api/v1/receive-links/:code/pay', receiveRateLimit, async (req,res)=>{
         });
         return res.status(200).json({
           status:true, message: rec.destination_type==='momo'
-            ? `Payment initialized — the very second it succeeds, GH₵${amount.toFixed(2)} will be pushed instantly to MoMo ${rec.destination} (Paystack Transfer, not T+1).`
+            ? `Payment initialized — complete your payment on Paystack to send GH₵${amount.toFixed(2)} to ${rec.destination}.`
             : `Payment initialized — complete on Paystack. Funds will land to ${rec.destination}`,
           data:{
             reference,
@@ -841,7 +841,7 @@ app.post('/api/v1/receive-links/:code/pay', receiveRateLimit, async (req,res)=>{
     tenant_key: null
   });
   return res.status(200).json({
-    status:true, message:`Demo: GH₵ ${amount.toFixed(2)} marked SUCCESS — would settle to ${rec.destination_type} ${rec.destination} (Paystack ${rec.destination_type==='subaccount' ? 'split at source' : 'Transfer payout after webhook'})`,
+    status:true, message:`Demo: GH₵ ${amount.toFixed(2)} marked as successful for ${rec.destination}.`,
     data:{ reference, amount, receiver: rec.receiver_name, destination_type: rec.destination_type, destination: rec.destination, demo:true }
   });
 });
@@ -858,7 +858,7 @@ app.get('/api/v1/payouts/:reference', receiveRateLimit, async (req,res)=>{
     pending: pending || null,
     payout: result || null,
     transfer_enabled: transferEnabled,
-    mode: pending && pending.destination_type==='momo' ? 'instant-transfer (MoMo seconds, not T+1)' : pending && pending.destination_type==='subaccount' ? 'split-at-source (Paystack subaccount, no transfer needed)' : 'T+1 settlement (or transfer if enabled)'
+    mode: pending && pending.destination_type==='momo' ? 'direct-to-momo' : pending && pending.destination_type==='subaccount' ? 'split-at-source' : 'standard settlement'
   });
 });
 // Convenience: check Paystack balance / transfer readiness
@@ -879,8 +879,8 @@ app.get('/api/v1/payouts/health', async (req,res)=>{
     transfer_enabled: enabled,
     transfer_env_var: process.env.PAYSTACK_TRANSFER_ENABLED || '(not set)',
     paystack_balance: balance,
-    help: enabled ? 'Instant payouts WILL fire on charge.success to MoMo (seconds).' : 'Set PAYSTACK_TRANSFER_ENABLED=1 and fund your Paystack balance to enable very-second MoMo payouts. Current mode is LOG-ONLY (no real money moves).',
-    tplus1_vs_instant: 'Paystack Settlement (T+1) = Paystack → your bank next business day. Paystack Transfer (this feature) = Paystack balance → MoMo in seconds, triggered by webhook charge.success.'
+    help: enabled ? 'Direct payouts are enabled and will fire on charge.success.' : 'Set PAYSTACK_TRANSFER_ENABLED=1 and fund your Paystack balance to enable direct payouts. Current mode is LOG-ONLY.',
+    tplus1_vs_instant: 'Standard settlement is next business day. Direct Transfer is from Paystack balance to MoMo/bank, triggered by webhook.'
   });
 });
 
