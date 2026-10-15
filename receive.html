@@ -40,8 +40,8 @@
             <div class="text-[10px] font-black uppercase tracking-widest text-gray-500">You will pay</div>
             <div id="payerAmountDisplay" class="text-2xl font-black mt-1">GH₵ —</div>
             <div id="payerNote" class="text-xs text-gray-400 mt-1"></div>
-            <div class="mt-2 text-[11px] font-bold text-gray-500">Funds go <b class="text-white">directly</b> to: <span id="payerDestination" class="text-[#f68b1e] mono"></span> <span id="payerDestType" class="text-gray-400"></span></div>
-            <div class="text-[10px] text-gray-600 mt-1">Valmont Pay never holds the money — Paystack settles it straight to the entitled account.</div>
+            <div class="mt-2 text-[11px] font-bold text-gray-500">Funds go <b class="text-white">directly</b> to: <span id="payerDestination" class="text-[#f68b1e] mono"></span> <span id="payerDestType" class="text-gray-400"></span> <span id="payerInstantBadge" class="hidden ml-1 bg-green-900 text-green-300 text-[9px] font-black uppercase px-1.5 py-0.5 rounded border border-green-800">⚡ Instant (seconds, not T+1)</span></div>
+            <div class="text-[10px] text-gray-600 mt-1" id="payerSettlementHint">Valmont Pay never holds the money — Paystack settles it straight to the entitled account.</div>
           </div>
 
           <form onsubmit="payerPay(event)" class="mt-5 space-y-3">
@@ -65,6 +65,7 @@
               <p class="text-xs font-bold text-amber-300">Paystack checkout ready:</p>
               <a id="payerPaystackLink" href="#" target="_blank" class="inline-block mt-2 bg-white text-[#0b1a38] font-black text-xs uppercase px-4 py-2 rounded">Open Paystack to Pay →</a>
             </div>
+            <div id="payoutStatusBox" class="hidden mt-3 p-3 rounded border text-xs font-bold"></div>
           </form>
         </div>
         <div class="px-6 py-3 bg-[#050d24] border-t border-[#142850] text-center text-[10px] text-gray-600">Secured by Valmont Pay • MoMo / Card / Bank Transfer via Paystack</div>
@@ -104,7 +105,7 @@
                 <button type="button" onclick="setDest('subaccount')" id="btnSub" class="dest-btn bg-[#050d24] border border-[#142850] text-gray-400 font-bold text-xs uppercase py-2 rounded">ACCT_ Subaccount</button>
               </div>
               <input id="destInput" type="text" placeholder="0544 000 000" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded text-sm text-white outline-none focus:border-[#f68b1e]" required>
-              <p id="destHint" class="text-[10px] text-gray-500 mt-1">MoMo: MTN / Telecel / AT number. Funds arrive instantly via Paystack Transfer after payer succeeds.</p>
+              <p id="destHint" class="text-[10px] font-bold mt-1 text-green-400">⚡ MoMo = VERY SECOND automatic — via Paystack Transfer (seconds, not T+1). Bank = T+1 unless you use ACCT_.</p>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -185,12 +186,12 @@
               <div><b>Payer</b> opens link, enters amount (if you left it open) + email, pays via <b>MoMo / Card / Bank Transfer</b> through Paystack.</div>
             </div>
             <div class="flex gap-3">
-              <span class="bg-[#f68b1e] text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0">3</span>
-              <div><b>Settlement:</b>
+              <span class="bg-green-600 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0">3</span>
+              <div><b>Settlement — YOU choose the speed:</b>
                 <ul class="mt-1 space-y-1 text-xs text-gray-300 list-disc list-inside">
+                  <li class="text-green-300"><b>📱 MoMo number:</b> <b>VERY SECOND automatic</b> — on <code>charge.success</code> webhook, Valmont calls <code>Paystack Transfer</code> → MoMo credited in <b>seconds, not T+1</b>. <span class="text-white bg-green-900/40 px-1 rounded">⚡ Instant</span></li>
                   <li><b>Subaccount (<code>ACCT_…</code>):</b> Paystack <b>splits at source</b> — your share settles to that account’s bank instantly.</li>
-                  <li><b>Bank freeform:</b> Paystack settles T+1 to the main settlement bank (or you add that bank as a subaccount).</li>
-                  <li><b>MoMo number:</b> On <code>charge.success</code> webhook, Valmont triggers a <b>Paystack Transfer</b> (recipients API) → instant MoMo credit. <i class="text-gray-500">Needs Paystack balance + transfer enabled.</i></li>
+                  <li style="color:#fbbf24"><b>🏦 Bank freeform:</b> <b>T+1</b> — Paystack settlement next business day (default). Use <b>MoMo</b> or <b>ACCT_</b> if you want seconds.</li>
                 </ul>
               </div>
             </div>
@@ -333,6 +334,19 @@ async function loadPayerView(code){
     document.getElementById('payerReceiverName').textContent=d.receiver_name;
     document.getElementById('payerDestination').textContent=d.destination;
     document.getElementById('payerDestType').textContent='('+d.destination_type+')';
+    const instantBadge=document.getElementById('payerInstantBadge');
+    const hint=document.getElementById('payerSettlementHint');
+    if(d.destination_type==='momo'){
+      if(instantBadge) instantBadge.classList.remove('hidden');
+      if(hint) hint.innerHTML='<b class="text-green-400">⚡ VERY SECOND automatic</b> — not T+1/12hrs. The instant Paystack Transfer fires the second you pay.';
+      if(hint) hint.className='text-[11px] font-bold mt-1 text-green-400';
+    } else if(d.destination_type==='subaccount'){
+      if(instantBadge){ instantBadge.textContent='⚡ Instant split'; instantBadge.classList.remove('hidden'); instantBadge.className='ml-1 bg-blue-900 text-blue-300 text-[9px] font-black uppercase px-1.5 py-0.5 rounded border border-blue-800'; }
+      if(hint) hint.textContent='Paystack splits at source — instant to that subaccount\'s bank.';
+    } else {
+      if(instantBadge) instantBadge.classList.add('hidden');
+      if(hint){ hint.textContent='Bank freeform = T+1 settlement (next business day). Choose MoMo if you want seconds.'; hint.className='text-[11px] text-amber-400 mt-1 font-bold'; }
+    }
     document.getElementById('payerNote').textContent=d.note || '';
     if(d.amount!=null){
       document.getElementById('payerAmountDisplay').textContent='GH₵ '+Number(d.amount).toFixed(2);
@@ -350,12 +364,21 @@ async function loadPayerView(code){
       });
     }
     document.title='Pay ' + d.receiver_name + ' — GH₵' + (d.amount!=null?Number(d.amount).toFixed(2):'…') + ' — Valmont Pay';
-    // handle ?paid=1 success
+    // handle ?paid=1 success + start payout polling if MoMo
     const params=new URLSearchParams(location.search);
     if(params.get('paid')==='1'){
-      document.getElementById('payerStatus').textContent='✅ Payment recorded for ref '+ (params.get('ref')||'') +' — funds will land directly to ' + d.destination + ' ('+d.destination_type+').';
+      const isMomo = d.destination_type==='momo';
+      document.getElementById('payerStatus').textContent=isMomo ? '✅ Payment '+ (params.get('ref')||'') +' recorded — MoMo '+d.destination+' will be credited in SECONDS (very second automatic, not T+1).' : '✅ Payment recorded for ref '+ (params.get('ref')||'') +' — funds will land directly to ' + d.destination + ' ('+d.destination_type+').';
       document.getElementById('payerStatus').className='text-xs font-bold text-green-400';
       document.getElementById('payerStatus').classList.remove('hidden');
+      if(isMomo && params.get('ref')) startPayoutPolling(params.get('ref'), d.destination);
+      else if(params.get('ref')){
+        const box=document.getElementById('payoutStatusBox');
+        if(box && d.destination_type==='bank'){ box.classList.remove('hidden'); box.className='mt-3 p-3 rounded border text-xs font-bold bg-amber-950/30 border-amber-900 text-amber-300'; box.textContent='Bank destination: Paystack settlement T+1 (next business day). For seconds, use MoMo.'; }
+      }
+    } else {
+      // also check if we landed with ?paid&ref outside loadPayerView (maybePollFromUrl will handle)
+      setTimeout(maybePollFromUrl, 400);
     }
   }catch(e){
     document.getElementById('payerView').innerHTML='<div class="max-w-[560px] mx-auto bg-red-950/40 border border-red-900 rounded-xl p-8 text-center"><div class="text-xl mb-2">⚠️</div><p class="font-black text-white">Link not found or expired</p><p class="text-sm text-gray-400 mt-1">'+e.message+'</p><a href="/receive.html" class="inline-block mt-4 bg-white text-[#0b1a38] font-black text-xs uppercase px-5 py-3 rounded">Create your own Pay Me link</a></div>';
@@ -378,7 +401,11 @@ async function payerPay(e){
     if(j.data && j.data.paystack_authorization_url){
       document.getElementById('payerPaystackLink').href=j.data.paystack_authorization_url;
       document.getElementById('payerPaystackBox').classList.remove('hidden');
-      status.textContent='✅ Checkout ready — open Paystack to pay. After you pay, funds go directly to ' + j.data.destination + '.'; status.className='text-xs font-bold text-green-400'; status.classList.remove('hidden');
+      const isInstant = j.data.destination_type==='momo' || j.data.instant;
+      status.textContent=isInstant ? '✅ Checkout ready — after you pay, GH₵'+j.data.amount+' will hit MoMo '+j.data.destination+' in SECONDS (very second automatic, not T+1).' : '✅ Checkout ready — open Paystack to pay. After you pay, funds go directly to ' + j.data.destination + '.'; status.className='text-xs font-bold text-green-400'; status.classList.remove('hidden');
+      if(j.data.reference && isInstant){
+        startPayoutPolling(j.data.reference, j.data.destination);
+      }
       // auto-open
       window.open(j.data.paystack_authorization_url, '_blank');
     } else {
@@ -386,6 +413,70 @@ async function payerPay(e){
     }
   }catch(err){ status.textContent='❌ '+err.message; status.className='text-xs font-bold text-red-400'; status.classList.remove('hidden'); }
   finally{ btn.disabled=false; btn.textContent='Pay ' + (document.getElementById('payerBtnAmount').textContent||'') + ' →'; }
+}
+
+async function startPayoutPolling(reference, momo){
+  const box=document.getElementById('payoutStatusBox');
+  if(!box || !reference) return;
+  box.classList.remove('hidden');
+  box.className='mt-3 p-3 rounded border text-xs font-bold bg-[#050d24] border-green-900 text-green-300';
+  box.innerHTML='⏳ Waiting for payer to complete Paystack... (we\'ll auto-push to MoMo <b>'+momo+'</b> the very second it succeeds)<br><span class="text-[11px] font-normal text-gray-400">Polling <code>/api/v1/payouts/'+reference+'</code> every 3s — T+1 never, seconds always.</span>';
+  let tries=0;
+  const iv=setInterval(async()=>{
+    tries++;
+    try{
+      const r=await fetch('/api/v1/payouts/'+encodeURIComponent(reference));
+      const j=await r.json();
+      if(j.payout){
+        if(j.payout.ok){
+          box.className='mt-3 p-3 rounded border text-xs font-bold bg-green-950/40 border-green-900 text-green-300';
+          box.innerHTML='✅ <b>INSTANT PAYOUT FIRED!</b> GH₵'+(j.payout.amount||'')+' → MoMo '+momo+' via Paystack Transfer (seconds, not T+1).<br><span class="font-mono text-[10px] text-gray-400">Ref: '+(j.payout.transfer&&j.payout.transfer.reference||reference)+'</span>';
+          clearInterval(iv);
+        } else if(j.payout.dryRun){
+          box.className='mt-3 p-3 rounded border text-xs font-bold bg-amber-950/30 border-amber-900 text-amber-300';
+          box.innerHTML='⚠️ Transfer is in <b>DRY RUN</b> (PAYSTACK_TRANSFER_ENABLED≠1). Would have paid GH₵'+(j.payout.amount||'')+' → '+momo+' instantly. Set PAYSTACK_TRANSFER_ENABLED=1 and fund Paystack balance to go live.<br><span class="text-[10px] font-normal">'+(j.payout.reason||'')+'</span>';
+          clearInterval(iv);
+        } else if(j.payout.reason){
+          box.className='mt-3 p-3 rounded border text-xs font-bold bg-red-950/30 border-red-900 text-red-300';
+          box.innerHTML='❌ Transfer failed: '+(j.payout.reason||'unknown')+'<br><span class="text-[10px] font-normal">Check Paystack balance / recipient.</span>';
+          clearInterval(iv);
+        }
+      } else if(tries>40){
+        box.textContent='Still waiting — payer may not have paid yet. Keep this open; we\'ll fire the second they do.';
+      }
+    }catch(e){ /* ignore */ }
+    if(tries>60) clearInterval(iv);
+  }, 3000);
+  // also kick once after 2s to catch already-successful demo
+  setTimeout(async()=>{
+    try{
+      const r=await fetch('/api/v1/payouts/'+encodeURIComponent(reference));
+      const j=await r.json();
+      if(j.pending && !j.payout){
+        box.innerHTML='⏳ Payment initialized (ref '+reference+') — waiting for Paystack <code>charge.success</code>. MoMo '+momo+' will be credited the very second it arrives.<br><span class="text-[10px] text-gray-500">Webhook has not fired yet — complete Paystack and watch here.</span>';
+      }
+    }catch(_){}
+  }, 2000);
+}
+
+// Also auto-start polling if ?paid=1&ref=xxx is in URL (receiver returned from Paystack)
+async function maybePollFromUrl(){
+  const p=new URLSearchParams(location.search);
+  const ref=p.get('ref');
+  const code=p.get('code');
+  if(p.get('paid')==='1' && ref && code){
+    try{
+      const r=await fetch('/api/v1/receive-links/'+encodeURIComponent(code));
+      const j=await r.json();
+      const dest=j.data && j.data.destination ? j.data.destination : 'your MoMo';
+      const isMomo=j.data && j.data.destination_type==='momo';
+      if(isMomo) startPayoutPolling(ref, dest);
+      else {
+        const box=document.getElementById('payoutStatusBox');
+        if(box){ box.classList.remove('hidden'); box.className='mt-3 p-3 rounded border text-xs font-bold bg-blue-950/30 border-blue-900 text-blue-300'; box.textContent='Bank/subaccount settlement: Paystack will settle T+1 (or instant split for ACCT_). For MoMo seconds, use MoMo destination next time.'; }
+      }
+    }catch(_){}
+  }
 }
 
 // init routing: ?code= => payer, else creator

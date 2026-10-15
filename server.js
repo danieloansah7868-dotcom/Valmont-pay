@@ -720,11 +720,12 @@ app.post('/api/v1/receive-links', receiveRateLimit, async (req, res) => {
   const payUrl = `${origin}/receive.html?code=${encodeURIComponent(r.code)}`;
   // For payer convenience we also mint a pay.html access_code link when amount is fixed
   let payAccessUrl = null;
+  let payAccessReference = null;
   if (r.amount != null && r.amount > 0) {
     try {
-      const paystackKey = process.env.PAYSTACK_SECRET_KEY || '';
       // create a locked payment link for the FIXED amount so payer cannot edit it
       const reference = generateReference();
+      payAccessReference = reference;
       const tenant = tenants.getTenant('valmont-electricals');
       const ac = accessCodeStore.createAccessCode({
         amount: r.amount, reference, currency:'GHS',
@@ -732,14 +733,16 @@ app.post('/api/v1/receive-links', receiveRateLimit, async (req, res) => {
         phone:'',
         callback_url: payUrl,
         tenant_key: tenant ? tenant.key : null,
-        merchant_display_name: r.receiver_name,
+        merchant_display_name: `[RECEIVE] ${r.receiver_name} → ${r.destination_type}:${r.destination}`,
         merchant_brand_color: '#0b1a38'
       });
+      // Register pending payout so webhook can auto-settle instantly to MoMo (very second)
+      receiveLinkStore.registerPendingPayout(reference, r, r.amount);
       const persisted = await paymentLinkStore.persistPaymentLink({ accessCode: ac.access_code, payment: ac.payment, ttlMs: paymentLinkStore.linkTtlMs() });
       if (persisted.ok) payAccessUrl = `${origin}/pay.html?access_code=${encodeURIComponent(ac.access_code)}`;
     } catch(_){}
   }
-  return res.status(201).json({ status:true, message:'Receive link created', data:{ ...r, pay_url: payUrl, pay_access_url: payAccessUrl } });
+  return res.status(201).json({ status:true, message:'Receive link created', data:{ ...r, pay_url: payUrl, pay_access_url: payAccessUrl, pay_access_reference: payAccessReference } });
 });
 
 app.get('/api/v1/receive-links', receiveRateLimit, async (req, res) => {
@@ -775,22 +778,31 @@ app.post('/api/v1/receive-links/:code/pay', receiveRateLimit, async (req,res)=>{
   const reference = generateReference();
   const merchantLabel = rec.receiver_name || rec.receiver_email;
 
-  // If Paystack key is set, create a real Paystack checkout URL
+  // Register pending instant payout so webhook can auto-settle the very second it succeeds
+  receiveLinkStore.registerPendingPayout(reference, rec, amount);
+
+  // If Paystack key is set, create a real Paystack checkout URL.
+  // We embed receive metadata so webhook can recover the payout even after cold start.
   const paystackKey = process.env.PAYSTACK_SECRET_KEY || '';
   if (paystackKey) {
     try {
       const paystack = require('./lib/paystack');
       const init = await paystack.initializePayment({
         amount, email: payer_email, reference,
-        merchant: merchantLabel, phone: payer_phone,
+        merchant: `[RECEIVE] ${merchantLabel} → ${rec.destination_type}:${rec.destination}`, phone: payer_phone,
         subaccount,
         callback_url: `${baseUrl(req)}/receive.html?code=${encodeURIComponent(rec.code)}&paid=1&ref=${encodeURIComponent(reference)}`,
-        secretKey: paystackKey
+        secretKey: paystackKey,
+        metadata: {
+          receive_code: rec.code,
+          receive_destination_type: rec.destination_type,
+          receive_destination: rec.destination,
+          receive_amount: String(amount),
+          receive_receiver_email: rec.receiver_email,
+          tenant_key: rec.receiver_email // webhook fallback lookup
+        }
       });
       if (init && init.status && init.data && init.data.authorization_url) {
-        // Record intent: when webhook fires for this reference, we will payout to rec.destination
-        // For now, store in memory so webhook handler can find it (also persisted via transaction note)
-        // We use accessCodeStore as ephemeral holder keyed by reference
         accessCodeStore.createAccessCode({
           amount, reference,
           currency:'GHS', email: payer_email, phone: payer_phone,
@@ -802,13 +814,16 @@ app.post('/api/v1/receive-links/:code/pay', receiveRateLimit, async (req,res)=>{
           paystack_access_code: init.data.access_code || ''
         });
         return res.status(200).json({
-          status:true, message:'Payment initialized — complete on Paystack. Funds will land directly to ' + rec.destination,
+          status:true, message: rec.destination_type==='momo'
+            ? `Payment initialized — the very second it succeeds, GH₵${amount.toFixed(2)} will be pushed instantly to MoMo ${rec.destination} (Paystack Transfer, not T+1).`
+            : `Payment initialized — complete on Paystack. Funds will land to ${rec.destination}`,
           data:{
             reference,
             amount,
             receiver: rec.receiver_name,
             destination_type: rec.destination_type,
             destination: rec.destination,
+            instant: rec.destination_type==='momo',
             paystack_authorization_url: init.data.authorization_url,
             paystack_access_code: init.data.access_code || null
           }
@@ -828,6 +843,44 @@ app.post('/api/v1/receive-links/:code/pay', receiveRateLimit, async (req,res)=>{
   return res.status(200).json({
     status:true, message:`Demo: GH₵ ${amount.toFixed(2)} marked SUCCESS — would settle to ${rec.destination_type} ${rec.destination} (Paystack ${rec.destination_type==='subaccount' ? 'split at source' : 'Transfer payout after webhook'})`,
     data:{ reference, amount, receiver: rec.receiver_name, destination_type: rec.destination_type, destination: rec.destination, demo:true }
+  });
+});
+
+// Payout status: did the very-second Transfer fire for this reference?
+app.get('/api/v1/payouts/:reference', receiveRateLimit, async (req,res)=>{
+  const ref = String(req.params.reference||'').trim();
+  const pending = receiveLinkStore.getPendingPayout(ref);
+  const result = receiveLinkStore.getPayoutResult(ref);
+  const transferEnabled = require('./lib/paystack-transfer').isTransferEnabled();
+  return res.status(200).json({
+    status:true,
+    reference: ref,
+    pending: pending || null,
+    payout: result || null,
+    transfer_enabled: transferEnabled,
+    mode: pending && pending.destination_type==='momo' ? 'instant-transfer (MoMo seconds, not T+1)' : pending && pending.destination_type==='subaccount' ? 'split-at-source (Paystack subaccount, no transfer needed)' : 'T+1 settlement (or transfer if enabled)'
+  });
+});
+// Convenience: check Paystack balance / transfer readiness
+app.get('/api/v1/payouts/health', async (req,res)=>{
+  const pt = require('./lib/paystack-transfer');
+  const enabled = pt.isTransferEnabled();
+  const keySet = Boolean(process.env.PAYSTACK_SECRET_KEY);
+  let balance = null;
+  if (keySet) {
+    try {
+      const r = await pt.paystackFetch('/balance');
+      if (r.ok) balance = r.data && r.data.data ? r.data.data : r.data;
+    } catch(_){}
+  }
+  return res.status(200).json({
+    status:true,
+    paystack_key_set: keySet,
+    transfer_enabled: enabled,
+    transfer_env_var: process.env.PAYSTACK_TRANSFER_ENABLED || '(not set)',
+    paystack_balance: balance,
+    help: enabled ? 'Instant payouts WILL fire on charge.success to MoMo (seconds).' : 'Set PAYSTACK_TRANSFER_ENABLED=1 and fund your Paystack balance to enable very-second MoMo payouts. Current mode is LOG-ONLY (no real money moves).',
+    tplus1_vs_instant: 'Paystack Settlement (T+1) = Paystack → your bank next business day. Paystack Transfer (this feature) = Paystack balance → MoMo in seconds, triggered by webhook charge.success.'
   });
 });
 
@@ -1409,6 +1462,85 @@ app.post('/api/webhook', async (req, res) => {
       console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — tenant ${tenant.key} has no webhook URL configured, skipping`);
     } else {
       console.log(`[WEBHOOK ${requestId}] STEP 6b/6 TENANT-FWD — could not resolve tenant from merchant metadata, skipping`);
+    }
+  }
+
+  // ─── INSTANT PAYOUT — the "very second automatic" path (not T+1) ────
+  // When the charge is a Receive link (MoMo destination), pay the MoMo
+  // the INSTANT Paystack confirms success — via Paystack Transfer API,
+  // not settlement. Subaccount links need no transfer (split at source).
+  if (
+    result.statusCode === 200 &&
+    req.body && req.body.event === 'charge.success' &&
+    req.body.data && result.body && result.body.transaction &&
+    String(result.body.transaction.status).toUpperCase() === 'SUCCESS'
+  ) {
+    try {
+      const data = req.body.data;
+      const reference = String(data.reference || result.body.transaction.reference || '').trim();
+      const amtMajor = Number(data.amount) ? Number(data.amount) / 100 : Number(result.body.transaction.amount) || 0;
+      const meta = data.metadata && typeof data.metadata === 'object' ? data.metadata : {};
+
+      // Resolve pending payout: memory map → metadata → merchant marker fallback
+      let pending = receiveLinkStore.getPendingPayout(reference);
+      if (!pending && meta.receive_code) {
+        const rec = await receiveLinkStore.getReceiveLink(String(meta.receive_code));
+        if (rec) pending = { code: rec.code, destination_type: rec.destination_type, destination: rec.destination, amount: amtMajor || rec.amount, receiver_email: rec.receiver_email, receiver_name: rec.receiver_name };
+      }
+      if (!pending && typeof result.body.transaction.merchant === 'string' && result.body.transaction.merchant.includes('[RECEIVE]')) {
+        // Fallback: parse merchant "[RECEIVE] Daniel → momo:0544000000"
+        const m = String(result.body.transaction.merchant).match(/\[RECEIVE\].*→\s*(momo|bank|subaccount):(.+)$/i);
+        if (m) pending = { destination_type: m[1].toLowerCase(), destination: m[2].trim(), amount: amtMajor, receiver_name: 'unknown', code: 'fallback' };
+      }
+      // Also try metadata receive_* fields even if receive_code lookup missed
+      if (!pending && meta.receive_destination) {
+        pending = {
+          code: String(meta.receive_code || 'meta'),
+          destination_type: String(meta.receive_destination_type || 'momo').toLowerCase(),
+          destination: String(meta.receive_destination),
+          amount: Number(meta.receive_amount) || amtMajor,
+          receiver_email: String(meta.receive_receiver_email || ''),
+          receiver_name: 'meta'
+        };
+      }
+
+      if (pending) {
+        if (pending.destination_type === 'subaccount') {
+          console.log(`[WEBHOOK ${requestId}] INSTANT-PAYOUT — skip: subaccount ${pending.destination} already split at source (no Transfer needed).`);
+        } else if (pending.destination_type === 'momo') {
+          const momo = String(pending.destination).trim();
+          const payoutAmt = Number(pending.amount) || amtMajor;
+          console.log(`[WEBHOOK ${requestId}] INSTANT-PAYOUT — triggering very-second MoMo payout: GH₵${payoutAmt} → ${momo} for ref ${reference} (receiver ${pending.receiver_email || pending.receiver_name})`);
+          const paystackTransfer = require('./lib/paystack-transfer');
+          // Fire-and-forget: do not block webhook 200
+          paystackTransfer.payoutToMomo({
+            momo_number: momo,
+            amountGhs: payoutAmt,
+            name: pending.receiver_name || momo,
+            reason: `Valmont Pay: ${result.body.transaction.customer} → ${pending.receiver_name || momo}`,
+            reference: `PAYOUT-${reference}`
+          }).then(tr => {
+            if (tr.ok) {
+              console.log(`[WEBHOOK ${requestId}] INSTANT-PAYOUT — ✓ Transfer initiated: ${tr.transfer && (tr.transfer.reference || tr.transfer.id) || 'ok'} to ${momo} GH₵${payoutAmt}`);
+              receiveLinkStore.setPayoutResult(reference, { ok:true, destination:momo, amount:payoutAmt, transfer: tr.transfer || tr.data });
+            } else if (tr.dryRun) {
+              console.log(`[WEBHOOK ${requestId}] INSTANT-PAYOUT — DRY RUN (PAYSTACK_TRANSFER_ENABLED≠1): would have paid GH₵${payoutAmt} → ${momo}. Set PAYSTACK_TRANSFER_ENABLED=1 and fund Paystack balance to go live.`);
+              receiveLinkStore.setPayoutResult(reference, { ok:false, dryRun:true, reason: tr.reason, destination:momo, amount:payoutAmt });
+            } else {
+              console.error(`[WEBHOOK ${requestId}] INSTANT-PAYOUT — ✗ Transfer failed for ${momo}: ${tr.reason}`);
+              receiveLinkStore.setPayoutResult(reference, { ok:false, reason: tr.reason, error: tr.error, destination:momo, amount:payoutAmt });
+            }
+          }).catch(err => {
+            console.error(`[WEBHOOK ${requestId}] INSTANT-PAYOUT — threw:`, err.message || err);
+            receiveLinkStore.setPayoutResult(reference, { ok:false, reason: err.message || String(err), destination:momo, amount:payoutAmt });
+          });
+        } else if (pending.destination_type === 'bank') {
+          console.log(`[WEBHOOK ${requestId}] INSTANT-PAYOUT — bank destination ${pending.destination} — instant Transfer requires account_number + bank_code. Log-only for now; use subaccount ACCT_ for true instant bank, or configure PAYSTACK_TRANSFER bank recipients.`);
+          receiveLinkStore.setPayoutResult(reference, { ok:false, reason:'Bank instant Transfer needs Paystack recipient setup (account_number + bank_code). Use MoMo for true seconds, or subaccount for instant bank split.' });
+        }
+      }
+    } catch (payoutErr) {
+      console.error(`[WEBHOOK ${requestId}] INSTANT-PAYOUT — handler error:`, payoutErr.message || payoutErr);
     }
   }
 
