@@ -297,6 +297,45 @@
       return 'bg-red-950 text-red-400 border-red-900';
     }
 
+    // Plain-English gloss for the Paystack decline strings merchants ask about
+    // most. The gateway's own wording is ALWAYS shown verbatim — this is only a
+    // tooltip, so an unmapped reason is never hidden or reworded.
+    // Reference: https://paystack.com/docs/api/errors/transaction/
+    const FAILURE_HINTS = [
+      { match: /denied by fraud|unable to process/i,
+        hint: 'Paystack\u2019s fraud check blocked this card \u2014 usually after several fast or failed attempts. It clears about 24 hours after the last attempt; try once after that.' },
+      { match: /\bdeclined\b/i,
+        hint: 'The bank blocked the card for this transaction. Ask the customer to contact their bank, and to enable online/e-commerce (and, for a foreign card, international) transactions on it.' },
+      { match: /insufficient|not sufficient/i,
+        hint: 'The card did not have enough funds for this amount.' },
+      { match: /unrecognized card type/i,
+        hint: 'The card scheme is not supported. Paystack accepts Visa, Mastercard and Verve (Amex only for Nigeria/South Africa accounts).' },
+      { match: /pickup card|lost card|stolen/i,
+        hint: 'The card was reported lost or stolen and blocked by the bank.' },
+      { match: /3d|otp|authentication|identification required/i,
+        hint: 'The customer could not complete the bank\u2019s PIN/OTP/3-D Secure step \u2014 often a foreign SIM that cannot receive the bank\u2019s SMS.' }
+    ];
+
+    function failureHintFor(reason) {
+      const text = String(reason || '');
+      const found = FAILURE_HINTS.find(entry => entry.match.test(text));
+      return found ? found.hint : '';
+    }
+
+    // The ledger is a 5-column grid, so the decline reason sits UNDER the FAILED
+    // badge as a small second line: truncated to keep the grid tidy, with the
+    // full wording (plus the plain-English hint, when we have one) in the
+    // tooltip. Returns '' when there is nothing to show — which is the case for
+    // settled rows and for rows written before the migration was run.
+    function renderFailureReason(t) {
+      const reason = String((t && (t.failure_reason || t.failureReason)) || '').trim();
+      if (!reason) return '';
+      const hint = failureHintFor(reason);
+      const title = hint ? `${reason} \u2014 ${hint}` : reason;
+      return `
+            <p class="mt-1 text-[10px] leading-snug text-red-300/80 truncate max-w-[190px] ml-auto" title="${escapeHtml(title)}">${escapeHtml(reason)}</p>`;
+    }
+
     function renderDashboard() {
       const ledgerRows = document.getElementById('ledgerRows');
       const emptyState = document.getElementById('ledgerEmptyState');
@@ -332,6 +371,7 @@
           <span class="text-gray-400 font-semibold">${escapeHtml(t.channel)}</span>
           <div class="text-right">
             <span class="inline-block px-2.5 py-0.5 rounded-[4px] text-[10px] font-black border uppercase ${statusClassFor(t.status)}">${escapeHtml(t.status)}</span>
+            ${renderFailureReason(t)}
           </div>
         </div>
       `).join('');
@@ -404,7 +444,11 @@
           ...t,
           customer: t.customer || t.customer_email || 'unknown@customer',
           channel: t.channel || t.payment_method || 'N/A',
-          status: t.status || 'PENDING'
+          status: t.status || 'PENDING',
+          // Why a payment failed, as recorded from Paystack. Absent on settled
+          // rows and on rows written before the migration — the badge alone is
+          // rendered in that case.
+          failure_reason: t.failure_reason || t.failureReason || ''
         }));
 
         renderDashboard();

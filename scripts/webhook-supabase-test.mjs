@@ -165,6 +165,9 @@ const failedEvent = {
     reference: 'VP-WEBHOOK-TEST-2',
     amount: '5000',
     channel: 'card',
+    // Paystack's own explanation for the decline. It must be stored verbatim —
+    // a FAILED row without it is what forced the merchant to ask "why?".
+    gateway_response: 'Denied by Fraud System',
     customer: { email: 'failed@example.com' }
   }
 };
@@ -174,5 +177,10 @@ assert.equal(res.statusCode, 500);
 assert.equal(res.body.error, 'Failed to save transaction');
 assert.equal(insertedRows[1].amount, 50);
 assert.equal(insertedRows[1].paid_at, null);
+assert.equal(
+  insertedRows[1].failure_reason,
+  'Denied by Fraud System',
+  'a decline stores Paystack gateway_response as failure_reason'
+);
 
 console.log('✓ Vercel webhook signature, persistence, effective-tenant forwarding, and errors passed');

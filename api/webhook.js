@@ -15,6 +15,9 @@ import tenantsModule from '../lib/tenants.js';
 import tenantWebhookForwarderModule from '../lib/tenant-webhook-forwarder.js';
 import mandateStoreModule from '../lib/mandate-store.js';
 import paystackCredentials from '../lib/paystack-credentials.js';
+import failureReasonModule from '../lib/failure-reason.js';
+
+const { extractFailureReason } = failureReasonModule;
 
 const { getSupabaseClient, supabaseConfigState } = supabaseModule;
 const { saveTransaction } = transactionStore;
@@ -238,19 +241,35 @@ function transactionFromEvent(eventName, data) {
     throw new Error('Webhook payload contains an invalid amount');
   }
 
-  return {
+  const succeeded = eventName === 'charge.success';
+
+  const record = {
     reference: String(data.reference),
     merchant_name: getMerchantName(data.metadata),
     customer_email: data.customer?.email || data.email || 'unknown@customer',
     // Paystack reports GHS payments in pesewas (the smallest currency unit).
     amount: amountInSubunits / 100,
     payment_method: formatChannel(data.channel, data.authorization),
-    status: eventName === 'charge.success' ? 'SUCCESS' : 'FAILED',
+    status: succeeded ? 'SUCCESS' : 'FAILED',
     paid_at:
       data.paid_at ||
       data.paidAt ||
-      (eventName === 'charge.success' ? data.created_at || new Date().toISOString() : null)
+      (succeeded ? data.created_at || new Date().toISOString() : null)
   };
+
+  // WHY the payment failed, verbatim from Paystack's `gateway_response` — e.g.
+  // "Denied by Fraud System", "Declined", "Insufficient Funds". Without this the
+  // merchant only sees a red FAILED row and has to ask Paystack support what
+  // happened. Never attached to a success: there is no failure to explain, and
+  // withholding it keeps the success payload byte-identical to the original
+  // seven columns (see lib/transaction-store.js — a brand-new deployment must
+  // never reject a real payment over a diagnostic field).
+  if (!succeeded) {
+    const reason = extractFailureReason(data);
+    if (reason) record.failure_reason = reason;
+  }
+
+  return record;
 }
 
 function configurationState() {
@@ -506,7 +525,10 @@ export function createWebhookHandler({
         amountSubunits: (data && data.amount) || null,
         channel: (data && data.channel) || null,
         status: (data && data.status) || null,
-        customerEmail: (data && ((data.customer && data.customer.email) || data.email)) || null
+        customerEmail: (data && ((data.customer && data.customer.email) || data.email)) || null,
+        // The operator-facing "why did it fail" string, logged at arrival so it
+        // is visible in the runtime logs even before the dashboard migration.
+        gatewayResponse: (data && data.gateway_response) || null
       });
 
       completeWebhookHit(logEntry, {
@@ -544,7 +566,14 @@ export function createWebhookHandler({
       let transaction;
       try {
         transaction = transactionFromEvent(eventName, data);
-        step(requestId, 'STEP 7/9 MAP', 'mapped Paystack event to a transactions row', transaction);
+        step(
+          requestId,
+          'STEP 7/9 MAP',
+          transaction.failure_reason
+            ? `mapped Paystack event to a transactions row — declined: "${transaction.failure_reason}"`
+            : 'mapped Paystack event to a transactions row',
+          transaction
+        );
       } catch (error) {
         failure(requestId, 'STEP 7/9 MAP', 'could not map the payload to a transaction row', error);
         return finish(400, { success: false, error: error.message }, 'mapping-failed');
@@ -598,6 +627,10 @@ export function createWebhookHandler({
         ok: persistence.ok,
         skipped: persistence.skipped,
         reason: persistence.reason,
+        // true → saved without an optional diagnostic column because the
+        // migration has not been run on this deployment yet. Not an error.
+        degraded: persistence.degraded,
+        missingColumns: persistence.missingColumns || [],
         returnedRow: persistence.data || null,
         error: persistence.error || null
       });
