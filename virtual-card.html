@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Valmont Pay — Virtual Card (MoMo Direct)</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  body{font-family:'Inter',sans-serif;background:#050d24;color:#fff}
+  .mono{font-family:'JetBrains Mono',monospace}
+</style>
+</head>
+<body class="min-h-screen flex flex-col">
+<header style="background:#0b1a38;padding:16px 24px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:space-between">
+  <div class="flex items-center gap-3">
+    <img src="/logo.svg" alt="Valmont Pay" style="height:32px">
+    <span class="text-[11px] font-black tracking-widest uppercase bg-[#f68b1e] text-white px-2 py-1 rounded">VIRTUAL CARD • BETA</span>
+    <span class="hidden md:inline text-[10px] font-bold tracking-widest uppercase text-gray-500">MoMo Direct — Pay anywhere online</span>
+  </div>
+  <div class="flex items-center gap-2">
+    <a href="/dashboard.html" class="text-[11px] font-bold uppercase tracking-widest text-gray-400 hover:text-white">Dashboard</a>
+    <span class="text-gray-700">•</span>
+    <span id="headerEmail" class="text-[11px] font-bold text-gray-300 mono hidden"></span>
+    <button onclick="changeEmail()" class="text-[10px] font-black uppercase tracking-widest bg-[#142850] hover:bg-[#1a3560] text-white px-2 py-1 rounded">Switch</button>
+  </div>
+</header>
+
+<main class="max-w-[1100px] mx-auto w-full p-6 flex-1">
+  <!-- Email onboarding banner -->
+  <div id="onboardBanner" class="hidden bg-amber-950/40 border border-amber-900/50 rounded-xl p-4 mb-6">
+    <div class="flex gap-4 items-start">
+      <span class="text-xl">👋</span>
+      <div class="flex-1">
+        <h3 class="font-black text-sm text-amber-300">Enter your email to create your Valmont Virtual Card</h3>
+        <p class="text-xs text-gray-400 mt-1">Your card and wallet are tied to your email (same as your receipt email). No password needed for this beta — in production this uses your Valmont Pay login.</p>
+        <form onsubmit="onboard(event)" class="flex gap-2 mt-3">
+          <input id="onboardEmail" type="email" placeholder="you@example.com" required class="flex-1 bg-[#050d24] border border-amber-900/50 p-2.5 rounded text-sm text-white outline-none focus:border-[#f68b1e]" />
+          <button type="submit" class="bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-xs uppercase tracking-widest px-5 rounded">Create My Card →</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="mb-6 flex flex-wrap gap-2 items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-black tracking-tight">Valmont Pay Virtual Card <span class="text-[#f68b1e]">— MoMo Direct</span></h1>
+      <p class="text-gray-400 text-sm mt-1 max-w-2xl">Pay on Netflix, Spotify, Amazon, Apple — funded instantly from MTN / Telecel / AT MoMo. <span id="modeBadge" class="inline-block bg-[#142850] text-gray-300 text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded ml-1">Phase 1: Closed-loop live • Phase 2: Real Visa via partner</span></p>
+    </div>
+    <div class="flex gap-2">
+      <button onclick="createAnotherCard()" class="bg-white text-[#0b1a38] font-black text-[11px] uppercase tracking-widest px-3 py-2 rounded hover:bg-gray-100">+ New Card</button>
+      <button onclick="refreshAll()" class="bg-[#0b1a38] border border-[#142850] text-white font-bold text-[11px] uppercase tracking-widest px-3 py-2 rounded">↻ Refresh</button>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
+    <!-- LEFT: Card + Wallet -->
+    <div class="lg:col-span-3 space-y-4">
+      <!-- Wallet bar (Wallet-first option) -->
+      <div class="bg-[#0b1a38] border border-[#142850] rounded-xl p-4 flex flex-wrap gap-4 items-center justify-between">
+        <div>
+          <div class="text-[10px] font-black tracking-widest uppercase text-gray-500">Valmont Wallet (GHS) — shared across your cards</div>
+          <div class="text-lg font-black mt-1"><span id="walletBalance">GH₵ —</span> <span id="walletUsd" class="text-sm font-bold text-gray-500"></span></div>
+          <div class="text-[10px] text-gray-500">Top up once via MoMo, then move to any card. Or fund a card directly (below).</div>
+        </div>
+        <form onsubmit="topupWallet(event)" class="flex gap-2 items-end">
+          <div>
+            <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Top-up Amount (GHS)</label>
+            <input id="walletAmount" type="number" min="10" step="0.01" placeholder="200" class="w-32 bg-[#050d24] border border-[#142850] p-2 rounded text-sm text-white outline-none focus:border-[#f68b1e]" required>
+          </div>
+          <button type="submit" class="bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-[11px] uppercase tracking-widest px-3 py-2.5 rounded">Top Up Wallet via MoMo</button>
+        </form>
+      </div>
+      <p id="walletStatus" class="text-[11px] font-bold hidden -mt-2"></p>
+
+      <!-- CARD VISUAL -->
+      <div id="cardVisual" class="relative rounded-2xl p-6 overflow-hidden shadow-2xl border border-white/10 hidden" style="background: radial-gradient(1200px 400px at -10% -20%, #f68b1e22, transparent), linear-gradient(135deg,#0b1a38 0%,#142850 50%, #0b1a38 100%); min-height: 220px;">
+        <div class="absolute -right-10 -bottom-10 w-48 h-48 bg-[#f68b1e]/10 rounded-full blur-2xl"></div>
+        <div class="flex justify-between items-start">
+          <div class="flex items-center gap-2">
+            <div class="w-10 h-7 rounded bg-gradient-to-br from-yellow-300 to-yellow-600 shadow-inner"></div>
+            <span class="text-[10px] font-black tracking-widest uppercase text-gray-400">Valmont Pay</span>
+            <span id="cardStatusBadge" class="text-[10px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-green-900 text-green-300 border border-green-800">Active</span>
+          </div>
+          <span class="text-[11px] font-black tracking-widest uppercase bg-white text-[#0b1a38] px-2 py-1 rounded">VISA</span>
+        </div>
+        <div class="mt-8 mono text-[18px] tracking-widest font-bold" id="cardNumber">•••• •••• •••• ••••</div>
+        <div class="flex gap-6 mt-3 text-[11px] mono">
+          <div><span class="text-gray-400 block text-[9px] tracking-widest uppercase font-black">Expiry</span><span id="cardExpiry">••/••</span></div>
+          <div><span class="text-gray-400 block text-[9px] tracking-widest uppercase font-black">CVV</span><span id="cardCvv">•••</span></div>
+          <div><span class="text-gray-400 block text-[9px] tracking-widest uppercase font-black">Name</span><span class="uppercase" id="cardHolder">—</span></div>
+          <div class="ml-auto text-right"><span class="text-gray-400 block text-[9px] tracking-widest uppercase font-black">Card ID</span><span id="cardId" class="text-[10px]">—</span></div>
+        </div>
+        <div class="flex justify-between items-end mt-6">
+          <div>
+            <div class="text-[10px] font-black tracking-widest uppercase text-gray-400">Balance</div>
+            <div class="text-xl font-black"><span id="cardBalanceGhs">GH₵ 0.00</span> <span class="text-sm font-bold text-gray-400" id="cardBalanceUsd">≈ $0.00</span></div>
+            <div class="text-[10px] text-gray-500 mt-1">Funded from MoMo • <span id="cardFx">GH₵ 15.80 / USD</span></div>
+          </div>
+          <button onclick="toggleReveal()" id="revealBtn" class="bg-white text-[#0b1a38] text-[11px] font-black uppercase tracking-widest px-3 py-2 rounded hover:bg-gray-100">Reveal Details</button>
+        </div>
+      </div>
+
+      <div id="noCardState" class="bg-[#0b1a38] border border-[#142850] rounded-xl p-8 text-center">
+        <div class="text-3xl mb-2">💳</div>
+        <p class="font-black text-white">No virtual card yet</p>
+        <p class="text-xs text-gray-500 mt-1">Create one with your email — instant, no KYC for this beta. Real Visa requires Phase 2 partner KYC.</p>
+        <button onclick="document.getElementById('onboardBanner').classList.remove('hidden'); document.getElementById('onboardEmail').focus()" class="mt-4 bg-[#f68b1e] text-white font-black text-xs uppercase tracking-widest px-5 py-3 rounded">Create Card</button>
+      </div>
+
+      <!-- Controls -->
+      <div id="cardControls" class="hidden grid grid-cols-2 md:grid-cols-4 gap-2">
+        <button onclick="showFundBox()" class="bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-[11px] uppercase tracking-widest py-3 rounded">+ Fund with MoMo</button>
+        <button onclick="toggleFreeze()" id="freezeBtn" class="bg-[#0b1a38] border border-[#142850] hover:bg-[#142850] text-white font-black text-[11px] uppercase tracking-widest py-3 rounded">❄ Freeze</button>
+        <button onclick="setLimit()" class="bg-[#0b1a38] border border-[#142850] hover:bg-[#142850] text-white font-bold text-[11px] uppercase tracking-widest py-3 rounded">Set Limit</button>
+        <button onclick="terminateCard()" class="bg-[#0b1a38] border border-red-900/40 hover:bg-red-950/30 text-red-300 font-bold text-[11px] uppercase tracking-widest py-3 rounded">Terminate</button>
+      </div>
+
+      <!-- Card selector when multiple -->
+      <div id="cardSelector" class="hidden bg-[#0b1a38] border border-[#142850] rounded-xl p-3">
+        <div class="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">Your cards (<span id="cardCount">0</span>) — click to switch</div>
+        <div id="cardChips" class="flex flex-wrap gap-2"></div>
+      </div>
+
+      <!-- Fund Box -->
+      <div id="fundBox" class="hidden bg-[#0b1a38] border border-[#142850] rounded-xl p-5">
+        <h3 class="font-black text-sm uppercase tracking-widest text-[#f68b1e]">Fund Card from MoMo — Direct</h3>
+        <p class="text-[11px] text-gray-400 mt-1">We’ll trigger a Paystack MoMo charge. Approve the USSD prompt on your phone. In local demo (no Paystack key) it credits instantly.</p>
+        <form onsubmit="fundCard(event)" class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4 items-end">
+          <div>
+            <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">Amount (GHS)</label>
+            <input id="fundAmount" type="number" min="10" step="0.01" placeholder="100.00" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded text-sm text-white outline-none focus:border-[#f68b1e]" required>
+          </div>
+          <div>
+            <label class="block text-[10px] font-black uppercase text-gray-400 mb-1">MoMo Number</label>
+            <input id="fundPhone" type="tel" placeholder="0544 000 000" class="w-full bg-[#050d24] border border-[#142850] p-2.5 rounded text-sm text-white outline-none focus:border-[#f68b1e]" required>
+            <p class="text-[10px] text-gray-600 mt-1">MTN • Telecel • AT</p>
+          </div>
+          <button type="submit" id="fundBtn" class="bg-[#f68b1e] hover:bg-orange-600 text-white font-black text-xs uppercase py-3 rounded">Send MoMo Prompt →</button>
+        </form>
+        <p id="fundStatus" class="text-[11px] font-bold mt-3 hidden"></p>
+        <div id="fundPaystackBox" class="hidden mt-3 p-3 bg-amber-950/30 border border-amber-900/40 rounded">
+          <p class="text-xs font-bold text-amber-300">Paystack checkout ready — click to complete payment:</p>
+          <a id="fundPaystackLink" href="#" target="_blank" class="inline-block mt-2 bg-white text-[#0b1a38] font-black text-xs uppercase px-4 py-2 rounded">Open Paystack Checkout →</a>
+          <p class="text-[10px] text-gray-400 mt-1">After you approve, return here and click Refresh — or use the instant demo credit below.</p>
+          <button onclick="fundLocalDemo()" class="mt-2 text-[11px] font-bold text-amber-400 underline">Or credit instantly (demo, no MoMo prompt)</button>
+        </div>
+      </div>
+
+      <!-- Demo spend (closed-loop) -->
+      <div id="spendBox" class="hidden bg-[#0b1a38] border border-[#142850] rounded-xl p-5">
+        <h3 class="font-black text-xs uppercase tracking-widest">Test a purchase (closed-loop)</h3>
+        <p class="text-[11px] text-gray-400 mt-1">Simulate paying a merchant with this card. In Phase 2 this is a real Visa authorization.</p>
+        <form onsubmit="spendCard(event)" class="flex gap-2 mt-3">
+          <input id="spendAmount" type="number" min="0.01" step="0.01" placeholder="4.99" class="w-24 bg-[#050d24] border border-[#142850] p-2 rounded text-sm text-white outline-none focus:border-[#f68b1e]" required>
+          <input id="spendMerchant" type="text" placeholder="Netflix" value="Netflix" class="flex-1 bg-[#050d24] border border-[#142850] p-2 rounded text-sm text-white outline-none focus:border-[#f68b1e]">
+          <button type="submit" class="bg-white text-[#0b1a38] font-black text-xs uppercase px-4 rounded">Charge $ →</button>
+        </form>
+        <p id="spendStatus" class="text-[11px] font-bold mt-2 hidden"></p>
+      </div>
+
+      <!-- Transactions -->
+      <div class="bg-[#0b1a38] border border-[#142850] rounded-xl overflow-hidden">
+        <div class="px-5 py-3 border-b border-[#142850] flex justify-between items-center">
+          <h3 class="font-black text-xs uppercase tracking-widest">Card Transactions</h3>
+          <span class="text-[10px] font-bold uppercase tracking-widest text-gray-500" id="txCount">0 transactions</span>
+        </div>
+        <div id="txList" class="divide-y divide-[#142850]/50">
+          <div class="p-8 text-center text-gray-500 text-sm">Create or select a card to see transactions</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Explainers -->
+    <div class="lg:col-span-2 space-y-4">
+      <div class="bg-[#0b1a38] border border-[#142850] rounded-xl p-5">
+        <h3 class="font-black text-xs uppercase tracking-widest text-[#f68b1e]">How MoMo → Virtual Card Works</h3>
+        <ol class="mt-3 space-y-3 text-sm">
+          <li class="flex gap-3"><span class="bg-[#f68b1e] text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0">1</span><span><b>Create card</b> — instant, tied to your email. Internal BIN for Phase 1; real Visa in Phase 2.</span></li>
+          <li class="flex gap-3"><span class="bg-[#f68b1e] text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0">2</span><span><b>Fund two ways:</b> <b>Direct</b> (MoMo → this card) or <b>Wallet</b> (MoMo → wallet → any card). Same Paystack MoMo rail as your pay.html.</span></li>
+          <li class="flex gap-3"><span class="bg-[#f68b1e] text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0">3</span><span><b>Auto-convert</b> GHS → USD at ~GH₵ 15.8/USD (configurable via <code class="text-[#f68b1e]">VIRTUAL_CARD_FX_RATE</code>).</span></li>
+          <li class="flex gap-3"><span class="bg-[#f68b1e] text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0">4</span><span><b>Pay:</b> Phase 1 — at any Valmont Pay merchant (closed-loop). Phase 2 — anywhere Visa is accepted.</span></li>
+        </ol>
+        <div class="mt-4 bg-[#050d24] border border-[#142850] rounded p-3">
+          <p class="text-[11px] font-black uppercase tracking-widest text-gray-400">Ghana context — MTN already does this</p>
+          <p class="text-xs text-gray-300 mt-1">MTN MoMo + Mastercard launched a virtual card in Mar 2024 for 13 African markets [incl. Ghana]. Valmont’s edge: <b>multiple branded cards, per-card limits, wallet, API, and merchant controls</b> — MTN is a single wallet-linked card.</p>
+        </div>
+      </div>
+
+      <div class="bg-amber-950/30 border border-amber-900/40 rounded-xl p-5">
+        <h3 class="font-black text-xs uppercase tracking-widest text-amber-400">What we just shipped</h3>
+        <div class="mt-3 space-y-2 text-xs leading-relaxed text-gray-300">
+          <p>✅ <b>Backend:</b> <code class="text-amber-300">lib/virtual-card-store.js</code> + <code class="text-amber-300">/api/v1/virtual-cards/*</code> + <code class="text-amber-300">/api/v1/wallets/*</code> (Supabase + in-memory fallback, same pattern as mandates).</p>
+          <p>✅ <b>MoMo rail:</b> Funding tries Paystack MoMo charge first (real USSD prompt), falls back to instant local credit when no key — so demo works everywhere.</p>
+          <p>✅ <b>Wallet:</b> One GHS wallet per email, can fund any of your cards.</p>
+          <p>✅ <b>DB:</b> Run <code class="text-amber-300">scripts/supabase-virtual-cards-schema.sql</code> in Supabase to make cards durable (same as payment_links).</p>
+        </div>
+      </div>
+
+      <div class="bg-[#0b1a38] border border-[#142850] rounded-xl p-5">
+        <h3 class="font-black text-xs uppercase tracking-widest">Next: Real Visa (Phase 2)</h3>
+        <p class="text-xs text-gray-400 mt-2">To make the card work on Netflix/Amazon (outside Valmont):</p>
+        <ol class="text-xs text-gray-300 mt-2 space-y-1 list-decimal list-inside">
+          <li>Create account at <b>Strowallet</b> or <b>Maplerad</b> (licensed issuer).</li>
+          <li>Add <code class="text-[#f68b1e]">STROWALLET_API_KEY</code> / <code class="text-[#f68b1e]">MAPLERAD_SECRET</code> to Vercel env.</li>
+          <li>We wire 3 calls: <code>create card</code> → <code>fund card</code> → <code>webhook</code>. ~1 file change in <code>lib/virtual-card-store.js</code>.</li>
+        </ol>
+        <p class="text-[11px] text-gray-500 mt-2">Cost: $1-2 per card, 1-2% funding fee, FX interbank+1-2%. You set the markup. BoG PSP/EMI license only needed at scale (Phase 3).</p>
+      </div>
+
+      <div class="bg-[#0b1a38] border border-[#142850] rounded-xl p-5">
+        <h3 class="font-black text-xs uppercase tracking-widest">API (for your app / storefront)</h3>
+<pre class="mono text-[11px] bg-[#050d24] border border-[#142850] rounded p-3 mt-2 overflow-auto text-gray-300">POST /api/v1/virtual-cards
+{ "customer_email":"you@example.com", "currency":"USD" }
+// → { id, pan_masked, expiry, balance_ghs, balance_usd }
+
+POST /api/v1/virtual-cards/:id/fund
+{ "amount_ghs":200, "momo_number":"0544000000", "email":"you@example.com" }
+// → Paystack URL or instant credit
+
+POST /api/v1/wallets/:email/topup
+{ "amount_ghs":500, "momo_number":"0544000000" }
+
+GET /api/v1/wallets/:email
+GET /api/v1/virtual-cards?customer_email=you@example.com
+POST /api/v1/virtual-cards/:id/freeze
+POST /api/v1/virtual-cards/:id/spend
+  { "amount_usd":4.99, "merchant":"Netflix" }</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-8 bg-[#0b1a38] border border-[#142850] rounded-xl p-5">
+    <h3 class="font-black text-xs uppercase tracking-widest text-[#f68b1e]">Your roadmap — We chose “Both”</h3>
+    <div class="grid md:grid-cols-3 gap-4 mt-3">
+      <div class="bg-[#050d24] border border-green-900/40 rounded p-4">
+        <div class="text-[10px] font-black uppercase tracking-widest text-green-400">✓ Phase 1 — LIVE NOW (this build)</div>
+        <div class="font-black text-white mt-1">Closed-loop Card + Wallet</div>
+        <p class="text-xs text-gray-400 mt-1">Works on Valmont merchants. No partner, no license. MoMo → Card direct or via Wallet. Built and running.</p>
+        <div class="text-[11px] mono mt-2 text-gray-500">API: /api/v1/virtual-cards • /api/v1/wallets</div>
+      </div>
+      <div class="bg-[#050d24] border border-amber-900/30 rounded p-4">
+        <div class="text-[10px] font-black uppercase tracking-widest text-amber-400">Phase 2 — Next (1-2 weeks)</div>
+        <div class="font-black text-white mt-1">Real Visa via Strowallet/Maplerad</div>
+        <p class="text-xs text-gray-400 mt-1">One issuer API integration → card works on Netflix, Spotify, AliExpress. Same MoMo funding, same UI.</p>
+        <div class="text-[11px] mono mt-2 text-gray-500">Needs issuer API keys • ~3 endpoints</div>
+      </div>
+      <div class="bg-[#050d24] border border-[#142850] rounded p-4">
+        <div class="text-[10px] font-black uppercase tracking-widest text-gray-400">Phase 3 — Scale</div>
+        <div class="font-black text-white mt-1">BoG Licensed Issuer</div>
+        <p class="text-xs text-gray-400 mt-1">PSP/EMI license + bank sponsor → you become the issuer. Keep all fees, issue physical cards.</p>
+        <div class="text-[11px] mono mt-2 text-gray-500">6-12 months • Legal + bank</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="text-center py-6 text-[11px] text-gray-600">Secured by Valmont Pay • Demo cards use test BIN 4832 46 • Real Visa uses provider BIN in Phase 2 • Supabase durable when configured</footer>
+
+<script>
+let currentEmail = localStorage.getItem('valmont_card_email') || '';
+let cards = [];
+let selectedId = null;
+let revealed = false;
+let walletData = null;
+
+function getEmail() {
+  if (currentEmail) return currentEmail;
+  const params = new URLSearchParams(location.search);
+  return params.get('email') || params.get('customer_email') || '';
+}
+
+function setEmail(email) {
+  currentEmail = email.toLowerCase().trim();
+  localStorage.setItem('valmont_card_email', currentEmail);
+  document.getElementById('headerEmail').textContent = currentEmail;
+  document.getElementById('headerEmail').classList.remove('hidden');
+}
+
+function changeEmail() {
+  const e = prompt('Enter email for your virtual cards:', currentEmail || '');
+  if (e && e.includes('@')) { setEmail(e); selectedId = null; cards = []; refreshAll(); }
+}
+
+async function onboard(e) {
+  e.preventDefault();
+  const email = document.getElementById('onboardEmail').value.trim();
+  if (!email.includes('@')) return alert('Valid email required');
+  setEmail(email);
+  document.getElementById('onboardBanner').classList.add('hidden');
+  await createCard(email);
+}
+
+async function createCard(emailOverride) {
+  const email = emailOverride || currentEmail;
+  if (!email) return;
+  const res = await fetch('/api/v1/virtual-cards', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ customer_email: email, currency: 'USD', holder_name: email.split('@')[0] })
+  });
+  const j = await res.json();
+  if (!j.status) return alert('❌ ' + (j.message || 'Could not create card'));
+  selectedId = j.data.id;
+  await refreshAll();
+}
+
+async function createAnotherCard() {
+  if (!currentEmail) return document.getElementById('onboardBanner').classList.remove('hidden');
+  await createCard();
+}
+
+async function refreshAll() {
+  if (!currentEmail) {
+    const e = getEmail();
+    if (e) setEmail(e);
+    else {
+      document.getElementById('onboardBanner').classList.remove('hidden');
+      document.getElementById('walletBalance').textContent = 'GH₵ —';
+      return;
+    }
+  }
+  document.getElementById('headerEmail').textContent = currentEmail;
+  document.getElementById('headerEmail').classList.remove('hidden');
+  document.getElementById('onboardBanner').classList.add('hidden');
+
+  // wallet
+  try {
+    const wres = await fetch('/api/v1/wallets/' + encodeURIComponent(currentEmail));
+    const wj = await wres.json();
+    if (wj.status) {
+      walletData = wj.data;
+      document.getElementById('walletBalance').textContent = 'GH₵ ' + Number(walletData.balance_ghs||0).toFixed(2);
+      document.getElementById('walletUsd').textContent = '≈ $' + Number(walletData.balance_usd||0).toFixed(2);
+    }
+  } catch(_) {}
+
+  // cards
+  try {
+    const r = await fetch('/api/v1/virtual-cards?customer_email=' + encodeURIComponent(currentEmail));
+    const j = await r.json();
+    if (j.status) {
+      cards = j.data || [];
+      if (!cards.length) {
+        document.getElementById('cardVisual').classList.add('hidden');
+        document.getElementById('cardControls').classList.add('hidden');
+        document.getElementById('spendBox').classList.add('hidden');
+        document.getElementById('cardSelector').classList.add('hidden');
+        document.getElementById('noCardState').classList.remove('hidden');
+        document.getElementById('txList').innerHTML = '<div class="p-8 text-center text-gray-500 text-sm">No card — create one to start</div>';
+        document.getElementById('txCount').textContent = '0 transactions';
+        return;
+      }
+      if (!selectedId || !cards.find(c=>c.id===selectedId)) selectedId = cards[0].id;
+      renderSelector();
+      const sel = cards.find(c=>c.id===selectedId);
+      renderCard(sel);
+      await loadTransactions(sel.id);
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderSelector() {
+  const chips = document.getElementById('cardChips');
+  document.getElementById('cardCount').textContent = cards.length;
+  document.getElementById('cardSelector').classList.toggle('hidden', cards.length <= 1);
+  chips.innerHTML = cards.map(c => `
+    <button onclick="selectCard('${c.id}')" class="px-3 py-1.5 rounded-full text-xs font-bold border ${c.id===selectedId ? 'bg-[#f68b1e] border-[#f68b1e] text-white' : 'bg-[#050d24] border-[#142850] text-gray-400 hover:text-white'}">
+      ${c.pan_masked} • $${Number(c.balance_usd||0).toFixed(2)}
+    </button>
+  `).join('');
+}
+
+function selectCard(id) {
+  selectedId = id;
+  revealed = false;
+  const sel = cards.find(c=>c.id===id);
+  if (sel) { renderSelector(); renderCard(sel); loadTransactions(id); }
+}
+
+function renderCard(c) {
+  if (!c) return;
+  document.getElementById('noCardState').classList.add('hidden');
+  document.getElementById('cardVisual').classList.remove('hidden');
+  document.getElementById('cardControls').classList.remove('hidden');
+  document.getElementById('spendBox').classList.remove('hidden');
+  document.getElementById('cardHolder').textContent = c.holder_name || 'Valmont User';
+  document.getElementById('cardId').textContent = c.id;
+  document.getElementById('cardNumber').textContent = c.pan || c.pan_masked || '•••• •••• •••• ••••';
+  document.getElementById('cardExpiry').textContent = c.expiry || '••/••';
+  document.getElementById('cardCvv').textContent = (revealed ? (c.cvv || '•••') : '•••');
+  document.getElementById('cardBalanceGhs').textContent = 'GH₵ ' + Number(c.balance_ghs||0).toFixed(2);
+  document.getElementById('cardBalanceUsd').textContent = '≈ $' + Number(c.balance_usd||0).toFixed(2);
+  document.getElementById('cardFx').textContent = 'GH₵ ' + Number(c.fx_rate||15.8).toFixed(2) + ' / USD';
+  const badge = document.getElementById('cardStatusBadge');
+  badge.textContent = c.status;
+  badge.className = 'text-[10px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border ' + (
+    c.status==='active' ? 'bg-green-900 text-green-300 border-green-800' :
+    c.status==='frozen' ? 'bg-amber-900 text-amber-300 border-amber-800' :
+    'bg-red-900 text-red-300 border-red-900'
+  );
+  document.getElementById('revealBtn').textContent = revealed ? 'Hide Details' : 'Reveal Details';
+  const freezeBtn = document.getElementById('freezeBtn');
+  if (freezeBtn) freezeBtn.textContent = c.status==='frozen' ? '❄ Unfreeze' : '❄ Freeze';
+}
+
+async function toggleReveal() {
+  const sel = cards.find(c=>c.id===selectedId);
+  if (!sel) return;
+  if (revealed) { revealed=false; renderCard(sel); return; }
+  // fetch revealed details from server (requires email ownership)
+  try {
+    const r = await fetch('/api/v1/virtual-cards/' + encodeURIComponent(selectedId) + '/reveal', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ email: currentEmail })
+    });
+    const j = await r.json();
+    if (!j.status) return alert('❌ ' + j.message);
+    revealed = true;
+    const idx = cards.findIndex(c=>c.id===selectedId);
+    if (idx>=0) cards[idx] = j.data;
+    renderCard(j.data);
+  } catch (e) { alert('Network error'); }
+}
+
+function showFundBox() {
+  document.getElementById('fundBox').classList.remove('hidden');
+  document.getElementById('fundAmount').focus();
+}
+
+async function fundCard(e) {
+  e.preventDefault();
+  const amt = parseFloat(document.getElementById('fundAmount').value);
+  const phone = document.getElementById('fundPhone').value.trim();
+  const status = document.getElementById('fundStatus');
+  const btn = document.getElementById('fundBtn');
+  if (!amt || amt < 10) { status.textContent='❌ Minimum is GH₵ 10'; status.className='text-[11px] font-bold mt-3 text-red-400'; status.classList.remove('hidden'); return; }
+  if (!selectedId) return alert('Select a card first');
+  btn.disabled=true; btn.textContent='Processing…';
+  status.textContent='⏳ Initiating MoMo charge…'; status.className='text-[11px] font-bold mt-3 text-amber-400'; status.classList.remove('hidden');
+  document.getElementById('fundPaystackBox').classList.add('hidden');
+  try {
+    const r = await fetch('/api/v1/virtual-cards/' + encodeURIComponent(selectedId) + '/fund', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ amount_ghs: amt, momo_number: phone, email: currentEmail })
+    });
+    const j = await r.json();
+    if (j.status && j.data && j.data.paystack_authorization_url) {
+      // Real Paystack flow — show checkout link
+      document.getElementById('fundPaystackLink').href = j.data.paystack_authorization_url;
+      document.getElementById('fundPaystackBox').classList.remove('hidden');
+      status.textContent='✅ MoMo charge initialized — tap the Paystack button to complete. Or use instant demo credit.';
+      status.className='text-[11px] font-bold mt-3 text-green-400';
+    } else if (j.status && j.data) {
+      status.textContent='✅ ' + j.message; status.className='text-[11px] font-bold mt-3 text-green-400';
+      // update card in list
+      const idx = cards.findIndex(c=>c.id===selectedId);
+      if (idx>=0) cards[idx]=j.data;
+      renderCard(j.data); renderSelector(); await loadTransactions(selectedId);
+      // also refresh wallet display (in case backend mirrored)
+      await refreshAll();
+    } else {
+      status.textContent='❌ ' + (j.message || 'Funding failed'); status.className='text-[11px] font-bold mt-3 text-red-400';
+    }
+  } catch (err) {
+    status.textContent='❌ Network error: ' + err.message; status.className='text-[11px] font-bold mt-3 text-red-400';
+  } finally { btn.disabled=false; btn.textContent='Send MoMo Prompt →'; }
+}
+
+async function fundLocalDemo() {
+  const amt = parseFloat(document.getElementById('fundAmount').value);
+  const phone = document.getElementById('fundPhone').value.trim() || 'demo';
+  if (!amt || amt<10) return alert('Enter amount ≥ GH₵ 10');
+  const r = await fetch('/api/v1/virtual-cards/' + encodeURIComponent(selectedId) + '/fund-local', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ amount_ghs: amt, momo_number: phone })
+  });
+  const j = await r.json();
+  const status=document.getElementById('fundStatus');
+  if (j.status) {
+    status.textContent='✅ Demo credited GH₵ ' + amt.toFixed(2); status.className='text-[11px] font-bold mt-3 text-green-400';
+    const idx=cards.findIndex(c=>c.id===selectedId); if(idx>=0) cards[idx]=j.data;
+    renderCard(j.data); renderSelector(); await loadTransactions(selectedId);
+  } else { status.textContent='❌ ' + j.message; status.className='text-[11px] font-bold mt-3 text-red-400';}
+}
+
+async function topupWallet(e) {
+  e.preventDefault();
+  const amt = parseFloat(document.getElementById('walletAmount').value);
+  const status = document.getElementById('walletStatus');
+  if (!amt || amt<10) { status.textContent='❌ Minimum GH₵ 10'; status.className='text-[11px] font-bold text-red-400'; status.classList.remove('hidden'); return; }
+  // For wallet top-up we need a phone — prompt if not in fund box
+  let phone = document.getElementById('fundPhone').value.trim();
+  if (!phone) phone = prompt('Enter MoMo number for wallet top-up:', '0544000000') || '';
+  if (!phone) return;
+  status.textContent='⏳ Topping up wallet…'; status.className='text-[11px] font-bold text-amber-400'; status.classList.remove('hidden');
+  try {
+    // Try real MoMo first
+    let r = await fetch('/api/v1/wallets/' + encodeURIComponent(currentEmail) + '/topup', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ amount_ghs: amt, momo_number: phone })
+    });
+    let j = await r.json();
+    if (j.status && j.data && j.data.paystack_authorization_url) {
+      status.innerHTML = '✅ MoMo charge ready — <a href="'+j.data.paystack_authorization_url+'" target="_blank" class="underline text-white">Open Paystack</a> to complete. Or <button onclick="topupWalletLocal('+amt+')" class="underline text-amber-300">credit instantly (demo)</button>';
+      status.className='text-[11px] font-bold text-green-400'; return;
+    }
+    if (j.status) {
+      status.textContent='✅ Wallet topped up GH₵ ' + amt.toFixed(2); status.className='text-[11px] font-bold text-green-400';
+      await refreshAll(); // reload wallet + cards
+      return;
+    }
+    // fallback local
+    await topupWalletLocal(amt);
+  } catch (err) {
+    status.textContent='❌ ' + err.message; status.className='text-[11px] font-bold text-red-400';
+  }
+}
+async function topupWalletLocal(amt) {
+  const status=document.getElementById('walletStatus');
+  const a = amt || parseFloat(document.getElementById('walletAmount').value);
+  const r = await fetch('/api/v1/wallets/' + encodeURIComponent(currentEmail) + '/topup-local', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ amount_ghs: a })
+  });
+  const j = await r.json();
+  if (j.status) { status.textContent='✅ Wallet topped up GH₵ ' + a.toFixed(2) + ' (demo)'; status.className='text-[11px] font-bold text-green-400'; await refreshAll(); }
+  else { status.textContent='❌ ' + j.message; status.className='text-[11px] font-bold text-red-400'; }
+  status.classList.remove('hidden');
+}
+
+async function toggleFreeze() {
+  const sel = cards.find(c=>c.id===selectedId);
+  if (!sel) return;
+  const path = sel.status==='frozen' ? 'unfreeze' : 'freeze';
+  const r = await fetch('/api/v1/virtual-cards/' + encodeURIComponent(selectedId) + '/' + path, { method: 'POST' });
+  const j = await r.json();
+  if (!j.status) return alert('❌ ' + j.message);
+  const idx=cards.findIndex(c=>c.id===selectedId); if(idx>=0) cards[idx]=j.data;
+  renderCard(j.data); renderSelector();
+}
+async function setLimit() {
+  const cur = cards.find(c=>c.id===selectedId);
+  const lim = prompt('Per-transaction limit in USD (leave empty to remove):', cur && cur.spending_limit_usd ? String(cur.spending_limit_usd) : '50');
+  if (lim===null) return;
+  const payload = lim.trim()==='' ? { spending_limit_usd: null } : { spending_limit_usd: parseFloat(lim) };
+  const r = await fetch('/api/v1/virtual-cards/' + encodeURIComponent(selectedId) + '/limit', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+  });
+  const j = await r.json();
+  if (!j.status) return alert('❌ ' + j.message);
+  const idx=cards.findIndex(c=>c.id===selectedId); if(idx>=0) cards[idx]=j.data;
+  renderCard(j.data);
+}
+async function terminateCard() {
+  if (!confirm('Terminate this card? Balance will be frozen and card cannot be reused.')) return;
+  const r = await fetch('/api/v1/virtual-cards/' + encodeURIComponent(selectedId) + '/terminate', { method:'POST' });
+  const j = await r.json();
+  if (!j.status) return alert('❌ ' + j.message);
+  const idx=cards.findIndex(c=>c.id===selectedId); if(idx>=0) cards[idx]=j.data;
+  renderCard(j.data); renderSelector();
+}
+async function spendCard(e) {
+  e.preventDefault();
+  const amt = parseFloat(document.getElementById('spendAmount').value);
+  const merchant = document.getElementById('spendMerchant').value.trim() || 'Online Purchase';
+  const status=document.getElementById('spendStatus');
+  status.classList.remove('hidden'); status.textContent='⏳ Processing…'; status.className='text-[11px] font-bold mt-2 text-amber-400';
+  const r = await fetch('/api/v1/virtual-cards/' + encodeURIComponent(selectedId) + '/spend', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ amount_usd: amt, merchant })
+  });
+  const j = await r.json();
+  if (!j.status) { status.textContent='❌ ' + j.message; status.className='text-[11px] font-bold mt-2 text-red-400'; return; }
+  status.textContent='✅ Charged $' + amt.toFixed(2) + ' to ' + merchant; status.className='text-[11px] font-bold mt-2 text-green-400';
+  const idx=cards.findIndex(c=>c.id===selectedId); if(idx>=0) cards[idx]=j.data;
+  renderCard(j.data); renderSelector(); await loadTransactions(selectedId);
+}
+
+async function loadTransactions(cardId) {
+  try {
+    const r = await fetch('/api/v1/virtual-cards/' + encodeURIComponent(cardId) + '/transactions');
+    const j = await r.json();
+    const list = (j.status && j.data) ? j.data : [];
+    const el=document.getElementById('txList'), count=document.getElementById('txCount');
+    count.textContent = list.length + ' transaction' + (list.length===1?'':'s');
+    if (!list.length) {
+      el.innerHTML = '<div class="p-8 text-center"><div class="text-2xl mb-2">💳</div><p class="text-sm font-bold text-gray-300">No transactions yet</p><p class="text-xs text-gray-500 mt-1">Fund your card and make a test purchase above.</p></div>';
+      return;
+    }
+    el.innerHTML = list.map(t => {
+      const isFund = t.type==='funding';
+      const dot = isFund ? 'bg-green-500' : 'bg-blue-500';
+      const title = isFund ? ('MoMo funding' + (t.momo_number ? ' — ' + t.momo_number : '')) : (t.merchant || 'Purchase');
+      const amt = isFund ? ('+GH₵ ' + Number(t.amount_ghs||0).toFixed(2) + ' • +$' + Number(t.amount_usd||0).toFixed(2)) : ('-$' + Number(t.amount_usd||0).toFixed(2) + ' • -GH₵ ' + Number(t.amount_ghs||0).toFixed(2));
+      const when = new Date(t.created_at).toLocaleString();
+      return `<div class="px-5 py-3 flex justify-between items-center hover:bg-[#0d1e3d]/30">
+        <div class="flex gap-3 items-center">
+          <span class="w-2 h-2 rounded-full ${dot} shrink-0"></span>
+          <div><div class="text-sm font-bold text-white">${title}</div><div class="text-[11px] text-gray-500">${when}</div><div class="text-[10px] text-gray-600 mono">${t.reference||''}</div></div>
+        </div>
+        <div class="text-right"><div class="text-sm font-black ${isFund?'text-green-400':'text-white'}">${amt}</div><div class="text-[10px] font-bold uppercase tracking-widest ${isFund?'text-green-400':'text-blue-400'}">${t.type}</div></div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+// init
+(function init(){
+  const e = getEmail();
+  if (e) setEmail(e);
+  if (!currentEmail) document.getElementById('onboardBanner').classList.remove('hidden');
+  refreshAll();
+})();
+</script>
+</body>
+</html>

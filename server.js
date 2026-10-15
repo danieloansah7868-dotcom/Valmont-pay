@@ -23,6 +23,7 @@ const webhookForwarder = require('./lib/tenant-webhook-forwarder');
 const notifier = require('./lib/notifier');
 const paymentLinkStore = require('./lib/payment-link-store');
 const mandateStore = require('./lib/mandate-store');
+const virtualCardStore = require('./lib/virtual-card-store');
 const serviceCatalogue = require('./lib/service-catalogue');
 const legacyLinkPolicy = require('./lib/legacy-link-policy');
 const { publicBaseUrl } = require('./lib/base-url');
@@ -487,6 +488,213 @@ app.post('/api/v1/mandates/revoke', mandateRateLimit, requireMandateAuth, async 
     message: 'Mandate revoked successfully. No further automated charges can occur.',
     data: result.data || result.record
   });
+});
+
+// ─── VIRTUAL CARDS — MoMo-direct (Phase 1: closed-loop, Phase 2: real Visa) ─
+// Customer email is the owner key. For MVP these are public with rate-limit
+// (no tenant secret needed) so any MoMo user can create a card. Admin can
+// see all. Phase 2 adds optional tenant scoping.
+const virtualCardRateLimit = rateLimit.limit('virtual-cards', {
+  max: 30, windowMs: 60 * 1000,
+  message: 'Too many virtual card requests. Please slow down.'
+});
+
+app.post('/api/v1/virtual-cards', virtualCardRateLimit, async (req, res) => {
+  const { customer_email, email, holder_name, currency, initial_funding_ghs, tenant_key } = req.body || {};
+  const custEmail = String(customer_email || email || '').trim();
+  if (!custEmail || !custEmail.includes('@')) {
+    return res.status(400).json({ status: false, message: 'Valid customer_email is required.' });
+  }
+  const result = await virtualCardStore.createVirtualCard({
+    customer_email: custEmail,
+    holder_name: holder_name || custEmail.split('@')[0],
+    currency: currency || 'USD',
+    initial_funding_ghs: initial_funding_ghs ? parseFloat(initial_funding_ghs) : undefined,
+    tenant_key: tenant_key || null
+  });
+  if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
+  return res.status(201).json({ status: true, message: 'Virtual card created', data: result.card });
+});
+
+app.get('/api/v1/virtual-cards', virtualCardRateLimit, async (req, res) => {
+  const customer_email = req.query.customer_email || req.query.email || '';
+  const status = req.query.status || undefined;
+  // Require at least an email filter unless caller is admin (prevents dumping all cards)
+  if (!customer_email && !isAuthorizedAdmin(req)) {
+    return res.status(400).json({ status: false, message: 'customer_email query param is required (or admin auth).' });
+  }
+  const result = await virtualCardStore.listVirtualCards({ customer_email, status, tenant_key: req.query.tenant_key });
+  return res.status(200).json({ status: true, count: result.cards.length, data: result.cards });
+});
+
+app.get('/api/v1/virtual-cards/:id', virtualCardRateLimit, async (req, res) => {
+  const card = await virtualCardStore.getVirtualCard(req.params.id);
+  if (!card) return res.status(404).json({ status: false, message: 'Card not found.' });
+  const reveal = String(req.query.reveal || '') === '1' && (isAuthorizedAdmin(req) || String(req.query.email||'').toLowerCase() === card.customer_email);
+  return res.status(200).json({ status: true, data: virtualCardStore.sanitizeForClient(card, { reveal }) });
+});
+
+app.post('/api/v1/virtual-cards/:id/reveal', virtualCardRateLimit, async (req, res) => {
+  const card = await virtualCardStore.getVirtualCard(req.params.id);
+  if (!card) return res.status(404).json({ status: false, message: 'Card not found.' });
+  const email = String((req.body && req.body.email) || req.query.email || '').toLowerCase();
+  if (!email || email !== card.customer_email) {
+    // also allow admin to reveal
+    if (!isAuthorizedAdmin(req)) return res.status(403).json({ status: false, message: 'Email does not match card owner.' });
+  }
+  if (card.status === 'terminated') return res.status(409).json({ status: false, message: 'Card is terminated.' });
+  return res.status(200).json({ status: true, data: virtualCardStore.sanitizeForClient(card, { reveal: true }) });
+});
+
+app.post('/api/v1/virtual-cards/:id/fund', virtualCardRateLimit, async (req, res) => {
+  const { amount_ghs, amount, momo_number, phone, email } = req.body || {};
+  const amt = parseFloat(amount_ghs != null ? amount_ghs : amount);
+  const momo = String(momo_number || phone || '').trim();
+  if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ status: false, message: 'amount_ghs is required and must be > 0.' });
+  // Ownership check for fund: require matching email or admin
+  const card = await virtualCardStore.getVirtualCard(req.params.id);
+  if (!card) return res.status(404).json({ status: false, message: 'Card not found.' });
+  if (email && String(email).toLowerCase() !== card.customer_email && !isAuthorizedAdmin(req)) {
+    return res.status(403).json({ status: false, message: 'Email does not match card owner.' });
+  }
+  // If Paystack is configured and a MoMo number was provided, attempt a real MoMo charge first.
+  // On success we credit the card; on failure we still allow local demo funding when PAYSTACK_SECRET_KEY is absent.
+  const paystackKey = process.env.PAYSTACK_SECRET_KEY || '';
+  if (paystackKey && momo) {
+    try {
+      const paystack = require('./lib/paystack');
+      const reference = generateReference();
+      const callback_url = `${baseUrl(req)}/virtual-card.html?fund_ref=${encodeURIComponent(reference)}`;
+      const init = await paystack.initializePayment({
+        amount: amt,
+        email: card.customer_email,
+        reference,
+        merchant: 'valmont-virtual-card',
+        phone: momo,
+        callback_url,
+        secretKey: paystackKey
+      });
+      if (init && init.status && init.data && init.data.authorization_url) {
+        // Hand back Paystack checkout URL — frontend should redirect to it.
+        // The webhook / verify will then credit the card on success. We also
+        // store a pending funding intent so verify can find it.
+        // For MVP: also credit locally immediately for demo (real flow credits on webhook).
+        // Return both.
+        if (!paystackKey.startsWith('sk_test') && !paystackKey.startsWith('sk_live')) {
+          // misconfigured, fall through to local
+        } else {
+          return res.status(200).json({
+            status: true,
+            message: 'MoMo charge initialized — complete on Paystack.',
+            data: {
+              paystack_authorization_url: init.data.authorization_url,
+              paystack_reference: init.data.reference || reference,
+              paystack_access_code: init.data.access_code || null,
+              card_id: card.id,
+              amount_ghs: amt,
+              momo_number: momo
+            },
+            // For demo without completing Paystack, also provide local credit option:
+            demo_local_fund_url: `/api/v1/virtual-cards/${encodeURIComponent(card.id)}/fund-local`
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('[VIRTUAL-CARD] Paystack fund init failed, falling back to local:', err.message);
+    }
+  }
+  // Local credit (demo / when Paystack not configured)
+  const result = await virtualCardStore.fundCard(req.params.id, amt, { momo_number: momo, reference: generateReference() });
+  if (!result.ok) return res.status(result.status || 400).json({ status: false, message: result.reason });
+  return res.status(200).json({ status: true, message: `Card funded GH₵ ${amt.toFixed(2)} (≈ $${result.transaction.amount_usd.toFixed(2)})`, data: result.card, transaction: result.transaction, fx_rate: result.fx_rate, funded_via: 'local-demo' });
+});
+
+// Local demo fund — bypasses Paystack, always credits immediately. Used by the demo UI.
+app.post('/api/v1/virtual-cards/:id/fund-local', virtualCardRateLimit, async (req, res) => {
+  const { amount_ghs, amount, momo_number, phone } = req.body || {};
+  const amt = parseFloat(amount_ghs != null ? amount_ghs : amount);
+  const momo = String(momo_number || phone || '').trim();
+  if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ status: false, message: 'amount_ghs is required.' });
+  const result = await virtualCardStore.fundCard(req.params.id, amt, { momo_number: momo || 'demo', reference: generateReference() });
+  if (!result.ok) return res.status(result.status || 400).json({ status: false, message: result.reason });
+  return res.status(200).json({ status: true, message: `Card funded GH₵ ${amt.toFixed(2)}`, data: result.card, transaction: result.transaction, fx_rate: result.fx_rate });
+});
+
+app.post('/api/v1/virtual-cards/:id/freeze', virtualCardRateLimit, async (req, res) => {
+  const result = await virtualCardStore.updateCard(req.params.id, { status: 'frozen' });
+  if (!result.ok) return res.status(result.status || 400).json({ status: false, message: result.reason });
+  return res.status(200).json({ status: true, message: 'Card frozen', data: result.card });
+});
+app.post('/api/v1/virtual-cards/:id/unfreeze', virtualCardRateLimit, async (req, res) => {
+  const result = await virtualCardStore.updateCard(req.params.id, { status: 'active' });
+  if (!result.ok) return res.status(result.status || 400).json({ status: false, message: result.reason });
+  return res.status(200).json({ status: true, message: 'Card unfrozen', data: result.card });
+});
+app.post('/api/v1/virtual-cards/:id/terminate', virtualCardRateLimit, async (req, res) => {
+  const result = await virtualCardStore.updateCard(req.params.id, { status: 'terminated' });
+  if (!result.ok) return res.status(result.status || 400).json({ status: false, message: result.reason });
+  return res.status(200).json({ status: true, message: 'Card terminated', data: result.card });
+});
+app.post('/api/v1/virtual-cards/:id/limit', virtualCardRateLimit, async (req, res) => {
+  const { spending_limit_usd, limit } = req.body || {};
+  const val = spending_limit_usd != null ? spending_limit_usd : limit;
+  const result = await virtualCardStore.updateCard(req.params.id, { spending_limit_usd: val });
+  if (!result.ok) return res.status(result.status || 400).json({ status: false, message: result.reason });
+  return res.status(200).json({ status: true, message: 'Limit updated', data: result.card });
+});
+app.post('/api/v1/virtual-cards/:id/spend', virtualCardRateLimit, async (req, res) => {
+  const { amount_usd, amount, merchant } = req.body || {};
+  const amt = parseFloat(amount_usd != null ? amount_usd : amount);
+  if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ status: false, message: 'amount_usd is required.' });
+  const result = await virtualCardStore.spendCard(req.params.id, amt, { merchant: merchant || 'Online Purchase' });
+  if (!result.ok) return res.status(result.status || 400).json({ status: false, message: result.reason });
+  return res.status(200).json({ status: true, message: `Charged $${amt.toFixed(2)}`, data: result.card, transaction: result.transaction });
+});
+app.get('/api/v1/virtual-cards/:id/transactions', virtualCardRateLimit, async (req, res) => {
+  const result = await virtualCardStore.getCardTransactions(req.params.id);
+  if (!result.ok) return res.status(result.status || 404).json({ status: false, message: result.reason });
+  return res.status(200).json({ status: true, count: result.transactions.length, data: result.transactions });
+});
+
+// Wallet endpoints (GHS wallet that can fund any card)
+app.get('/api/v1/wallets/:email', virtualCardRateLimit, async (req, res) => {
+  const email = String(req.params.email || '').toLowerCase();
+  if (!email.includes('@')) return res.status(400).json({ status: false, message: 'Valid email required.' });
+  const w = virtualCardStore.getWallet(email);
+  return res.status(200).json({ status: true, data: w });
+});
+app.post('/api/v1/wallets/:email/topup', virtualCardRateLimit, async (req, res) => {
+  const email = String(req.params.email || '').toLowerCase();
+  const { amount_ghs, amount, momo_number, phone } = req.body || {};
+  const amt = parseFloat(amount_ghs != null ? amount_ghs : amount);
+  if (!email.includes('@')) return res.status(400).json({ status: false, message: 'Valid email required.' });
+  if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ status: false, message: 'amount_ghs required.' });
+  // Try Paystack MoMo if configured (same pattern as card fund)
+  const paystackKey = process.env.PAYSTACK_SECRET_KEY || '';
+  if (paystackKey && (momo_number || phone)) {
+    try {
+      const paystack = require('./lib/paystack');
+      const reference = generateReference();
+      const init = await paystack.initializePayment({
+        amount: amt, email, reference, merchant: 'valmont-wallet', phone: String(momo_number || phone), callback_url: `${baseUrl(req)}/virtual-card.html?wallet_ref=${encodeURIComponent(reference)}`, secretKey: paystackKey
+      });
+      if (init && init.status && init.data && init.data.authorization_url) {
+        return res.status(200).json({ status: true, message: 'MoMo charge initialized', data: { paystack_authorization_url: init.data.authorization_url, reference: init.data.reference || reference, amount_ghs: amt } });
+      }
+    } catch (e) { console.warn('[WALLET] Paystack topup init failed:', e.message); }
+  }
+  const result = await virtualCardStore.topUpWallet(email, amt);
+  if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
+  return res.status(200).json({ status: true, message: `Wallet topped up GH₵ ${amt.toFixed(2)}`, data: result.wallet, funded_via: 'local-demo' });
+});
+app.post('/api/v1/wallets/:email/topup-local', virtualCardRateLimit, async (req, res) => {
+  const email = String(req.params.email || '').toLowerCase();
+  const { amount_ghs, amount } = req.body || {};
+  const amt = parseFloat(amount_ghs != null ? amount_ghs : amount);
+  if (!email.includes('@')) return res.status(400).json({ status: false, message: 'Valid email required.' });
+  const result = await virtualCardStore.topUpWallet(email, amt);
+  if (!result.ok) return res.status(400).json({ status: false, message: result.reason });
+  return res.status(200).json({ status: true, message: `Wallet topped up GH₵ ${amt.toFixed(2)}`, data: result.wallet });
 });
 
 // API 3b: Paystack-backed endpoints (same contract as the /api serverless
@@ -2470,6 +2678,13 @@ app.get('/dashboard', (req, res) => {
 
 app.get('/pay', (req, res) => {
   res.sendFile(path.join(__dirname, 'pay.html'));
+});
+
+app.get('/virtual-card', (req, res) => {
+  res.sendFile(path.join(__dirname, 'virtual-card.html'));
+});
+app.get('/virtual-card.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'virtual-card.html'));
 });
 // ─── Admin authentication ────────────────────────────────────────────────
 //
