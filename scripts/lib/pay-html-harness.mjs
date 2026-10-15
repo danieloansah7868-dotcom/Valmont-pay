@@ -71,7 +71,9 @@ class StubElement {
  * "which card is the customer looking at?" assertions.
  */
 const INITIALLY_HIDDEN = new Set([
-  'errorState', 'paymentCard', 'successState', 'closeHint', 'lockedInfo', 'phoneError'
+  'errorState', 'paymentCard', 'successState', 'closeHint', 'lockedInfo', 'phoneError',
+  // Declined-payment guidance: hidden until the gateway reports a failure.
+  'declinedState', 'declinedBlockWarning', 'declineCloseHint'
 ]);
 
 function makeDocument() {
@@ -183,6 +185,10 @@ export function loadPayHtml({ url, fetch: fetchImpl, paystack } = {}) {
   context.window.location = location;
   context.location = location;
   context.window.close = () => navigations.push({ type: 'close' });
+  // pay.html scrolls to the top when it swaps cards (the decline guidance must
+  // be visible on a phone, where the Pay button sits below the fold).
+  context.scrollTo = () => {};
+  context.window.scrollTo = context.scrollTo;
 
   vm.createContext(context);
   vm.runInContext(scriptSource, context, { filename: 'pay.html<script>' });
