@@ -73,7 +73,7 @@ class StubElement {
 const INITIALLY_HIDDEN = new Set([
   'errorState', 'paymentCard', 'successState', 'closeHint', 'lockedInfo', 'phoneError',
   // Declined-payment guidance: hidden until the gateway reports a failure.
-  'declinedState', 'declinedBlockWarning', 'declineCloseHint'
+  'declinedState', 'declinedBlockWarning', 'declineCloseHint', 'verificationState'
 ]);
 
 function makeDocument() {
@@ -167,7 +167,7 @@ export function loadPayHtml({ url, fetch: fetchImpl, paystack } = {}) {
     },
     Number, Math, JSON, Date, String, Boolean, Array, Object, Error, parseFloat, parseInt, isNaN,
     encodeURIComponent, decodeURIComponent,
-    setTimeout, clearTimeout,
+    setTimeout, clearTimeout, AbortController,
     alert: message => alerts.push(String(message)),
     PaystackPop: paystack || class PaystackPop {
       resumeTransaction() { throw new Error('PaystackPop used without a stub'); }

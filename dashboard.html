@@ -303,7 +303,7 @@
     // Reference: https://paystack.com/docs/api/errors/transaction/
     const FAILURE_HINTS = [
       { match: /denied by fraud|unable to process/i,
-        hint: 'Paystack\u2019s fraud check blocked this card \u2014 usually after several fast or failed attempts. It clears about 24 hours after the last attempt; try once after that.' },
+        hint: 'The provider may have restricted this transaction. Contact Paystack support with the reference for review. This message does not confirm an automatic unlock time; avoid repeated attempts.' },
       { match: /\bdeclined\b/i,
         hint: 'The bank blocked the card for this transaction. Ask the customer to contact their bank, and to enable online/e-commerce (and, for a foreign card, international) transactions on it.' },
       { match: /insufficient|not sufficient/i,

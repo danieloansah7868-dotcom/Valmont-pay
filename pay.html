@@ -155,7 +155,7 @@
         </label>
         <input id="customerPhone" type="tel" placeholder="+233 XX XXX XXXX" aria-describedby="phoneHint phoneError"
                class="w-full border-2 border-gray-100 p-4 rounded-lg text-sm outline-none font-semibold focus:border-[#f68b1e] transition" />
-        <p id="phoneHint" class="text-gray-500 text-xs mt-2">Paying by card? Leave this blank. For Mobile Money, enter a Ghanaian number here or in checkout.</p>
+        <p id="phoneHint" class="text-gray-500 text-xs mt-2">Paying by card? Leave this blank. To pay with Mobile Money, choose Mobile Money inside secure checkout and confirm your number there. Entering a number here does not select the payment method.</p>
         <p id="phoneError" class="hidden text-red-500 text-xs font-bold mt-2">Please enter a valid Mobile Money number (e.g. 024 XXX XXXX or +233 24 XXX XXXX).</p>
       </div>
 
@@ -180,6 +180,15 @@
 
     </div>
 
+  </div>
+
+  <!-- A verification retry never starts another charge. -->
+  <div id="verificationState" role="status" aria-live="polite" class="hidden bg-white w-full max-w-[480px] rounded-xl shadow-2xl border border-gray-100 p-8 text-center">
+    <h2 class="text-xl font-black text-gray-800 mb-3">Confirming your payment</h2>
+    <p id="verificationMessage" class="text-sm text-gray-600">Waiting for payment confirmation.</p>
+    <p class="text-sm font-bold text-gray-800 mt-4">Reference: <span id="verificationRef" class="break-all"></span></p>
+    <p class="text-sm text-gray-600 mt-4">If your account was debited, do not pay again. Keep this reference and contact the merchant if confirmation is delayed.</p>
+    <button id="btnRetryVerification" onclick="retryPaymentVerification()" class="w-full mt-6 bg-[#0b1a38] text-white font-bold py-4 rounded-lg">Check payment status</button>
   </div>
 
   <!-- Thank You State (public customer receipt — shown on this same page when
@@ -710,20 +719,17 @@
     // ---------------------------------------------------------------
     // DECLINED GUIDANCE
     //
-    // A failed attempt used to produce a bare alert() and drop the customer
-    // straight back onto the Pay button — which is exactly how a card gets
-    // hotlisted. Paystack's fraud block reacts to repeated attempts and stays
-    // active for ~24 hours from the LAST one, so the customer who taps Pay five
-    // times extends their own block every time. The screen after a failure is
-    // therefore the most useful place in the whole flow to say so.
+    // Keep the provider's exact decline reason and discourage blind retries.
+    // A gateway error does not establish a fixed lockout duration: only the
+    // provider can confirm whether a restriction exists and when it clears.
     //
     // The gateway message is echoed VERBATIM: it is what the customer's bank
     // will ask for, and what the merchant can match against the Paystack
     // dashboard. Nothing here tries to interpret or soften it.
     // ---------------------------------------------------------------
 
-    // Messages that mean "a security layer blocked this", not "your card
-    // details were wrong". Retrying one of these immediately is harmful.
+    // Messages that may indicate a restriction. Do not promise an automatic
+    // unlock or infer a precise cause from generic gateway wording.
     const BLOCKED_BY_GATEWAY =
       /fraud|unable to process|blocked|not permitted|restricted|do not honour|do not honor/i;
 
@@ -749,15 +755,13 @@
         warning.classList.remove('hidden');
         document.getElementById('declinedBlockBody').textContent =
           declineAttempts >= 2
-            ? 'You have now tried ' + declineAttempts + ' times. Each new attempt restarts the ' +
-              'block, so please stop here: wait about 24 hours from your last attempt, then try ' +
-              'once — or ask the merchant for another way to pay.'
-            : 'This looks like a security block on the transaction rather than a problem with your ' +
-              'card details. Trying again right now can extend the block for about 24 hours. ' +
-              'Please wait, or ask the merchant for another way to pay.';
-        // Deliberately not labelled "Try Again": the useful action after a
-        // block is to wait, and a button that invites an immediate retry is
-        // how the customer ends up locked out for another day.
+            ? 'You have now tried ' + declineAttempts + ' times. Please stop repeated attempts and ' +
+              'contact the merchant with this reference for Paystack support to review. ' +
+              'The provider must confirm whether a restriction exists and when you can retry.'
+            : 'The provider may have restricted this transaction. Contact the merchant with this ' +
+              'reference for Paystack support to review, or ask for another payment method. ' +
+              'We cannot confirm an automatic unlock time.';
+        // A support review is more useful than encouraging repeated attempts.
         backBtn.textContent = 'Back to Payment Details';
       } else {
         warning.classList.add('hidden');
@@ -950,15 +954,62 @@
     // Verify the payment server-side, then either send the customer back to
     // the merchant's receipt page (callback_url) or show the success card on
     // THIS page. The customer is NEVER redirected to the admin login page.
-    async function confirmPaymentOnPage(reference) {
-      const btn = document.getElementById('btnPayWithPaystack');
-      btn.textContent = 'Confirming Payment...';
+    let verificationReference = '';
+    let verificationInFlight = false;
 
+    function retryPaymentVerification() {
+      return confirmPaymentOnPage(verificationReference);
+    }
+
+    async function confirmPaymentOnPage(reference) {
+      if (verificationInFlight) return;
+      verificationReference = reference || (paymentData && paymentData.reference) || '';
+      verificationInFlight = true;
+      const btn = document.getElementById('btnPayWithPaystack');
+      btn.disabled = true;
+      btn.textContent = 'Confirming Payment...';
+      document.getElementById('paymentCard').classList.add('hidden');
+      document.getElementById('successState').classList.add('hidden');
+      document.getElementById('verificationState').classList.remove('hidden');
+      document.getElementById('verificationRef').textContent = verificationReference || 'Unavailable';
+      document.getElementById('verificationMessage').textContent = 'Checking with the payment provider...';
+      const retryBtn = document.getElementById('btnRetryVerification');
+      retryBtn.disabled = true;
+      window.scrollTo(0, 0);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(function () { controller.abort(); }, 20000);
       try {
-        await fetch('/api/verify-payment?reference=' + encodeURIComponent(reference));
+        if (!verificationReference) throw new Error('Missing payment reference');
+        const query = new URLSearchParams({ reference: verificationReference });
+        // The merchant comes from the resolved payment intent, not the popup.
+        if (paymentData && paymentData.merchant) query.set('merchant', paymentData.merchant);
+        const res = await fetch('/api/verify-payment?' + query.toString(), {
+          cache: 'no-store', signal: controller.signal
+        });
+        if (!res.ok) throw new Error('Verification unavailable');
+        const result = await res.json();
+        const transaction = result && (result.summary || result.data);
+        // API status=true only means the lookup worked. The TRANSACTION must
+        // be successful and match this reference before showing a receipt.
+        if (!result || result.status !== true || !transaction ||
+            transaction.status !== 'success' || transaction.reference !== verificationReference) {
+          document.getElementById('verificationMessage').textContent =
+            'Payment is not confirmed as successful. Check the status again or contact the merchant with your reference.';
+          return;
+        }
       } catch (_) {
-        // Webhook remains the source of truth; the on-page verify is best-effort.
+        document.getElementById('verificationMessage').textContent =
+          'We could not confirm your payment right now. Check the status again; this does not start another payment.';
+        return;
+      } finally {
+        clearTimeout(timeout);
+        verificationInFlight = false;
+        retryBtn.disabled = false;
       }
+
+      reference = verificationReference;
+      document.getElementById('verificationState').classList.add('hidden');
 
       // 1. Merchant provided a callback_url → return the customer to the
       //    merchant's receipt page with the reference + status appended.

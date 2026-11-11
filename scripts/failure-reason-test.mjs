@@ -428,7 +428,7 @@ if (escapeFn && helpersStart > 0 && helpersEnd > helpersStart) {
   const rendered = renderFailureReason({ status: 'FAILED', failure_reason: 'Denied by Fraud System' });
   check(rendered.includes('Denied by Fraud System'), 'a FAILED row renders Paystack\'s reason');
   check(
-    /title="Denied by Fraud System/.test(rendered) && /24 hours/.test(rendered),
+    /title="Denied by Fraud System/.test(rendered) && /Paystack support/.test(rendered) && !/24 hours/.test(rendered),
     'the tooltip carries the plain-English hint for a fraud-system denial'
   );
   check(
