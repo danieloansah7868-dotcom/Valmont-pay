@@ -17,8 +17,11 @@ import transactionStore from '../lib/transaction-store.js';
 import supabaseModule from '../lib/supabase.js';
 import mandateStoreModule from '../lib/mandate-store.js';
 import failureReasonModule from '../lib/failure-reason.js';
+import tenantRegistry from '../lib/tenants.js';
+import paystackCredentials from '../lib/paystack-credentials.js';
+import ledger from '../lib/ledger.js';
 
-const { verifyPayment } = paystackModule;
+const { verifyPaymentWithKey } = paystackModule;
 const { saveTransaction } = transactionStore;
 const { getSupabaseClient, isSupabaseConfigured } = supabaseModule;
 const { saveMandateFromAuthorization } = mandateStoreModule;
@@ -60,7 +63,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ status: false, message: 'Method not allowed' });
   }
 
-  const { reference } = req.query;
+  const { reference, merchant } = req.query;
 
   if (!reference) {
     return res.status(400).json({ status: false, message: 'Missing transaction reference' });
@@ -69,7 +72,20 @@ export default async function handler(req, res) {
   console.log('[VERIFY-PAYMENT] Reference:', reference);
 
   try {
-    const data = await verifyPayment(reference);
+    // References belong to the account that initialized them. Match the main
+    // server's routing instead of always asking the gateway's Paystack account.
+    await tenantRegistry.refreshFromDb();
+    const known = ledger.findTransaction(reference);
+    let verifyTenant = merchant
+      ? tenantRegistry.getTenant(String(merchant)) || tenantRegistry.getTenantByIdentifier(String(merchant))
+      : null;
+    if (!verifyTenant && known && known.merchant) {
+      verifyTenant = tenantRegistry.getTenantByIdentifier(known.merchant);
+    }
+    const data = await verifyPaymentWithKey(
+      reference,
+      paystackCredentials.chargeSecret(verifyTenant)
+    );
 
     const paystackTrx = data && data.data ? data.data : null;
     const isSuccess = Boolean(

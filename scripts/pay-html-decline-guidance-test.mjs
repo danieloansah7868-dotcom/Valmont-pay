@@ -8,10 +8,9 @@
  * A real customer's card was blocked by Paystack's fraud system ("Denied by
  * Fraud System") for a GH₵ 24,150 payment. Their reaction — the only one the
  * page invited — was to tap Pay again: the failure path was a bare
- * `alert(error.message)` followed by re-arming the Pay button. Paystack's block
- * stays active for ~24 hours from the LAST attempt, so every retry restarted the
- * clock. The customer was making their own lockout longer, from a screen that
- * told them nothing.
+ * `alert(error.message)` followed by re-arming the Pay button. The screen
+ * should instead preserve the reason and suggest provider review, without
+ * promising an unverified lockout duration or automatic unlock.
  *
  * These tests EXECUTE pay.html against the stub DOM harness and assert on what
  * the customer is actually shown after a failure:
@@ -136,8 +135,8 @@ console.log('\n# "Denied by Fraud System" — the real case');
   );
   check('the do-not-retry warning is shown for a block', el('declinedBlockWarning').visible);
   check(
-    'the warning explains that retrying extends the block (~24 hours)',
-    /24 hours/.test(el('declinedBlockBody').textContent)
+    'the warning points to provider review, not an automatic unlock',
+    /Paystack support/.test(el('declinedBlockBody').textContent) && !/24 hours/.test(el('declinedBlockBody').textContent)
   );
   check(
     'the button does NOT invite an immediate retry',
@@ -204,7 +203,7 @@ console.log('\n# repeat failures');
     'the copy escalates from the first failure',
     el('declinedBlockBody').textContent !== firstWarning
   );
-  check('it still points at the 24-hour wait', /24 hours/.test(el('declinedBlockBody').textContent));
+  check('it still points at provider review', /Paystack support/.test(el('declinedBlockBody').textContent));
 }
 
 // ─────────────────────────────── 5. going back re-arms the Pay button

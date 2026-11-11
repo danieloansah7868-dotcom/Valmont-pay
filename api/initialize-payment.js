@@ -3,6 +3,7 @@ import baseUrlModule from '../lib/base-url.js';
 import paymentLinkStore from '../lib/payment-link-store.js';
 import legacyLinkPolicy from '../lib/legacy-link-policy.js';
 import tenantRegistry from '../lib/tenants.js';
+import paystackCredentials from '../lib/paystack-credentials.js';
 
 const { initializePayment, generateReference } = paystack;
 const { publicBaseUrl } = baseUrlModule;
@@ -52,6 +53,10 @@ export default async function handler(req, res) {
   // ──────────────────────────────────────────────────────────────────
   const accessCode = typeof body.access_code === 'string' ? body.access_code.trim() : '';
 
+  // Each serverless function has its own registry: load DB-only merchants too.
+  await tenantRegistry.refreshFromDb();
+  let chargeTenant = null;
+
   if (accessCode) {
     const resolved = await resolvePaymentLink(accessCode);
     const intent = resolved && resolved.payment;
@@ -81,9 +86,10 @@ export default async function handler(req, res) {
 
     amount = storedAmount;
     reference = intent.reference || reference;
-    merchant = intent.tenant_key || intent.merchant_display_name || merchant;
-    const intentTenant = tenantRegistry.getTenant(intent.tenant_key);
-    subaccount = subaccount || (intentTenant && intentTenant.paystack_subaccount) || undefined;
+    const canonicalKey = tenantRegistry.canonicalTenantKey(intent.tenant_key);
+    merchant = canonicalKey || intent.tenant_key || intent.merchant_display_name || merchant;
+    chargeTenant = tenantRegistry.getTenant(canonicalKey || intent.tenant_key) || null;
+    subaccount = subaccount || (chargeTenant && chargeTenant.paystack_subaccount) || undefined;
   } else if (
     !legacyAmountUrlAllowed() &&
     refererIsLegacyAmountUrl(req.headers && req.headers.referer)
@@ -104,6 +110,12 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: 'Invalid amount' });
   }
 
+  if (!chargeTenant && merchant) {
+    chargeTenant = tenantRegistry.getTenant(String(merchant))
+      || tenantRegistry.getTenantByIdentifier(String(merchant))
+      || null;
+  }
+
   // Issue 3: always log the reference we are about to send to Paystack.
   console.log('Reference:', reference);
   console.log('Amount (GHS):', amount, '-> pesewas:', Math.round(amount * 100));
@@ -119,6 +131,7 @@ export default async function handler(req, res) {
       merchant,
       phone,
       subaccount,
+      secretKey: paystackCredentials.chargeSecret(chargeTenant),
       callback_url:
         callbackUrl ||
         `${baseUrl(req)}/checkout.html?reference=${encodeURIComponent(reference)}` +
